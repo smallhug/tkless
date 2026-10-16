@@ -21,7 +21,9 @@
   - `stdout`：严格纯净，仅输出清洗后的目标数据（Markdown、JSON、Text）。
   - `stderr`：输出耗时指标、HTTP 状态、Token 统计与调试日志。
 - **💎 零成本先验结构化提取**：
-  - 原生提取 `<script type="application/ld+json">`（Schema.org）、OpenGraph 与 Twitter Card 元数据，无需消耗任何 LLM Token 即可获取高置信度结构化数据。
+  - 原生提取 `<script type="application/ld+json">`（Schema.org）、OpenGraph、Twitter Card 与 Favicon 图标元数据，无需消耗任何 LLM Token 即可获取高置信度结构化数据。
+- **💻 代码块语言标签归一化与语法高亮保障**：
+  - 自动识别并归一化现代网页中各类复杂的代码块形式（`lang-py`, `language-rust`, `highlight-source-js`, `data-lang="ts"` 等），确保 Markdown 代码块拥有精准的标准语言标识符（如 ```` ```python ````、```` ```rust ````），完美契合 Agent 代码解析与代码执行工具。
 - **🌐 智能网络获取**：
   - 基于 `reqwest` + `rustls`，原生支持 HTTP/2、连接池与多重压缩算法（Gzip / Brotli）。
   - 流式读取防内存溢出（OOM Guard），自动探测网页编码（UTF-8、GBK、Shift-JIS、Windows-1252 等）。
