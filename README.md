@@ -243,6 +243,8 @@ cat ./urls.txt | pageclaw batch - --concurrency 10 -f json
 pageclaw crawl "https://tokio.rs/tokio/tutorial" --max-depth 2 --max-pages 20 -o ./tokio_docs.md
 # 仅爬取相同路径前缀的子文档（例如仅抓取 /docs/ 路径下的页面）：
 pageclaw crawl "https://example.com/docs" --same-path-prefix -f json -o ./docs_kb.json
+# ⚡ Sitemap 站点地图驱动提速模式：直接解析 sitemap.xml 提取全量规范文档 URL，提速 10 倍：
+pageclaw crawl "https://docs.rs/tokio/sitemap.xml" --sitemap --max-pages 50 -o ./tokio_sitemap.md
 
 # 26. 🌐 Chrome DevTools Protocol (CDP) 无头浏览器渲染 Sidecar (针对重度 SPA 与反爬挑战绕过)
 # 连接本地运行的 Chrome/Edge 远程调试端口 (如 google-chrome --remote-debugging-port=9222)
@@ -305,7 +307,7 @@ AI Agent（如 **Claude Desktop**、**Cursor**、**Windsurf** 等）可以直接
 | **`batch_fetch_webpages`** | **并发抓取多网页流水线**，使用异步协程并发池并发处理一组 URL 列表，一次性聚合返回清洗后的 Markdown 或 JSON 文档数组 | `urls` (必填字符串数组), `concurrency` (默认 5, 最大 20), `format` (markdown/json), `max_tokens_per_page`, `selector`, `schema`, `cdp_endpoint`, `cdp_wait_ms` |
 | **`clean_html`** | **本地直接清洗已有 HTML 字符串**，剥离广告/脚本/导航噪音，转化为纯净 Markdown、纯文本或执行 Schema/CSS 选择器结构化抽取 | `html` (必填), `base_url`, `format` (markdown/json/text/html), `mode` (article/full/raw), `selector`, `schema`, `max_tokens`, `strip_images`, `strip_links`, `frontmatter` |
 | **`web_search`** | **免 API Key 的通用全网搜索**（支持 Bing、Google 与 Auto 容灾），支持生态定向标签（微信公众号、知乎、GitHub、掘金）与 `--fetch-content` 搜索即抓取一体化调研（可叠加 CDP 渲染与 Schema 抽取） | `query` (必填), `scope` (all/wechat/zhihu/github/juejin), `engine` (bing/google/auto, 默认 bing), `fetch_content` (可选布尔值), `max_tokens_per_page` (可选整数), `cdp_endpoint`, `schema`, `limit` (默认 5), `format` (markdown/json) |
-| **`crawl_site`** | **整站文档递归爬取与知识库汇编**（从种子 URL 广度优先发现超链接），支持 CDP 无头渲染、Token 总预算上限截断与 Schema 抽取，自动生成带目录索引（TOC）的单文件集成 Markdown 知识库或结构化 JSON | `seed_url` (必填), `max_depth` (默认 2, 最大 5), `max_pages` (默认 20, 最大 100), `same_path_prefix` (可选布尔值), `max_tokens`, `cdp_endpoint`, `schema`, `format` (markdown/json) |
+| **`crawl_site`** | **整站文档递归爬取与知识库汇编**（从种子 URL 广度优先发现超链接或通过 sitemap.xml 解析规范地址），支持 CDP 无头渲染、Token 总预算上限截断与 Schema 抽取，自动生成带目录索引（TOC）的单文件集成 Markdown 知识库或结构化 JSON | `seed_url` (必填), `max_depth` (默认 2, 最大 5), `max_pages` (默认 20, 最大 100), `same_path_prefix` (可选布尔值), `sitemap` (可选布尔值), `max_tokens`, `cdp_endpoint`, `schema`, `format` (markdown/json) |
 | **`login_platform`** | **平台凭据扫码授权与登录辅助**，发起 B站/知乎 交互式登录提取会话 Cookie 并安全隔离写入凭据文件（带平台前缀，防多网站覆盖） | `platform` (bilibili/zhihu, 必填), `output_cookie_file` (默认 ./cookies.txt), `no_browser` (默认 true), `timeout_secs` (默认 180) |
 | **`scaffold_schema`** | **DOM 结构骨架探测与 Schema 自动生成**，分析 URL 或 raw HTML，自动识别重复卡片容器与字段选择器，输出就绪的提取模板（极大降低 Agent 前期试错 Token） | `url`, `html`, `cdp_endpoint` |
 | **`fetch_bilibili_feed`** | 毫秒级拉取 B站 首页推荐流、全站热榜或分区排行榜 GFM 表格 | `feed_type` (recommendations/popular/ranking), `partition`, `format` |
@@ -325,7 +327,7 @@ COMMANDS:
     login <PLATFORM>           唤起本地浏览器登录提取 Cookie 凭据并保存至文件 (支持 bilibili, zhihu)
     search <QUERY>             免 API Key 的全网通用搜索，直接输出 Markdown 编号列表或 JSON (支持 -l, -f, -o, -e/--engine, --fetch-content, --max-tokens-per-page, --wechat, --zhihu, --github, --juejin)
     batch <FILE>               并发抓取与批量 URL 提取流水线 (支持 -c, -f, -t, --selector, -o)
-    crawl <URL>                整站文档递归爬取与知识库汇编 (支持 -d/--max-depth, -p/--max-pages, -c/--concurrency, --same-path-prefix, -f, -o, -t)
+    crawl <URL>                整站文档递归爬取与知识库汇编 (支持 -d/--max-depth, -p/--max-pages, -c/--concurrency, --same-path-prefix, --sitemap, -f, -o, -t)
 
 ARGS:
     <TARGET>                   目标 URL、短 BV 号或 '-' (从标准输入读取 HTML)

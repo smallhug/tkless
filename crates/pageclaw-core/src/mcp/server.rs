@@ -741,6 +741,10 @@ impl McpServer {
             .get("same_path_prefix")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
+        let sitemap = args
+            .get("sitemap")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
 
         let format = match args.get("format").and_then(|v| v.as_str()) {
             Some("json") => OutputFormat::Json,
@@ -772,6 +776,7 @@ impl McpServer {
             same_domain_only: true,
             same_path_prefix,
             exclude_patterns: crate::crawler::CrawlOptions::default().exclude_patterns,
+            sitemap,
         };
 
         let extraction_options = ExtractionOptions {

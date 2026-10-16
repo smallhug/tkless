@@ -27,6 +27,8 @@ pub struct CrawlOptions {
     pub same_path_prefix: bool,
     /// Regular expression patterns for excluding URLs (e.g. `\.(pdf|zip|png)$` or `/login`).
     pub exclude_patterns: Vec<String>,
+    /// Whether to force sitemap XML parsing or automatically treat XML endpoints as sitemaps.
+    pub sitemap: bool,
 }
 
 impl Default for CrawlOptions {
@@ -41,6 +43,7 @@ impl Default for CrawlOptions {
                 r#"\.(png|jpg|jpeg|gif|svg|ico|webp|pdf|zip|tar|gz|exe|dmg|mp4|mp3|css|js|woff|woff2)$"#.to_string(),
                 r#"/(login|signin|signup|logout|auth|register)"#.to_string(),
             ],
+            sitemap: false,
         }
     }
 }
@@ -88,9 +91,56 @@ pub async fn crawl_site(
     let mut visited: HashSet<String> = HashSet::new();
     let mut queue: VecDeque<(Url, usize)> = VecDeque::new();
 
-    let normalized_seed_str = normalize_url(&parsed_seed);
-    visited.insert(normalized_seed_str);
-    queue.push_back((parsed_seed.clone(), 0));
+    // Check if seed URL is a sitemap XML or if sitemap mode is enabled
+    let is_sitemap_target = crawl_options.sitemap
+        || seed_url.ends_with(".xml")
+        || parsed_seed.path().ends_with("sitemap")
+        || parsed_seed.path().ends_with("sitemap.xml");
+
+    if is_sitemap_target {
+        debug!(seed = seed_url, "Sitemap 模式：获取并解析站点地图 XML");
+        if let Ok(resp) = engine.fetcher().fetch(seed_url).await {
+            let mut extracted_urls = parse_sitemap_urls(&resp.html);
+
+            // Handle sitemapindex by fetching child sitemaps (first 3)
+            if resp.html.contains("<sitemapindex") {
+                let child_sitemaps = extracted_urls.clone();
+                extracted_urls.clear();
+                for child_map in child_sitemaps.into_iter().take(3) {
+                    if let Ok(child_resp) = engine.fetcher().fetch(&child_map).await {
+                        let child_urls = parse_sitemap_urls(&child_resp.html);
+                        extracted_urls.extend(child_urls);
+                    }
+                }
+            }
+
+            for loc in extracted_urls {
+                if let Ok(parsed_loc) = Url::parse(&loc) {
+                    if should_enqueue_url(
+                        &parsed_loc,
+                        &seed_host,
+                        &seed_path,
+                        crawl_options,
+                        &exclude_regexes,
+                    ) {
+                        let norm = normalize_url(&parsed_loc);
+                        if visited.insert(norm) {
+                            queue.push_back((parsed_loc, 1));
+                        }
+                    }
+                }
+                if queue.len() >= crawl_options.max_pages {
+                    break;
+                }
+            }
+        }
+    }
+
+    if queue.is_empty() {
+        let normalized_seed_str = normalize_url(&parsed_seed);
+        visited.insert(normalized_seed_str);
+        queue.push_back((parsed_seed.clone(), 0));
+    }
 
     let mut crawled_pages: Vec<CrawledPage> = Vec::new();
     let semaphore = Arc::new(Semaphore::new(crawl_options.concurrency.max(1)));
@@ -265,6 +315,23 @@ fn extract_discovered_links(html: &str, base_url: &Url) -> Vec<Url> {
     links
 }
 
+/// Extracts all canonical `<loc>` URLs from a Sitemap XML (`<urlset>` or `<sitemapindex>`).
+pub fn parse_sitemap_urls(xml_content: &str) -> Vec<String> {
+    static LOC_REGEX: LazyLock<regex::Regex> =
+        LazyLock::new(|| regex::Regex::new(r"(?i)<loc>\s*(https?://[^\s<]+)\s*</loc>").unwrap());
+
+    let mut urls = Vec::new();
+    for caps in LOC_REGEX.captures_iter(xml_content) {
+        if let Some(matched) = caps.get(1) {
+            let u = matched.as_str().trim();
+            if !u.is_empty() {
+                urls.push(u.to_string());
+            }
+        }
+    }
+    urls
+}
+
 /// Formats the crawled pages report into an assembled single-file Markdown knowledge base with TOC.
 pub fn format_crawl_report_markdown(report: &SiteCrawlReport) -> String {
     let mut out = String::new();
@@ -434,5 +501,27 @@ mod tests {
         assert!(md.contains("Getting Started"));
         assert!(md.contains("## 章节 1. [Documentation Overview]"));
         assert!(md.contains("## 章节 2. [Getting Started]"));
+    }
+
+    #[test]
+    fn test_parse_sitemap_urls() {
+        let sample_sitemap = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+            <url>
+                <loc>https://docs.rs/tokio/latest/tokio/</loc>
+                <lastmod>2026-03-01</lastmod>
+            </url>
+            <url>
+                <loc>https://docs.rs/tokio/latest/tokio/sync/index.html</loc>
+            </url>
+        </urlset>"#;
+
+        let urls = parse_sitemap_urls(sample_sitemap);
+        assert_eq!(urls.len(), 2);
+        assert_eq!(urls[0], "https://docs.rs/tokio/latest/tokio/");
+        assert_eq!(
+            urls[1],
+            "https://docs.rs/tokio/latest/tokio/sync/index.html"
+        );
     }
 }

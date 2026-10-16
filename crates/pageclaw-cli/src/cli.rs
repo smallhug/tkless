@@ -824,4 +824,11 @@ pub struct CrawlArgs {
     /// CDP 页面加载后额外等待 DOM 动态渲染完成的时间 (毫秒)
     #[arg(long = "cdp-wait", value_name = "MS")]
     pub cdp_wait_ms: Option<u64>,
+
+    /// 强制以站点地图 (Sitemap XML) 模式解析种子 URL 或自动提取规范 URL 列表爬取
+    #[arg(
+        long = "sitemap",
+        help = "Parse seed URL as XML sitemap to extract and crawl canonical URLs directly"
+    )]
+    pub sitemap: bool,
 }
