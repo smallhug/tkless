@@ -46,30 +46,15 @@ impl Fetcher {
             HeaderValue::from_static("en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7"),
         );
 
-        // Resolve effective cookies: merge file cookies with command-line cookies
-        let mut effective_cookie = options.cookie.clone();
-        if let Some(ref cf) = options.cookie_file {
-            let path = Path::new(cf);
-            let file_cookie = load_cookie_from_file(path)?;
-            effective_cookie = match effective_cookie {
-                Some(cli_cookie) => Some(merge_cookies(&file_cookie, &cli_cookie)),
-                None => Some(file_cookie),
-            };
-        }
-
-        if let Some(ref cookie_str) = effective_cookie {
-            headers.insert(
-                COOKIE,
-                HeaderValue::from_str(cookie_str)
-                    .map_err(|e| PageclawError::InvalidArgument(e.to_string()))?,
-            );
-        }
-
         for (key, val) in &options.headers {
             if let (Ok(hname), Ok(hval)) = (HeaderName::from_str(key), HeaderValue::from_str(val)) {
                 headers.insert(hname, hval);
             }
         }
+
+        // NOTE: We do NOT insert Cookie into client default_headers to prevent accidental
+        // credential leakage to third-party hosts during searches, crawls, or cross-origin redirects.
+        // Instead, cookies are strictly injected per-request based on the target URL's domain scope.
 
         let client = reqwest::Client::builder()
             .default_headers(headers)
@@ -84,6 +69,50 @@ impl Fetcher {
     /// Access the underlying reqwest HTTP client.
     pub fn client(&self) -> &reqwest::Client {
         &self.client
+    }
+
+    /// Resolves the cookie header string scoped strictly to the target URL's domain.
+    /// Prevents cross-host credential leakage by only returning credentials matching the platform host.
+    pub fn resolve_cookie_for_url(&self, url: &Url) -> Option<String> {
+        let mut resolved_file_cookie: Option<String> = None;
+
+        // 1. Resolve from cookie_file using strict URL domain boundary matching
+        if let Some(ref cf) = self.options.cookie_file {
+            let path = Path::new(cf);
+            if let Ok(c) = load_cookie_from_file_for_url(path, Some(url.as_str())) {
+                if !c.trim().is_empty() {
+                    resolved_file_cookie = Some(c);
+                }
+            }
+        }
+
+        // 2. Resolve from CLI explicit cookie
+        let resolved_cli_cookie = if let Some(ref cli_cookie) = self.options.cookie {
+            if let Some((p, rest)) = cli_cookie.split_once(':') {
+                let p_clean = p.trim().to_lowercase();
+                if let Some(target_p) = detect_platform_from_url(url.as_str()) {
+                    if p_clean == target_p {
+                        Some(rest.trim().to_string())
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            } else {
+                // If it's an unprefixed cookie, only allow if visiting matching target or initial target
+                Some(cli_cookie.clone())
+            }
+        } else {
+            None
+        };
+
+        match (resolved_file_cookie, resolved_cli_cookie) {
+            (Some(fc), Some(cc)) => Some(merge_cookies(&fc, &cc)),
+            (Some(fc), None) => Some(fc),
+            (None, Some(cc)) => Some(cc),
+            (None, None) => None,
+        }
     }
 
     /// Fetch a webpage by URL with retry backoff, full-chain SSRF validation across redirects,
@@ -101,7 +130,16 @@ impl Fetcher {
 
             let mut attempt = 0;
             let resp = loop {
-                let send_fut = self.client.get(current_url.clone()).send();
+                let mut req_builder = self.client.get(current_url.clone());
+                if let Some(cookie_str) = self.resolve_cookie_for_url(&current_url) {
+                    if !cookie_str.trim().is_empty() {
+                        if let Ok(hval) = HeaderValue::from_str(cookie_str.trim()) {
+                            req_builder = req_builder.header(COOKIE, hval);
+                        }
+                    }
+                }
+
+                let send_fut = req_builder.send();
                 match tokio::time::timeout(connect_timeout, send_fut).await {
                     Ok(Ok(r)) => {
                         let status = r.status();
@@ -602,13 +640,9 @@ pub fn parse_cookie_content_for_platform(content: &str, target_platform: Option<
         return String::new();
     }
 
-    // If no target platform requested, return empty or single platform if only one exists
-    if platform_cookies.len() == 1 {
-        if let Some((_, pairs)) = platform_cookies.into_iter().next() {
-            return format_cookie_pairs(&pairs);
-        }
-    }
-
+    // Security Hardening (Finding 5 Fix):
+    // If no target platform requested, strictly return EMPTY.
+    // Never leak platform credentials (even if single platform) to unknown or third-party search result hosts.
     String::new()
 }
 
@@ -993,5 +1027,67 @@ mod tests {
             }
             _ => panic!("Expected SsrfBlocked error on first hop"),
         }
+    }
+
+    #[test]
+    fn test_finding_5_no_credential_leak_to_third_party() {
+        // File containing ONLY Zhihu credentials
+        let single_platform_content = "zhihu: d_c0=\"zhihu_secret_token\"; z_c0=\"zhihu_auth\"";
+
+        // 1. Third-party URLs (e.g. search result items) MUST NOT receive Zhihu credentials!
+        let third_party_cookie = parse_cookie_content_for_platform(
+            single_platform_content,
+            detect_platform_from_url("https://rust-lang.org/"),
+        );
+        assert!(third_party_cookie.is_empty());
+
+        let attacker_cookie = parse_cookie_content_for_platform(
+            single_platform_content,
+            detect_platform_from_url("https://attacker.example/blog"),
+        );
+        assert!(attacker_cookie.is_empty());
+
+        // 2. Unscoped query (e.g. CLI search command without target URL) MUST NOT return any credentials!
+        let unscoped_cookie = parse_cookie_content_for_platform(single_platform_content, None);
+        assert!(unscoped_cookie.is_empty());
+
+        // 3. Legitimate Zhihu URL strictly receives Zhihu credentials
+        let zhihu_cookie = parse_cookie_content_for_platform(
+            single_platform_content,
+            detect_platform_from_url("https://zhuanlan.zhihu.com/p/123456"),
+        );
+        assert_eq!(
+            zhihu_cookie,
+            "d_c0=\"zhihu_secret_token\"; z_c0=\"zhihu_auth\""
+        );
+    }
+
+    #[test]
+    fn test_fetcher_resolve_cookie_for_url_host_scoped() {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "pageclaw_f5_{}",
+            std::time::SystemTime::now().elapsed().unwrap().as_nanos()
+        ));
+        let cookie_file = temp_dir.join("cookies.txt");
+        save_platform_cookies_to_file(&cookie_file, "zhihu", "d_c0=\"zh_sec\"").unwrap();
+
+        let options = FetchOptions {
+            cookie_file: Some(cookie_file.to_string_lossy().to_string()),
+            ..Default::default()
+        };
+        let fetcher = Fetcher::new(options).unwrap();
+
+        // Legitimate Zhihu host receives scoped cookie
+        let zhihu_url = Url::parse("https://www.zhihu.com/question/1").unwrap();
+        assert_eq!(
+            fetcher.resolve_cookie_for_url(&zhihu_url),
+            Some("d_c0=\"zh_sec\"".to_string())
+        );
+
+        // Third-party host (e.g. from search result) strictly receives NONE
+        let third_party_url = Url::parse("https://rust-lang.org/").unwrap();
+        assert_eq!(fetcher.resolve_cookie_for_url(&third_party_url), None);
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 }
