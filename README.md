@@ -154,7 +154,18 @@ pageclaw https://www.bilibili.com/video/BV1xx411c7mD --no-adapter
 # 9. 启用响应二级缓存 (二次访问毫秒级即时响应)
 pageclaw https://httpbin.org/html --cache
 
-# 10. 启动原生 Model Context Protocol (MCP) 服务器 (stdio 传输)
+# 10. 抓取 GitHub 仓库纯净 README 文档 (丢弃 90%+ 导航、Star、Commit DOM 噪音)
+pageclaw https://github.com/tokio-rs/tokio
+# 抓取 GitHub Issue 对话讨论链 (提取标题、状态、首楼描述及后续回复列表)
+pageclaw https://github.com/tokio-rs/tokio/issues/1234
+
+# 11. 抓取掘金技术社区博文 (自动解包 link.juejin.cn 外链，保留纯净技术代码块)
+pageclaw https://juejin.cn/post/7123456789012345678
+
+# 12. 抓取小红书图文笔记 (自动解析 __INITIAL_STATE__ 服务端状态树、提取无水印图集与点赞收藏数)
+pageclaw https://www.xiaohongshu.com/explore/654321000
+
+# 13. 启动原生 Model Context Protocol (MCP) 服务器 (stdio 传输)
 pageclaw mcp
 
 # 11. B 站全网视频关键词搜索 (自动清洗高亮标签，输出结构化 Markdown 表格)
@@ -214,9 +225,11 @@ pageclaw search "Tokio 教程" --engine bing -f json
 pageclaw search "Rust compilation optimization" --engine google --limit 5
 # 自动容灾模式（首选 Bing，遇阻断自动平滑降级到 Google）
 pageclaw search "DeepSeek V3" --engine auto --limit 5
-# 专享生态定向：一键限定抓取微信公众号或知乎平台
+# 专享生态定向：一键限定抓取微信公众号、知乎、GitHub、掘金平台
 pageclaw search "开源项目" --wechat --limit 5
 pageclaw search "Rust 异步运行时" --zhihu --limit 5
+pageclaw search "mini-redis" --github --limit 5
+pageclaw search "Vue3 源码解析" --juejin --limit 5
 # ⚡ 搜索即抓取一体化 (Search & Fetch All-in-One，单次交互并发抓取并清洗各页面正文，Token 预算严格可控)
 pageclaw search "Rust 异步运行时" --fetch-content --limit 3 --max-tokens-per-page 1500
 pageclaw search "Tokio runtime" --fetch-content --limit 2 -f json --max-tokens-per-page 300
@@ -280,7 +293,7 @@ USAGE:
 COMMANDS:
     mcp                        启动原生 Model Context Protocol (MCP) stdio 服务端
     login <PLATFORM>           唤起本地浏览器登录提取 Cookie 凭据并保存至文件 (支持 bilibili, zhihu)
-    search <QUERY>             免 API Key 的全网通用搜索，直接输出 Markdown 编号列表或 JSON (支持 -l, -f, -o, -e/--engine, --fetch-content, --max-tokens-per-page, --wechat, --zhihu)
+    search <QUERY>             免 API Key 的全网通用搜索，直接输出 Markdown 编号列表或 JSON (支持 -l, -f, -o, -e/--engine, --fetch-content, --max-tokens-per-page, --wechat, --zhihu, --github, --juejin)
     batch <FILE>               并发抓取与批量 URL 提取流水线 (支持 -c, -f, -t, --selector, -o)
 
 ARGS:

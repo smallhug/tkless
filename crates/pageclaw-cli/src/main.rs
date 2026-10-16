@@ -316,6 +316,20 @@ async fn run(args: CliArgs) -> Result<()> {
             } else {
                 format!("site:zhihu.com {clean}")
             }
+        } else if search_args.github {
+            let clean = search_args.query.trim();
+            if clean.starts_with("site:") {
+                clean.to_string()
+            } else {
+                format!("site:github.com {clean}")
+            }
+        } else if search_args.juejin {
+            let clean = search_args.query.trim();
+            if clean.starts_with("site:") {
+                clean.to_string()
+            } else {
+                format!("site:juejin.cn {clean}")
+            }
         } else {
             search_args.query.clone()
         };

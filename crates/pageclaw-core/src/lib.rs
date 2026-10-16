@@ -15,7 +15,8 @@ pub mod search;
 pub mod token;
 
 pub use adapters::{
-    AdapterRegistry, BilibiliAdapter, PlatformAdapter, WechatAdapter, ZhihuAdapter,
+    AdapterRegistry, BilibiliAdapter, GithubAdapter, JuejinAdapter, PlatformAdapter, WechatAdapter,
+    XiaohongshuAdapter, ZhihuAdapter,
 };
 pub use auth::{
     execute_login_flow, generate_qrcode, poll_qrcode_status, LoginOptions, QrPollStatus,
