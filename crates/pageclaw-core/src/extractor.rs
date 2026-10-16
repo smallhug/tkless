@@ -17,6 +17,8 @@ static TR_SELECTOR: LazyLock<Selector> = LazyLock::new(|| Selector::parse("tr").
 static TH_SELECTOR: LazyLock<Selector> = LazyLock::new(|| Selector::parse("th").unwrap());
 static TD_SELECTOR: LazyLock<Selector> = LazyLock::new(|| Selector::parse("td, th").unwrap());
 static THEAD_SELECTOR: LazyLock<Selector> = LazyLock::new(|| Selector::parse("thead").unwrap());
+static FAVICON_SELECTOR: LazyLock<Selector> =
+    LazyLock::new(|| Selector::parse("link[rel*='icon'], link[rel='apple-touch-icon']").unwrap());
 
 /// Extracts metadata and structured data (JSON-LD, OpenGraph, Twitter Card) from HTML.
 pub fn extract_metadata(doc: &Html) -> PageMetadata {
@@ -86,6 +88,19 @@ pub fn extract_metadata(doc: &Html) -> PageMetadata {
         }
     }
 
+    // 5. Favicon link: <link rel="icon" href="...">
+    let mut favicon = None;
+    for link in doc.select(&FAVICON_SELECTOR) {
+        if let Some(href) = link.value().attr("href") {
+            let trimmed = href.trim();
+            if !trimmed.is_empty() {
+                favicon = Some(trimmed.to_string());
+                break;
+            }
+        }
+    }
+
+    metadata.favicon = favicon;
     metadata.open_graph = og;
     metadata.twitter_card = twitter;
 

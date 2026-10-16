@@ -256,6 +256,7 @@ pub struct PageMetadata {
     pub canonical_url: Option<String>,
     pub published_time: Option<String>,
     pub cover_image: Option<String>,
+    pub favicon: Option<String>,
     pub open_graph: HashMap<String, String>,
     pub twitter_card: HashMap<String, String>,
 }
