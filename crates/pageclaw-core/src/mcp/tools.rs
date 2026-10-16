@@ -162,6 +162,21 @@ pub fn get_available_tools() -> Vec<McpTool> {
                     "schema": {
                         "type": "string",
                         "description": "Extraction schema (JSON string or file path) defining fields/selectors to extract structured JSON entities directly"
+                    },
+                    "chunk": {
+                        "type": "boolean",
+                        "default": false,
+                        "description": "Whether to segment Markdown into semantic heading-aware chunks for RAG vector ingestion"
+                    },
+                    "chunk_size": {
+                        "type": "integer",
+                        "default": 500,
+                        "description": "Target token size per chunk (default: 500)"
+                    },
+                    "chunk_overlap": {
+                        "type": "integer",
+                        "default": 50,
+                        "description": "Token overlap between consecutive chunks (default: 50)"
                     }
                 },
                 "required": ["url"]
@@ -490,6 +505,21 @@ pub fn get_available_tools() -> Vec<McpTool> {
                         "type": "boolean",
                         "default": false,
                         "description": "Prepend YAML frontmatter with title, URL, date, and metadata"
+                    },
+                    "chunk": {
+                        "type": "boolean",
+                        "default": false,
+                        "description": "Whether to segment Markdown into semantic heading-aware chunks for RAG vector ingestion"
+                    },
+                    "chunk_size": {
+                        "type": "integer",
+                        "default": 500,
+                        "description": "Target token size per chunk (default: 500)"
+                    },
+                    "chunk_overlap": {
+                        "type": "integer",
+                        "default": 50,
+                        "description": "Token overlap between consecutive chunks (default: 50)"
                     }
                 },
                 "required": ["html"]

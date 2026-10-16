@@ -884,6 +884,7 @@ impl BilibiliAdapter {
             images,
             tables: None,
             entity: None,
+            chunks: None,
         })
     }
 
@@ -1162,6 +1163,7 @@ impl BilibiliAdapter {
             images: None,
             tables: None,
             entity: None,
+            chunks: None,
         })
     }
 
@@ -1236,6 +1238,7 @@ impl BilibiliAdapter {
             images: None,
             tables: None,
             entity: None,
+            chunks: None,
         })
     }
 }

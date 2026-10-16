@@ -190,6 +190,12 @@ pub struct ExtractionOptions {
     pub cdp_wait_ms: Option<u64>,
     /// Optional schema definition (JSON string or file path) for structured entity extraction.
     pub schema: Option<String>,
+    /// Whether to segment the output Markdown into semantic chunks for RAG and vector database ingestion.
+    pub chunk: bool,
+    /// Target maximum token size per chunk (default: 500).
+    pub chunk_size: Option<usize>,
+    /// Token overlap between consecutive chunks (default: 50).
+    pub chunk_overlap: Option<usize>,
 }
 
 impl Default for ExtractionOptions {
@@ -219,6 +225,9 @@ impl Default for ExtractionOptions {
             cdp_endpoint: None,
             cdp_wait_ms: None,
             schema: None,
+            chunk: false,
+            chunk_size: None,
+            chunk_overlap: None,
         }
     }
 }
@@ -353,6 +362,21 @@ pub struct ConclusionKeypoint {
     pub content: String,
 }
 
+/// A semantic chunk of a cleaned document for RAG and vector database ingestion.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct DocumentChunk {
+    /// Zero-based chunk sequence index
+    pub index: usize,
+    /// Heading hierarchy path (e.g. ["Getting Started", "Installation", "Cargo"])
+    pub heading_path: Vec<String>,
+    /// Primary section heading title
+    pub title: Option<String>,
+    /// Chunk text content in clean Markdown
+    pub content: String,
+    /// Estimated token count of this chunk
+    pub token_count: usize,
+}
+
 /// The complete structured result of fetching and extracting a webpage.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PageDocument {
@@ -402,4 +426,7 @@ pub struct PageDocument {
     /// Extracted structured entity according to schema definition.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub entity: Option<serde_json::Value>,
+    /// Extracted semantic chunks for RAG / vector search ingestion.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chunks: Option<Vec<DocumentChunk>>,
 }

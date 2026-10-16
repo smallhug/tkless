@@ -293,6 +293,15 @@ impl McpServer {
                 v.to_string()
             }
         });
+        let chunk = args.get("chunk").and_then(|v| v.as_bool()).unwrap_or(false);
+        let chunk_size = args
+            .get("chunk_size")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as usize);
+        let chunk_overlap = args
+            .get("chunk_overlap")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as usize);
 
         let options = ExtractionOptions {
             mode,
@@ -319,6 +328,9 @@ impl McpServer {
             cdp_endpoint,
             cdp_wait_ms,
             schema,
+            chunk,
+            chunk_size,
+            chunk_overlap,
         };
 
         // Cache check
@@ -991,6 +1003,15 @@ impl McpServer {
             .get("frontmatter")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
+        let chunk = args.get("chunk").and_then(|v| v.as_bool()).unwrap_or(false);
+        let chunk_size = args
+            .get("chunk_size")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as usize);
+        let chunk_overlap = args
+            .get("chunk_overlap")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as usize);
 
         let options = ExtractionOptions {
             mode,
@@ -1001,6 +1022,9 @@ impl McpServer {
             strip_images,
             strip_links,
             frontmatter,
+            chunk,
+            chunk_size,
+            chunk_overlap,
             ..Default::default()
         };
 
@@ -1111,6 +1135,34 @@ fn format_doc_result(doc: &crate::model::PageDocument, format: OutputFormat) -> 
             Ok(json_str) => McpToolCallResult::success(json_str),
             Err(e) => McpToolCallResult::error(format!("Failed to serialize JSON: {e}")),
         },
-        _ => McpToolCallResult::success(&doc.content),
+        _ => {
+            if let Some(ref chunks) = doc.chunks {
+                let mut out = String::new();
+                out.push_str(&format!(
+                    "# ✂️ 语义切块输出: {} (共 {} 块)\n\n",
+                    doc.title.as_deref().unwrap_or(&doc.url),
+                    chunks.len()
+                ));
+                for chunk in chunks {
+                    let path_str = if chunk.heading_path.is_empty() {
+                        "根节点".to_string()
+                    } else {
+                        chunk.heading_path.join(" > ")
+                    };
+                    out.push_str(&format!(
+                        "### [Chunk {}/{}] (Tokens: {}) | 标题路径: {}\n\n",
+                        chunk.index + 1,
+                        chunks.len(),
+                        chunk.token_count,
+                        path_str
+                    ));
+                    out.push_str(chunk.content.trim());
+                    out.push_str("\n\n---\n\n");
+                }
+                McpToolCallResult::success(out)
+            } else {
+                McpToolCallResult::success(&doc.content)
+            }
+        }
     }
 }

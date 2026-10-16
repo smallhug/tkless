@@ -306,6 +306,7 @@ mod tests {
             images: None,
             tables: None,
             entity: None,
+            chunks: None,
         };
 
         assert!(cache.get(key).is_none());
@@ -340,6 +341,7 @@ mod tests {
             images: None,
             tables: None,
             entity: None,
+            chunks: None,
         };
 
         cache.set(key, &doc, Some(0)).unwrap();

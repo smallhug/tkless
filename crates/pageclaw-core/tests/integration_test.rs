@@ -391,3 +391,81 @@ async fn test_integration_cdp_connection_failure_actionable_error() {
         "Error message should guide the user: {err_msg}"
     );
 }
+
+#[test]
+fn test_integration_semantic_markdown_chunking() {
+    let engine = PageclawEngine::new().expect("Failed to initialize engine");
+
+    let doc_html = r#"
+        <!DOCTYPE html>
+        <html>
+        <head><title>RAG Knowledge Base Guide</title></head>
+        <body>
+            <article>
+                <h1>RAG Knowledge Base Guide</h1>
+                <p>Comprehensive overview of vector embeddings and retrieval augmentation.</p>
+
+                <h2>Architecture Overview</h2>
+                <p>PageClaw acts as the high-throughput web ingestion and cleaning layer.</p>
+
+                <h3>Code Implementation</h3>
+                <p>Here is an essential code implementation snippet:</p>
+                <pre><code class="language-rust">fn main() {
+    println!("Hello PageClaw RAG!");
+}</code></pre>
+
+                <h2>Performance Benchmark</h2>
+                <p>Benchmarks comparing ingestion latency across different engines:</p>
+                <table>
+                    <thead>
+                        <tr><th>Engine</th><th>Cold Start</th></tr>
+                    </thead>
+                    <tbody>
+                        <tr><td>PageClaw</td><td>&lt; 5ms</td></tr>
+                        <tr><td>Puppeteer</td><td>&gt; 800ms</td></tr>
+                    </tbody>
+                </table>
+            </article>
+        </body>
+        </html>
+    "#;
+
+    let options = ExtractionOptions {
+        chunk: true,
+        chunk_size: Some(30),
+        chunk_overlap: Some(5),
+        format: OutputFormat::Json,
+        ..Default::default()
+    };
+
+    let doc = engine
+        .process_html(doc_html, Some("https://example.com/guide"), &options)
+        .expect("Failed to process HTML with chunking");
+
+    let chunks = doc
+        .chunks
+        .expect("Chunks must be populated when chunk: true");
+    assert!(
+        chunks.len() >= 2,
+        "Document should be segmented into multiple chunks"
+    );
+
+    // Verify heading breadcrumbs
+    let code_chunk = chunks.iter().find(|c| c.content.contains("println!"));
+    assert!(code_chunk.is_some(), "Code snippet must be present");
+    let c = code_chunk.unwrap();
+    assert!(
+        c.heading_path
+            .contains(&"Architecture Overview".to_string())
+            || c.heading_path.contains(&"Code Implementation".to_string()),
+        "Heading path hierarchy must be preserved"
+    );
+
+    // Verify code block was not broken in half
+    assert!(
+        c.content
+            .contains("```rust\nfn main() {\n    println!(\"Hello PageClaw RAG!\");\n}\n```")
+            || c.content.contains("println!(\"Hello PageClaw RAG!\");"),
+        "Code fence must remain intact"
+    );
+}

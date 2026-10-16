@@ -17,11 +17,17 @@ pub fn render_output(
             .context("Failed to serialize JSON-LD structured data")?
     } else {
         match format {
-            OutputFormat::Json => serde_json::to_string_pretty(doc)
-                .context("Failed to serialize document to JSON")?,
-            OutputFormat::Markdown | OutputFormat::Text | OutputFormat::Raw | OutputFormat::Html => {
-                doc.content.clone()
+            OutputFormat::Json => {
+                serde_json::to_string_pretty(doc).context("Failed to serialize document to JSON")?
             }
+            OutputFormat::Markdown => {
+                if let Some(ref chunks) = doc.chunks {
+                    format_chunks_markdown(doc, chunks)
+                } else {
+                    doc.content.clone()
+                }
+            }
+            OutputFormat::Text | OutputFormat::Raw | OutputFormat::Html => doc.content.clone(),
         }
     };
 
@@ -50,4 +56,37 @@ pub fn write_payload(payload: &str, output_path: Option<&Path>) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Formats extracted document chunks into a human and agent readable Markdown document.
+fn format_chunks_markdown(
+    doc: &PageDocument,
+    chunks: &[pageclaw_core::model::DocumentChunk],
+) -> String {
+    let mut out = String::new();
+    out.push_str(&format!(
+        "# ✂️ 语义切块输出: {} (共 {} 块)\n\n",
+        doc.title.as_deref().unwrap_or(&doc.url),
+        chunks.len()
+    ));
+
+    for chunk in chunks {
+        let path_str = if chunk.heading_path.is_empty() {
+            "根节点".to_string()
+        } else {
+            chunk.heading_path.join(" > ")
+        };
+
+        out.push_str(&format!(
+            "### [Chunk {}/{}] (Tokens: {}) | 标题路径: {}\n\n",
+            chunk.index + 1,
+            chunks.len(),
+            chunk.token_count,
+            path_str
+        ));
+        out.push_str(chunk.content.trim());
+        out.push_str("\n\n---\n\n");
+    }
+
+    out
 }
