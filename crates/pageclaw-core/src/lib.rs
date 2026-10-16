@@ -3,6 +3,7 @@
 pub mod adapters;
 pub mod auth;
 pub mod cache;
+pub mod cdp;
 pub mod cleaner;
 pub mod crawler;
 pub mod downloader;
@@ -12,6 +13,7 @@ pub mod fetcher;
 pub mod markdown;
 pub mod mcp;
 pub mod model;
+pub mod schema;
 pub mod search;
 pub mod token;
 
@@ -23,6 +25,7 @@ pub use auth::{
     execute_login_flow, generate_qrcode, poll_qrcode_status, LoginOptions, QrPollStatus,
 };
 pub use cache::DocumentCache;
+pub use cdp::{fetch_html_via_cdp, CdpOptions};
 pub use crawler::{
     crawl_site, format_crawl_report_markdown, CrawlOptions, CrawledPage, SiteCrawlReport,
 };
@@ -34,6 +37,7 @@ pub use model::{
     OutputFormat, PageDocument, PageMetadata, SearchEngineKind, SubtitleLine, TokenizerKind,
     VideoConclusion, VideoQuality,
 };
+pub use schema::{extract_entities, ExtractionSchema, FieldDef, FieldDetail};
 pub use search::{
     format_search_fetch_markdown, format_search_results_markdown, search_bing, search_google,
     web_search, web_search_and_fetch, web_search_with_engine, SearchFetchItem, SearchResultItem,
@@ -109,6 +113,28 @@ impl PageclawEngine {
 
         // Enforce SSRF validation upfront for all URLs before entering platform adapters or standard fetching
         self.fetcher.validate_ssrf(&parsed_url).await?;
+
+        // 0. Attempt CDP headless browser extraction if an endpoint is configured
+        if let Some(ref cdp_endpoint) = options.cdp_endpoint {
+            debug!(
+                endpoint = %cdp_endpoint,
+                url = url,
+                "使用 CDP 无头浏览器渲染抓取页面"
+            );
+            let cdp_opts = cdp::CdpOptions {
+                endpoint: cdp_endpoint.clone(),
+                wait_ms: options.cdp_wait_ms,
+                timeout_ms: None,
+                user_agent: self.fetcher.options().user_agent.clone(),
+                cookie: self.fetcher.resolve_cookie_for_url(&parsed_url),
+            };
+            let html = cdp::fetch_html_via_cdp(url, &cdp_opts).await?;
+            let mut doc = self.process_html(&html, Some(url), options)?;
+            doc.url = url.to_string();
+            doc.final_url = url.to_string();
+            doc.status = 200;
+            return Ok(doc);
+        }
 
         // 1. Attempt platform adapter fast path if enabled
         if !options.no_adapter {
@@ -202,6 +228,25 @@ impl PageclawEngine {
             None
         };
 
+        // 2b. Extract structured entities if schema is provided
+        let entity = if let Some(ref schema_input) = options.schema {
+            match schema::ExtractionSchema::parse(schema_input) {
+                Ok(schema) => match schema::extract_entities(raw_html, &schema, base_url) {
+                    Ok(val) => Some(val),
+                    Err(err) => {
+                        warn!(error = %err, "Schema 实体提取失败");
+                        None
+                    }
+                },
+                Err(err) => {
+                    warn!(error = %err, "解析 Schema 定义失败");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
         // 3. Clean and isolate target content (targeted CSS selector or heuristic cleaning)
         let cleaned = if let Some(ref sel) = options.selector {
             extract_selector(raw_html, sel, base_url)?
@@ -282,6 +327,15 @@ impl PageclawEngine {
             }
         }
 
+        // Append structured entity JSON to Markdown if extracted
+        if let Some(ref ent) = entity {
+            if options.format == OutputFormat::Markdown {
+                content.push_str("\n\n### 结构化实体提取 (Extracted Entity)\n\n```json\n");
+                content.push_str(&serde_json::to_string_pretty(ent).unwrap_or_default());
+                content.push_str("\n```\n");
+            }
+        }
+
         // 5. Token counting and truncation
         let initial_token_count = count_tokens(&content, options.tokenizer);
         let mut truncated = false;
@@ -325,6 +379,7 @@ impl PageclawEngine {
             links,
             images,
             tables,
+            entity,
         })
     }
 }

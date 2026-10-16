@@ -68,14 +68,24 @@ fn test_integration_pipeline_html_to_markdown() {
     };
 
     let doc = engine
-        .process_html(sample_html, Some("https://example.com/blog/rust-agent"), &options)
+        .process_html(
+            sample_html,
+            Some("https://example.com/blog/rust-agent"),
+            &options,
+        )
         .expect("Processing failed");
 
     // 1. Verify title and metadata
     assert_eq!(doc.title.as_deref(), Some("Rust Web Extraction for Agents"));
     assert_eq!(doc.metadata.author.as_deref(), Some("PageClaw Team"));
-    assert_eq!(doc.metadata.description.as_deref(), Some("A demonstration of PageClaw cleaning and extraction."));
-    assert_eq!(doc.metadata.open_graph.get("og:title").map(|s| s.as_str()), Some("PageClaw Guide"));
+    assert_eq!(
+        doc.metadata.description.as_deref(),
+        Some("A demonstration of PageClaw cleaning and extraction.")
+    );
+    assert_eq!(
+        doc.metadata.open_graph.get("og:title").map(|s| s.as_str()),
+        Some("PageClaw Guide")
+    );
 
     // 2. Verify JSON-LD extraction
     assert_eq!(doc.json_ld.len(), 1);
@@ -83,8 +93,12 @@ fn test_integration_pipeline_html_to_markdown() {
 
     // 3. Verify clean Markdown output (frontmatter, content, table)
     assert!(doc.content.starts_with("---\n"));
-    assert!(doc.content.contains("title: \"Rust Web Extraction for Agents\""));
-    assert!(doc.content.contains("PageClaw prunes boilerplates and produces clean Markdown."));
+    assert!(doc
+        .content
+        .contains("title: \"Rust Web Extraction for Agents\""));
+    assert!(doc
+        .content
+        .contains("PageClaw prunes boilerplates and produces clean Markdown."));
     assert!(doc.content.contains("| Language | Cold Start |"));
 
     // 4. Verify noise was eliminated
@@ -129,7 +143,9 @@ fn test_integration_token_budget_truncation() {
         .expect("Processing failed");
 
     assert!(doc.truncated);
-    assert!(doc.content.contains("[Content truncated by PageClaw: token limit reached]"));
+    assert!(doc
+        .content
+        .contains("[Content truncated by PageClaw: token limit reached]"));
 }
 
 #[test]
@@ -172,11 +188,15 @@ fn test_integration_selector_targeted_extraction() {
         format: OutputFormat::Markdown,
         ..Default::default()
     };
-    let selector_doc = engine.process_html(page_html, None, &selector_options).unwrap();
+    let selector_doc = engine
+        .process_html(page_html, None, &selector_options)
+        .unwrap();
 
     // Verify selector isolated target element
     assert!(selector_doc.content.contains("# Target Header"));
-    assert!(selector_doc.content.contains("This is the core target paragraph"));
+    assert!(selector_doc
+        .content
+        .contains("This is the core target paragraph"));
     assert!(!selector_doc.content.contains("Trending articles"));
     assert!(!selector_doc.content.contains("Footer boilerplate"));
     assert!(!selector_doc.content.contains("User comments"));
@@ -239,7 +259,10 @@ fn test_integration_extract_assets_and_tables_json() {
     assert_eq!(tables.len(), 1);
     assert_eq!(tables[0].headers, vec!["City", "Population"]);
     assert_eq!(tables[0].rows.len(), 2);
-    assert_eq!(tables[0].records[0].get("City").map(|s| s.as_str()), Some("Tokyo"));
+    assert_eq!(
+        tables[0].records[0].get("City").map(|s| s.as_str()),
+        Some("Tokyo")
+    );
 
     // Verify JSON serialization includes structured assets
     let json_val = serde_json::to_value(&doc).unwrap();
@@ -272,7 +295,99 @@ fn test_integration_extract_assets_markdown() {
     let doc = engine.process_html(page_html, None, &options).unwrap();
 
     assert!(doc.content.contains("### 页面链接清单 (Links)"));
-    assert!(doc.content.contains("- [Documentation](https://example.com/docs)"));
+    assert!(doc
+        .content
+        .contains("- [Documentation](https://example.com/docs)"));
     assert!(doc.content.contains("### 页面图片资产 (Images)"));
-    assert!(doc.content.contains("- ![Sample Picture](https://example.com/pic.png)"));
+    assert!(doc
+        .content
+        .contains("- ![Sample Picture](https://example.com/pic.png)"));
+}
+
+#[test]
+fn test_integration_schema_driven_entity_extraction() {
+    let engine = PageclawEngine::new().expect("Failed to initialize engine");
+
+    let page_html = r#"
+        <!DOCTYPE html>
+        <html>
+        <head><title>Product Detail</title></head>
+        <body>
+            <div class="product-container">
+                <h1 class="product-title">高性能机械键盘 Ultra</h1>
+                <div class="price-wrapper">
+                    <span class="price-val">899.00</span>
+                </div>
+                <a class="product-link" href="/shop/item-999">购买链接</a>
+            </div>
+        </body>
+        </html>
+    "#;
+
+    let schema_json = r#"
+    {
+        "fields": {
+            "title": "h1.product-title",
+            "price": ".price-val",
+            "link": "a.product-link @href"
+        }
+    }
+    "#;
+
+    let options = ExtractionOptions {
+        schema: Some(schema_json.to_string()),
+        format: OutputFormat::Json,
+        ..Default::default()
+    };
+
+    let doc = engine
+        .process_html(
+            page_html,
+            Some("https://store.example.com/item/1"),
+            &options,
+        )
+        .expect("Failed to process HTML with schema");
+
+    let entity = doc.entity.expect("Extracted entity must be present");
+    assert_eq!(entity["title"], "高性能机械键盘 Ultra");
+    assert_eq!(entity["price"], "899.00");
+    assert_eq!(entity["link"], "https://store.example.com/shop/item-999");
+
+    // Also test Markdown format includes JSON entity section
+    let md_options = ExtractionOptions {
+        schema: Some(schema_json.to_string()),
+        format: OutputFormat::Markdown,
+        ..Default::default()
+    };
+    let md_doc = engine
+        .process_html(
+            page_html,
+            Some("https://store.example.com/item/1"),
+            &md_options,
+        )
+        .expect("Failed to process HTML with schema");
+
+    assert!(md_doc
+        .content
+        .contains("### 结构化实体提取 (Extracted Entity)"));
+    assert!(md_doc.content.contains("高性能机械键盘 Ultra"));
+}
+
+#[tokio::test]
+async fn test_integration_cdp_connection_failure_actionable_error() {
+    let cdp_options = pageclaw_core::cdp::CdpOptions {
+        endpoint: "http://127.0.0.1:59999".to_string(), // Unused port
+        wait_ms: Some(100),
+        timeout_ms: Some(5000),
+        user_agent: None,
+        cookie: None,
+    };
+
+    let res = pageclaw_core::cdp::fetch_html_via_cdp("https://example.com", &cdp_options).await;
+    assert!(res.is_err());
+    let err_msg = res.unwrap_err().to_string();
+    assert!(
+        err_msg.contains("无法连接到 Chrome CDP 端点") || err_msg.contains("remote-debugging-port"),
+        "Error message should guide the user: {err_msg}"
+    );
 }

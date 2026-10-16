@@ -194,6 +194,7 @@ impl WechatAdapter {
             links: None,
             images: None,
             tables: None,
+            entity: None,
         })
     }
 }

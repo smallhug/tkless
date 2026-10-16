@@ -1,0 +1,325 @@
+//! Chrome DevTools Protocol (CDP) lightweight headless browser sidecar.
+//!
+//! Connects to an existing Chrome/Chromium/Edge browser instance running with `--remote-debugging-port=9222`
+//! (or custom CDP WebSocket/HTTP endpoint), navigates to the target page, executes JavaScript,
+//! waits for DOM hydration / anti-bot challenges to settle, and extracts the fully-rendered `outerHTML`.
+
+use futures_util::{SinkExt, StreamExt};
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+use std::time::Duration;
+use tokio::time::timeout;
+use tokio_tungstenite::connect_async;
+use tokio_tungstenite::tungstenite::Message;
+use tracing::debug;
+use url::Url;
+
+use crate::error::PageclawError;
+
+/// Options controlling CDP browser interaction.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CdpOptions {
+    /// DevTools HTTP or WebSocket endpoint, e.g. "http://127.0.0.1:9222" or "ws://127.0.0.1:9222/devtools/..."
+    pub endpoint: String,
+    /// Optional additional wait time in milliseconds for dynamic JS rendering/hydration.
+    pub wait_ms: Option<u64>,
+    /// Overall page load and extraction timeout in milliseconds (default: 30000).
+    pub timeout_ms: Option<u64>,
+    /// Custom User-Agent to emulate in the browser session.
+    pub user_agent: Option<String>,
+    /// Cookie header string or platform cookies to inject into the browser target.
+    pub cookie: Option<String>,
+}
+
+impl Default for CdpOptions {
+    fn default() -> Self {
+        Self {
+            endpoint: "http://127.0.0.1:9222".to_string(),
+            wait_ms: Some(1000),
+            timeout_ms: Some(30_000),
+            user_agent: None,
+            cookie: None,
+        }
+    }
+}
+
+/// Target description returned by Chrome DevTools HTTP `/json/new` or `/json/list`.
+#[derive(Debug, Clone, Deserialize)]
+struct DevToolsTarget {
+    id: String,
+    #[serde(rename = "webSocketDebuggerUrl")]
+    web_socket_debugger_url: Option<String>,
+}
+
+/// Normalizes user-specified endpoint string to HTTP and WebSocket base URLs.
+fn normalize_cdp_endpoint(endpoint: &str) -> (String, bool) {
+    let trimmed = endpoint.trim();
+    if trimmed.starts_with("ws://") || trimmed.starts_with("wss://") {
+        (trimmed.to_string(), true)
+    } else if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+        (trimmed.trim_end_matches('/').to_string(), false)
+    } else if let Ok(port) = trimmed.parse::<u16>() {
+        (format!("http://127.0.0.1:{port}"), false)
+    } else {
+        (format!("http://{}", trimmed.trim_end_matches('/')), false)
+    }
+}
+
+/// Fetches rendered HTML for a given URL via Chrome DevTools Protocol.
+pub async fn fetch_html_via_cdp(url: &str, options: &CdpOptions) -> Result<String, PageclawError> {
+    let (base_endpoint, is_direct_ws) = normalize_cdp_endpoint(&options.endpoint);
+    let total_timeout = Duration::from_millis(options.timeout_ms.unwrap_or(30_000));
+
+    timeout(total_timeout, async {
+        if is_direct_ws {
+            connect_and_extract_html(&base_endpoint, url, options, None).await
+        } else {
+            // 1. Create a new target tab via Chrome DevTools HTTP API
+            let req_timeout = Duration::from_millis(options.timeout_ms.unwrap_or(30_000).min(5000));
+            let client = reqwest::Client::builder()
+                .connect_timeout(req_timeout)
+                .timeout(req_timeout)
+                .build()
+                .map_err(|e| PageclawError::CdpError(format!("创建 HTTP 客户端失败: {e}")))?;
+
+            let new_target_url = format!("{}/json/new?{}", base_endpoint, urlencoding(url));
+            debug!(endpoint = %new_target_url, "通过 CDP HTTP 接口创建新页面 Tab");
+
+            let resp = match client.put(&new_target_url).send().await {
+                Ok(r) if r.status().is_success() => Ok(r),
+                _ => client.get(&new_target_url).send().await,
+            }
+            .map_err(|err| {
+                PageclawError::CdpError(format!(
+                    "无法连接到 Chrome CDP 端点 '{base_endpoint}': {err}。请确保已通过 `google-chrome --remote-debugging-port=9222` 或 `msedge --remote-debugging-port=9222` 启动浏览器远程调试。"
+                ))
+            })?;
+
+            if !resp.status().is_success() {
+                return Err(PageclawError::CdpError(format!(
+                    "CDP 端点返回错误状态码 {}: {}",
+                    resp.status(),
+                    base_endpoint
+                )));
+            }
+
+            let target: DevToolsTarget = resp.json().await.map_err(|err| {
+                PageclawError::CdpError(format!("解析 CDP 目标元数据失败: {err}"))
+            })?;
+
+            let ws_url = target.web_socket_debugger_url.ok_or_else(|| {
+                PageclawError::CdpError("CDP 目标未返回有效的 webSocketDebuggerUrl".to_string())
+            })?;
+
+            let target_id = target.id.clone();
+            let result = connect_and_extract_html(&ws_url, url, options, Some(&base_endpoint)).await;
+
+            // Close tab after extraction to prevent tab leak
+            let close_url = format!("{}/json/close/{}", base_endpoint, target_id);
+            let _ = client.get(&close_url).send().await;
+
+            result
+        }
+    })
+    .await
+    .map_err(|_| {
+        PageclawError::ConnectionTimeout(format!(
+            "CDP 页面加载超时 ({}ms): {url}",
+            options.timeout_ms.unwrap_or(30_000)
+        ))
+    })?
+}
+
+/// Connects to a CDP WebSocket URL, navigates, waits for DOM ready, and evaluates `outerHTML`.
+async fn connect_and_extract_html(
+    ws_url: &str,
+    target_url: &str,
+    options: &CdpOptions,
+    _http_base: Option<&str>,
+) -> Result<String, PageclawError> {
+    debug!(ws_url = %ws_url, "连接 CDP WebSocket 调试会话");
+
+    let (mut ws_stream, _) = connect_async(ws_url).await.map_err(|err| {
+        PageclawError::CdpError(format!("无法建立 CDP WebSocket 连接 ({ws_url}): {err}"))
+    })?;
+
+    let mut message_id = 1u64;
+
+    // Helper closure to send a JSON-RPC command
+    async fn send_cdp_cmd<S: SinkExt<Message> + Unpin>(
+        ws: &mut S,
+        id: u64,
+        method: &str,
+        params: Value,
+    ) -> Result<(), PageclawError>
+    where
+        <S as futures_util::Sink<Message>>::Error: std::fmt::Display,
+    {
+        let payload = json!({
+            "id": id,
+            "method": method,
+            "params": params,
+        });
+        let text = payload.to_string();
+        ws.send(Message::Text(text.into())).await.map_err(|err| {
+            PageclawError::CdpError(format!("发送 CDP 指令失败 ({method}): {err}"))
+        })?;
+        Ok(())
+    }
+
+    // 1. Enable Page and Runtime domains
+    send_cdp_cmd(&mut ws_stream, message_id, "Page.enable", json!({})).await?;
+    message_id += 1;
+
+    send_cdp_cmd(&mut ws_stream, message_id, "Runtime.enable", json!({})).await?;
+    message_id += 1;
+
+    // 2. Set custom User-Agent if provided
+    if let Some(ref ua) = options.user_agent {
+        send_cdp_cmd(
+            &mut ws_stream,
+            message_id,
+            "Network.setUserAgentOverride",
+            json!({ "userAgent": ua }),
+        )
+        .await?;
+        message_id += 1;
+    }
+
+    // 3. Set Cookie if provided
+    if let Some(ref raw_cookie) = options.cookie {
+        if let Ok(parsed_url) = Url::parse(target_url) {
+            let host = parsed_url.host_str().unwrap_or_default();
+            for item in raw_cookie.split(';') {
+                let trimmed = item.trim();
+                if let Some((k, v)) = trimmed.split_once('=') {
+                    send_cdp_cmd(
+                        &mut ws_stream,
+                        message_id,
+                        "Network.setCookie",
+                        json!({
+                            "name": k.trim(),
+                            "value": v.trim(),
+                            "domain": host,
+                            "path": "/",
+                        }),
+                    )
+                    .await?;
+                    message_id += 1;
+                }
+            }
+        }
+    }
+
+    // 4. Navigate to URL
+    send_cdp_cmd(
+        &mut ws_stream,
+        message_id,
+        "Page.navigate",
+        json!({ "url": target_url }),
+    )
+    .await?;
+    let navigate_cmd_id = message_id;
+    message_id += 1;
+
+    // 5. Wait for page load event or navigation response
+    let nav_timeout = Duration::from_secs(15);
+    let _ = timeout(nav_timeout, async {
+        while let Some(msg_result) = ws_stream.next().await {
+            if let Ok(Message::Text(text)) = msg_result {
+                if let Ok(v) = serde_json::from_str::<Value>(&text) {
+                    if let Some(method) = v.get("method").and_then(|m| m.as_str()) {
+                        if method == "Page.loadEventFired" || method == "Page.domContentEventFired"
+                        {
+                            debug!("CDP 捕获到页面加载完成事件: {method}");
+                            break;
+                        }
+                    }
+                    if let Some(id) = v.get("id").and_then(|id| id.as_u64()) {
+                        if id == navigate_cmd_id {
+                            debug!("CDP Page.navigate 指令已接收响应");
+                        }
+                    }
+                }
+            }
+        }
+    })
+    .await;
+
+    // 6. Optional additional hydration wait time
+    if let Some(wait_ms) = options.wait_ms {
+        if wait_ms > 0 {
+            tokio::time::sleep(Duration::from_millis(wait_ms)).await;
+        }
+    }
+
+    // 7. Extract document.documentElement.outerHTML
+    let eval_cmd_id = message_id;
+    send_cdp_cmd(
+        &mut ws_stream,
+        eval_cmd_id,
+        "Runtime.evaluate",
+        json!({
+            "expression": "document.documentElement.outerHTML",
+            "returnByValue": true,
+            "awaitPromise": true,
+        }),
+    )
+    .await?;
+
+    let eval_timeout = Duration::from_secs(10);
+    let html = timeout(eval_timeout, async {
+        while let Some(msg_result) = ws_stream.next().await {
+            if let Ok(Message::Text(text)) = msg_result {
+                if let Ok(v) = serde_json::from_str::<Value>(&text) {
+                    if v.get("id").and_then(|id| id.as_u64()) == Some(eval_cmd_id) {
+                        if let Some(res_val) = v
+                            .get("result")
+                            .and_then(|r| r.get("result"))
+                            .and_then(|r| r.get("value"))
+                            .and_then(|val| val.as_str())
+                        {
+                            return Ok(res_val.to_string());
+                        }
+                    }
+                }
+            }
+        }
+        Err(PageclawError::CdpError(
+            "未能从 CDP Runtime.evaluate 获取 outerHTML".to_string(),
+        ))
+    })
+    .await
+    .map_err(|_| PageclawError::ConnectionTimeout("CDP Runtime.evaluate 执行超时".to_string()))??;
+
+    Ok(html)
+}
+
+/// Helper function to URL-encode a string.
+fn urlencoding(input: &str) -> String {
+    url::form_urlencoded::byte_serialize(input.as_bytes()).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_normalize_cdp_endpoint() {
+        let (ep, is_ws) = normalize_cdp_endpoint("9222");
+        assert_eq!(ep, "http://127.0.0.1:9222");
+        assert!(!is_ws);
+
+        let (ep, is_ws) = normalize_cdp_endpoint("localhost:9222");
+        assert_eq!(ep, "http://localhost:9222");
+        assert!(!is_ws);
+
+        let (ep, is_ws) = normalize_cdp_endpoint("http://127.0.0.1:9222/");
+        assert_eq!(ep, "http://127.0.0.1:9222");
+        assert!(!is_ws);
+
+        let (ep, is_ws) = normalize_cdp_endpoint("ws://127.0.0.1:9222/devtools/page/123");
+        assert_eq!(ep, "ws://127.0.0.1:9222/devtools/page/123");
+        assert!(is_ws);
+    }
+}

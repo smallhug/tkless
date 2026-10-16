@@ -198,6 +198,7 @@ impl XiaohongshuAdapter {
             links: None,
             images: None,
             tables: None,
+            entity: None,
         })
     }
 }

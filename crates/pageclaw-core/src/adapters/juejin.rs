@@ -176,6 +176,7 @@ impl JuejinAdapter {
             links: None,
             images: None,
             tables: None,
+            entity: None,
         })
     }
 }
