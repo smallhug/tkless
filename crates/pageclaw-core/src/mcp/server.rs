@@ -285,6 +285,10 @@ impl McpServer {
             .get("proxy")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
+        let mobile = args
+            .get("mobile")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
         let cdp_endpoint = args
             .get("cdp_endpoint")
             .and_then(|v| v.as_str())
@@ -390,6 +394,7 @@ impl McpServer {
             allow_private_addresses,
             allow_http_errors,
             proxy,
+            mobile,
         };
 
         let engine = match PageclawEngine::with_options(fetch_options) {
@@ -688,11 +693,20 @@ impl McpServer {
             .get("proxy")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
+        let mobile = args
+            .get("mobile")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
 
         let custom_engine;
-        let engine_ref = if let Some(ref p) = proxy {
+        let engine_ref = if proxy.is_some() || mobile {
             let mut fetch_opts = self.engine.fetcher().options().clone();
-            fetch_opts.proxy = Some(p.clone());
+            if let Some(ref p) = proxy {
+                fetch_opts.proxy = Some(p.clone());
+            }
+            if mobile {
+                fetch_opts.mobile = true;
+            }
             match PageclawEngine::with_options(fetch_opts) {
                 Ok(eng) => {
                     custom_engine = eng;
@@ -824,6 +838,10 @@ impl McpServer {
             .get("proxy")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
+        let mobile = args
+            .get("mobile")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
         let schema = args.get("schema").map(|v| {
             if let Some(s) = v.as_str() {
                 s.to_string()
@@ -851,9 +869,14 @@ impl McpServer {
         };
 
         let custom_engine;
-        let engine_ref = if let Some(ref p) = proxy {
+        let engine_ref = if proxy.is_some() || mobile {
             let mut fetch_opts = self.engine.fetcher().options().clone();
-            fetch_opts.proxy = Some(p.clone());
+            if let Some(ref p) = proxy {
+                fetch_opts.proxy = Some(p.clone());
+            }
+            if mobile {
+                fetch_opts.mobile = true;
+            }
             match PageclawEngine::with_options(fetch_opts) {
                 Ok(eng) => {
                     custom_engine = eng;
@@ -950,11 +973,20 @@ impl McpServer {
             .get("proxy")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
+        let mobile = args
+            .get("mobile")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
 
         let custom_engine;
-        let engine_ref = if let Some(ref p) = proxy {
+        let engine_ref = if proxy.is_some() || mobile {
             let mut fetch_opts = self.engine.fetcher().options().clone();
-            fetch_opts.proxy = Some(p.clone());
+            if let Some(ref p) = proxy {
+                fetch_opts.proxy = Some(p.clone());
+            }
+            if mobile {
+                fetch_opts.mobile = true;
+            }
             match PageclawEngine::with_options(fetch_opts) {
                 Ok(eng) => {
                     custom_engine = eng;

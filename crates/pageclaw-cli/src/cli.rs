@@ -574,6 +574,10 @@ pub struct CliArgs {
     )]
     pub proxy: Option<String>,
 
+    /// 模拟移动端设备 (iPhone / Safari) 访问以触发轻量移动端排版，有效减少桌面端冗余噪音
+    #[arg(long = "mobile", help_heading = "网络与身份认证 (Network & Auth)")]
+    pub mobile: bool,
+
     /// Base URL to resolve relative links when reading HTML from stdin
     #[arg(
         long = "base-url",
@@ -764,6 +768,10 @@ pub struct SearchSubArgs {
     /// HTTP/HTTPS 代理服务器地址 (例如 http://127.0.0.1:7890)
     #[arg(short = 'p', long = "proxy", value_name = "PROXY_URL")]
     pub proxy: Option<String>,
+
+    /// 模拟移动端设备 User-Agent
+    #[arg(long = "mobile")]
+    pub mobile: bool,
 }
 
 #[derive(clap::Args, Debug, Clone)]
@@ -828,6 +836,10 @@ pub struct BatchArgs {
     /// HTTP/HTTPS 代理服务器地址 (例如 http://127.0.0.1:7890)
     #[arg(short = 'p', long = "proxy", value_name = "PROXY_URL")]
     pub proxy: Option<String>,
+
+    /// 模拟移动端设备 User-Agent
+    #[arg(long = "mobile")]
+    pub mobile: bool,
 }
 
 #[derive(clap::Args, Debug, Clone)]
@@ -937,4 +949,8 @@ pub struct CrawlArgs {
         help = "Automatically skip near-duplicate crawled pages based on 64-bit SimHash"
     )]
     pub dedup: bool,
+
+    /// 模拟移动端设备 User-Agent
+    #[arg(long = "mobile")]
+    pub mobile: bool,
 }

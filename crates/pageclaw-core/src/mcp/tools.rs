@@ -202,6 +202,11 @@ pub fn get_available_tools() -> Vec<McpTool> {
                         "enum": ["markdown", "csv", "tsv", "json"],
                         "default": "markdown",
                         "description": "Presentation format for table export: 'markdown' (default), 'csv', 'tsv', or 'json'"
+                    },
+                    "mobile": {
+                        "type": "boolean",
+                        "default": false,
+                        "description": "Whether to emulate a mobile browser User-Agent to trigger lightweight mobile layouts"
                     }
                 },
                 "required": ["url"]
@@ -370,6 +375,11 @@ pub fn get_available_tools() -> Vec<McpTool> {
                         "type": "string",
                         "description": "Optional HTTP/HTTPS proxy URL (e.g. 'http://127.0.0.1:7890')"
                     },
+                    "mobile": {
+                        "type": "boolean",
+                        "default": false,
+                        "description": "Whether to emulate a mobile browser User-Agent when fetch_content is enabled"
+                    },
                     "format": {
                         "type": "string",
                         "enum": ["markdown", "json"],
@@ -435,6 +445,11 @@ pub fn get_available_tools() -> Vec<McpTool> {
                         "type": "string",
                         "description": "Optional HTTP/HTTPS proxy URL (e.g. 'http://127.0.0.1:7890')"
                     },
+                    "mobile": {
+                        "type": "boolean",
+                        "default": false,
+                        "description": "Whether to emulate a mobile browser User-Agent during crawl"
+                    },
                     "format": {
                         "type": "string",
                         "enum": ["markdown", "json"],
@@ -490,6 +505,11 @@ pub fn get_available_tools() -> Vec<McpTool> {
                     "proxy": {
                         "type": "string",
                         "description": "Optional HTTP/HTTPS proxy URL (e.g. 'http://127.0.0.1:7890')"
+                    },
+                    "mobile": {
+                        "type": "boolean",
+                        "default": false,
+                        "description": "Whether to emulate a mobile browser User-Agent during batch fetching"
                     }
                 },
                 "required": ["urls"]
