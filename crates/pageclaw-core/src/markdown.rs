@@ -17,6 +17,31 @@ static DATA_LANG_RE: LazyLock<Regex> =
 static INNER_CODE_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r#"(?is)<code([^>]*)>(.*?)</code>"#).unwrap());
 
+static KATEX_DISPLAY_DIV_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?is)<div[^>]*class\s*=\s*["'][^"']*\bkatex-display\b[^"']*["'][^>]*>[\s\S]*?<annotation\s+encoding\s*=\s*["']application/x-tex["']>([\s\S]*?)</annotation>[\s\S]*?</div>"#).unwrap()
+});
+static KATEX_DISPLAY_SPAN_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?is)<span[^>]*class\s*=\s*["'][^"']*\bkatex-display\b[^"']*["'][^>]*>[\s\S]*?<annotation\s+encoding\s*=\s*["']application/x-tex["']>([\s\S]*?)</annotation>[\s\S]*?</span>"#).unwrap()
+});
+static KATEX_INLINE_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?is)<span[^>]*class\s*=\s*["'][^"']*\bkatex\b[^"']*["'][^>]*>[\s\S]*?<annotation\s+encoding\s*=\s*["']application/x-tex["']>([\s\S]*?)</annotation>[\s\S]*?</span>"#).unwrap()
+});
+static MATHJAX_DISPLAY_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r#"(?is)<script[^>]*type\s*=\s*["']math/tex;\s*mode=display["'][^>]*>([\s\S]*?)</script>"#,
+    )
+    .unwrap()
+});
+static MATHJAX_INLINE_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?is)<script[^>]*type\s*=\s*["']math/tex["'][^>]*>([\s\S]*?)</script>"#).unwrap()
+});
+static MATH_DISPLAY_DIV_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?is)<(?:div|p)[^>]*class\s*=\s*["'][^"']*\bmath\s+display\b[^"']*["'][^>]*>\s*\\\[([\s\S]*?)\\\]\s*</(?:div|p)>"#).unwrap()
+});
+static MATH_INLINE_SPAN_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?is)<span[^>]*class\s*=\s*["'][^"']*\bmath\s+inline\b[^"']*["'][^>]*>\s*\\\(([\s\S]*?)\\\)\s*</span>"#).unwrap()
+});
+
 /// HTML to clean, readable Markdown converter.
 pub struct MarkdownConverter {
     converter: HtmlToMarkdown,
@@ -48,11 +73,16 @@ impl MarkdownConverter {
         strip_images: bool,
         strip_links: bool,
     ) -> Result<String, PageclawError> {
-        let preprocessed = normalize_code_language_tags(html);
+        let mut math_protector = MathPlaceholderProtector::new();
+        let with_math = math_protector.protect(html);
+        let preprocessed = normalize_code_language_tags(&with_math);
+
         let mut md = self
             .converter
             .convert(&preprocessed)
             .map_err(|e| PageclawError::ConversionError(e.to_string()))?;
+
+        md = math_protector.restore(&md);
 
         if strip_images {
             md = remove_markdown_images(&md);
@@ -91,6 +121,113 @@ fn remove_markdown_links(md: &str) -> String {
             let text = caps.get(2).map_or("", |m| m.as_str());
             format!("{prefix}{text}")
         })
+        .to_string()
+}
+
+/// Helper for protecting math formulas using alphanumeric placeholders before conversion,
+/// and restoring them unescaped to guarantee 100% LaTeX syntax fidelity.
+struct MathPlaceholderProtector {
+    formulas: Vec<(bool, String)>,
+}
+
+impl MathPlaceholderProtector {
+    fn new() -> Self {
+        Self {
+            formulas: Vec::new(),
+        }
+    }
+
+    fn protect(&mut self, html: &str) -> String {
+        // 1. KaTeX display div blocks
+        let s1 = KATEX_DISPLAY_DIV_RE.replace_all(html, |caps: &regex::Captures| {
+            let formula = clean_tex_code(&caps[1]);
+            let id = self.formulas.len();
+            self.formulas.push((true, formula));
+            format!("<p>PAGECLAWMATHBLOCK{id}</p>")
+        });
+
+        // 2. KaTeX display span blocks
+        let s2 = KATEX_DISPLAY_SPAN_RE.replace_all(&s1, |caps: &regex::Captures| {
+            let formula = clean_tex_code(&caps[1]);
+            let id = self.formulas.len();
+            self.formulas.push((true, formula));
+            format!("<p>PAGECLAWMATHBLOCK{id}</p>")
+        });
+
+        // 3. MathJax display formula blocks
+        let s3 = MATHJAX_DISPLAY_RE.replace_all(&s2, |caps: &regex::Captures| {
+            let formula = clean_tex_code(&caps[1]);
+            let id = self.formulas.len();
+            self.formulas.push((true, formula));
+            format!("<p>PAGECLAWMATHBLOCK{id}</p>")
+        });
+
+        // 4. Math display divs (\\[ ... \\])
+        let s4 = MATH_DISPLAY_DIV_RE.replace_all(&s3, |caps: &regex::Captures| {
+            let formula = clean_tex_code(&caps[1]);
+            let id = self.formulas.len();
+            self.formulas.push((true, formula));
+            format!("<p>PAGECLAWMATHBLOCK{id}</p>")
+        });
+
+        // 5. KaTeX inline formula spans
+        let s5 = KATEX_INLINE_RE.replace_all(&s4, |caps: &regex::Captures| {
+            let formula = clean_tex_code(&caps[1]);
+            let id = self.formulas.len();
+            self.formulas.push((false, formula));
+            format!(" PAGECLAWMATHINLINE{id} ")
+        });
+
+        // 6. MathJax inline formula scripts
+        let s6 = MATHJAX_INLINE_RE.replace_all(&s5, |caps: &regex::Captures| {
+            let formula = clean_tex_code(&caps[1]);
+            let id = self.formulas.len();
+            self.formulas.push((false, formula));
+            format!(" PAGECLAWMATHINLINE{id} ")
+        });
+
+        // 7. Math inline spans (\\( ... \\))
+        let s7 = MATH_INLINE_SPAN_RE.replace_all(&s6, |caps: &regex::Captures| {
+            let formula = clean_tex_code(&caps[1]);
+            let id = self.formulas.len();
+            self.formulas.push((false, formula));
+            format!(" PAGECLAWMATHINLINE{id} ")
+        });
+
+        s7.to_string()
+    }
+
+    fn restore(&self, markdown: &str) -> String {
+        let mut result = markdown.to_string();
+        for (id, (is_block, formula)) in self.formulas.iter().enumerate() {
+            if *is_block {
+                let token = format!("PAGECLAWMATHBLOCK{id}");
+                let replacement = format!("\n\n$$\n{formula}\n$$\n\n");
+                result = result.replace(&token, &replacement);
+            } else {
+                let token = format!("PAGECLAWMATHINLINE{id}");
+                let replacement = format!("${formula}$");
+                result = result.replace(&token, &replacement);
+            }
+        }
+        result
+    }
+}
+
+/// Preprocesses HTML to normalize KaTeX and MathJax math formulas into standard Markdown `$math$` and `$$math$$` blocks.
+pub fn normalize_math_formulas(html: &str) -> String {
+    let mut protector = MathPlaceholderProtector::new();
+    let protected = protector.protect(html);
+    protector.restore(&protected)
+}
+
+fn clean_tex_code(raw: &str) -> String {
+    raw.replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .trim()
         .to_string()
 }
 
@@ -255,5 +392,26 @@ mod tests {
         let html4 = r#"<pre class="brush: java">public class App {}</pre>"#;
         let md4 = converter.convert(html4, false, false).unwrap();
         assert!(md4.contains("```java"));
+    }
+
+    #[test]
+    fn test_math_formula_normalization() {
+        let converter = MarkdownConverter::new();
+
+        // 1. KaTeX inline formula
+        let katex_inline = r#"<p>The equation is <span class="katex"><span class="katex-mathml"><math><semantics><mrow><mi>E</mi><mo>=</mo><mi>m</mi><msup><mi>c</mi><mn>2</mn></msup></mrow><annotation encoding="application/x-tex">E = mc^2</annotation></semantics></math></span><span class="katex-html" aria-hidden="true">E=mc^2</span></span> in relativity.</p>"#;
+        let md1 = converter.convert(katex_inline, false, false).unwrap();
+        assert!(md1.contains("$E = mc^2$"));
+
+        // 2. KaTeX display formula
+        let katex_display = r#"<div class="katex-display"><span class="katex"><span class="katex-mathml"><annotation encoding="application/x-tex">\int_0^\infty e^{-x^2} dx = \frac{\sqrt{\pi}}{2}</annotation></span></span></div>"#;
+        let md2 = converter.convert(katex_display, false, false).unwrap();
+        assert!(md2.contains("$$\n\\int_0^\\infty e^{-x^2} dx = \\frac{\\sqrt{\\pi}}{2}\n$$"));
+
+        // 3. MathJax script
+        let mathjax_inline =
+            r#"<p>Let <script type="math/tex">f(x) = x^2 + 1</script> be continuous.</p>"#;
+        let md3 = converter.convert(mathjax_inline, false, false).unwrap();
+        assert!(md3.contains("$f(x) = x^2 + 1$"));
     }
 }

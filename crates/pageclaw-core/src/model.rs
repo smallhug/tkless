@@ -117,6 +117,8 @@ pub struct FetchOptions {
     pub allow_http_errors: bool,
     /// Optional HTTP/HTTPS proxy URL (e.g. 'http://127.0.0.1:7890').
     pub proxy: Option<String>,
+    /// Whether to emulate a mobile device User-Agent to trigger lightweight mobile layouts and strip desktop clutter.
+    pub mobile: bool,
 }
 
 impl Default for FetchOptions {
@@ -138,6 +140,7 @@ impl Default for FetchOptions {
             allow_private_addresses: false,
             allow_http_errors: false,
             proxy: None,
+            mobile: false,
         }
     }
 }

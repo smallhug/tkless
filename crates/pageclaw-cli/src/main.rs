@@ -240,6 +240,7 @@ async fn run(args: CliArgs) -> Result<()> {
         allow_private_addresses: args.allow_private_addresses,
         allow_http_errors: args.allow_http_errors,
         proxy: args.proxy.clone(),
+        mobile: args.mobile,
     };
 
     // Build extraction options
@@ -311,6 +312,7 @@ async fn run(args: CliArgs) -> Result<()> {
         if search_args.proxy.is_some() {
             search_fetch_options.proxy = search_args.proxy.clone();
         }
+        search_fetch_options.mobile = search_args.mobile || args.mobile;
         let engine = PageclawEngine::with_options(search_fetch_options)
             .context("Failed to initialize PageClaw engine")?;
 
@@ -436,6 +438,7 @@ async fn run(args: CliArgs) -> Result<()> {
         if batch_args.proxy.is_some() {
             batch_fetch_options.proxy = batch_args.proxy.clone();
         }
+        batch_fetch_options.mobile = batch_args.mobile || args.mobile;
 
         let engine = std::sync::Arc::new(
             PageclawEngine::with_options(batch_fetch_options)
@@ -540,6 +543,7 @@ async fn run(args: CliArgs) -> Result<()> {
         if crawl_args.proxy.is_some() {
             crawl_fetch_options.proxy = crawl_args.proxy.clone();
         }
+        crawl_fetch_options.mobile = crawl_args.mobile || args.mobile;
         let engine = PageclawEngine::with_options(crawl_fetch_options)
             .context("Failed to initialize PageClaw engine")?;
 
