@@ -4,6 +4,7 @@ pub mod adapters;
 pub mod auth;
 pub mod cache;
 pub mod cleaner;
+pub mod crawler;
 pub mod downloader;
 pub mod error;
 pub mod extractor;
@@ -22,6 +23,9 @@ pub use auth::{
     execute_login_flow, generate_qrcode, poll_qrcode_status, LoginOptions, QrPollStatus,
 };
 pub use cache::DocumentCache;
+pub use crawler::{
+    crawl_site, format_crawl_report_markdown, CrawlOptions, CrawledPage, SiteCrawlReport,
+};
 pub use error::PageclawError;
 pub use mcp::McpServer;
 pub use model::{

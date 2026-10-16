@@ -10,7 +10,10 @@ async fn test_mcp_protocol_lifecycle() {
 
     // 1. Initialize
     let init_req = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test-client","version":"1.0"}}}"#;
-    let init_res = server.handle_message(init_req).await.expect("Should return response");
+    let init_res = server
+        .handle_message(init_req)
+        .await
+        .expect("Should return response");
     assert_eq!(init_res.id, serde_json::json!(1));
     let res_val = init_res.result.expect("Result should be present");
     assert_eq!(res_val["protocolVersion"], "2024-11-05");
@@ -22,16 +25,24 @@ async fn test_mcp_protocol_lifecycle() {
 
     // 3. Ping
     let ping_req = r#"{"jsonrpc":"2.0","id":2,"method":"ping"}"#;
-    let ping_res = server.handle_message(ping_req).await.expect("Should return response");
+    let ping_res = server
+        .handle_message(ping_req)
+        .await
+        .expect("Should return response");
     assert_eq!(ping_res.id, serde_json::json!(2));
     assert!(ping_res.result.is_some());
 
     // 4. Tools List
     let list_req = r#"{"jsonrpc":"2.0","id":3,"method":"tools/list"}"#;
-    let list_res = server.handle_message(list_req).await.expect("Should return response");
+    let list_res = server
+        .handle_message(list_req)
+        .await
+        .expect("Should return response");
     let tools_val = list_res.result.expect("Tools list should be present");
-    let tools_array = tools_val["tools"].as_array().expect("Tools should be an array");
-    assert_eq!(tools_array.len(), 5);
+    let tools_array = tools_val["tools"]
+        .as_array()
+        .expect("Tools should be an array");
+    assert_eq!(tools_array.len(), 6);
 
     let tool_names: Vec<&str> = tools_array
         .iter()
@@ -42,6 +53,7 @@ async fn test_mcp_protocol_lifecycle() {
     assert!(tool_names.contains(&"search_bilibili"));
     assert!(tool_names.contains(&"download_media"));
     assert!(tool_names.contains(&"web_search"));
+    assert!(tool_names.contains(&"crawl_site"));
 
     // Verify fetch_webpage schema contains new Direction 2 & 3 parameters
     let fetch_tool = tools_array
@@ -64,19 +76,28 @@ async fn test_mcp_protocol_lifecycle() {
 
     // 5. Tools Call (Validation Error)
     let call_req = r#"{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"search_bilibili","arguments":{}}}"#;
-    let call_res = server.handle_message(call_req).await.expect("Should return response");
+    let call_res = server
+        .handle_message(call_req)
+        .await
+        .expect("Should return response");
     let call_val = call_res.result.expect("Call result should be present");
     assert_eq!(call_val["isError"], true);
 
     // 5. Unknown Method Error
     let unknown_req = r#"{"jsonrpc":"2.0","id":4,"method":"unknown/method"}"#;
-    let unknown_res = server.handle_message(unknown_req).await.expect("Should return error response");
+    let unknown_res = server
+        .handle_message(unknown_req)
+        .await
+        .expect("Should return error response");
     assert!(unknown_res.error.is_some());
     assert_eq!(unknown_res.error.unwrap().code, -32601);
 
     // 6. Malformed JSON
     let malformed_req = "not valid json";
-    let malformed_res = server.handle_message(malformed_req).await.expect("Should return parse error");
+    let malformed_res = server
+        .handle_message(malformed_req)
+        .await
+        .expect("Should return parse error");
     assert!(malformed_res.error.is_some());
     assert_eq!(malformed_res.error.unwrap().code, -32700);
 }

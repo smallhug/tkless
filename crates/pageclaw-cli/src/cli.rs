@@ -542,6 +542,9 @@ pub enum SubCommand {
 
     /// Concurrently fetch and extract a batch of URLs from a file or stdin
     Batch(BatchArgs),
+
+    /// Deeply crawl a site from a seed URL and assemble a structured Markdown or JSON knowledge base
+    Crawl(CrawlArgs),
 }
 
 #[derive(clap::Args, Debug, Clone)]
@@ -701,4 +704,48 @@ pub struct McpArgs {
     /// Custom directory for persistent file cache
     #[arg(long = "cache-dir", value_name = "DIR")]
     pub cache_dir: Option<PathBuf>,
+}
+
+#[derive(clap::Args, Debug, Clone)]
+pub struct CrawlArgs {
+    /// Seed URL to start deep site crawling
+    #[arg(value_name = "URL")]
+    pub url: String,
+
+    /// Maximum link traversal depth [default: 2]
+    #[arg(short = 'd', long = "max-depth", default_value_t = 2, value_name = "N")]
+    pub max_depth: usize,
+
+    /// Maximum number of unique pages to crawl [default: 20]
+    #[arg(
+        short = 'p',
+        long = "max-pages",
+        default_value_t = 20,
+        value_name = "N"
+    )]
+    pub max_pages: usize,
+
+    /// Concurrency limit for simultaneous network requests [default: 5]
+    #[arg(
+        short = 'c',
+        long = "concurrency",
+        default_value_t = 5,
+        value_name = "N"
+    )]
+    pub concurrency: usize,
+
+    /// Restrict crawling strictly to URLs sharing the same path prefix as seed URL
+    #[arg(
+        long = "same-path-prefix",
+        help = "Restrict crawling strictly to URLs sharing the same path prefix as seed URL"
+    )]
+    pub same_path_prefix: bool,
+
+    /// Output presentation format [default: markdown]
+    #[arg(short = 'f', long = "format", value_enum, default_value_t = CliFormat::Markdown)]
+    pub format: CliFormat,
+
+    /// Write assembled crawl report to file instead of stdout
+    #[arg(short = 'o', long = "output", value_name = "FILE")]
+    pub output: Option<PathBuf>,
 }
