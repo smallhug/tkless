@@ -177,6 +177,10 @@ pub fn get_available_tools() -> Vec<McpTool> {
                         "type": "integer",
                         "default": 50,
                         "description": "Token overlap between consecutive chunks (default: 50)"
+                    },
+                    "proxy": {
+                        "type": "string",
+                        "description": "Optional HTTP/HTTPS proxy URL (e.g. 'http://127.0.0.1:7890')"
                     }
                 },
                 "required": ["url"]
@@ -341,6 +345,10 @@ pub fn get_available_tools() -> Vec<McpTool> {
                         "type": "string",
                         "description": "Optional extraction schema (JSON string or file path) for structured entity extraction when fetch_content is enabled"
                     },
+                    "proxy": {
+                        "type": "string",
+                        "description": "Optional HTTP/HTTPS proxy URL (e.g. 'http://127.0.0.1:7890')"
+                    },
                     "format": {
                         "type": "string",
                         "enum": ["markdown", "json"],
@@ -397,6 +405,15 @@ pub fn get_available_tools() -> Vec<McpTool> {
                         "type": "string",
                         "description": "Optional extraction schema (JSON string or file path) to extract structured entities from each crawled page"
                     },
+                    "dedup": {
+                        "type": "boolean",
+                        "default": false,
+                        "description": "Whether to automatically skip near-duplicate crawled pages based on 64-bit SimHash Hamming distance"
+                    },
+                    "proxy": {
+                        "type": "string",
+                        "description": "Optional HTTP/HTTPS proxy URL (e.g. 'http://127.0.0.1:7890')"
+                    },
                     "format": {
                         "type": "string",
                         "enum": ["markdown", "json"],
@@ -448,6 +465,10 @@ pub fn get_available_tools() -> Vec<McpTool> {
                     "cdp_wait_ms": {
                         "type": "integer",
                         "description": "Wait time in milliseconds for CDP DOM hydration"
+                    },
+                    "proxy": {
+                        "type": "string",
+                        "description": "Optional HTTP/HTTPS proxy URL (e.g. 'http://127.0.0.1:7890')"
                     }
                 },
                 "required": ["urls"]

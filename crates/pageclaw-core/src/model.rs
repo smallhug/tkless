@@ -115,6 +115,8 @@ pub struct FetchOptions {
     pub allow_private_addresses: bool,
     /// Do not fail with an error on HTTP 4xx or 5xx responses.
     pub allow_http_errors: bool,
+    /// Optional HTTP/HTTPS proxy URL (e.g. 'http://127.0.0.1:7890').
+    pub proxy: Option<String>,
 }
 
 impl Default for FetchOptions {
@@ -135,6 +137,7 @@ impl Default for FetchOptions {
             initial_target_host: None,
             allow_private_addresses: false,
             allow_http_errors: false,
+            proxy: None,
         }
     }
 }
@@ -429,4 +432,7 @@ pub struct PageDocument {
     /// Extracted semantic chunks for RAG / vector search ingestion.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub chunks: Option<Vec<DocumentChunk>>,
+    /// 64-bit hexadecimal SimHash content fingerprint for near-duplicate detection.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content_hash: Option<String>,
 }

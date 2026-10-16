@@ -7,6 +7,7 @@ pub mod cdp;
 pub mod chunker;
 pub mod cleaner;
 pub mod crawler;
+pub mod dedup;
 pub mod downloader;
 pub mod error;
 pub mod extractor;
@@ -31,6 +32,7 @@ pub use chunker::chunk_markdown;
 pub use crawler::{
     crawl_site, format_crawl_report_markdown, CrawlOptions, CrawledPage, SiteCrawlReport,
 };
+pub use dedup::{hamming_distance, is_near_duplicate, simhash, similarity_ratio};
 pub use error::PageclawError;
 pub use mcp::McpServer;
 pub use model::{
@@ -420,6 +422,8 @@ impl PageclawEngine {
             None
         };
 
+        let content_hash = Some(format!("{:016x}", dedup::simhash(&content)));
+
         Ok(PageDocument {
             url: base_url.unwrap_or("").to_string(),
             final_url: base_url.unwrap_or("").to_string(),
@@ -441,6 +445,7 @@ impl PageclawEngine {
             tables,
             entity,
             chunks,
+            content_hash,
         })
     }
 }

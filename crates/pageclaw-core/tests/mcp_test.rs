@@ -68,8 +68,9 @@ async fn test_mcp_protocol_lifecycle() {
     assert!(search_props.get("scope").is_some());
     assert!(search_props.get("cdp_endpoint").is_some());
     assert!(search_props.get("schema").is_some());
+    assert!(search_props.get("proxy").is_some());
 
-    // Verify crawl_site schema contains max_tokens, cdp_endpoint, schema, sitemap
+    // Verify crawl_site schema contains max_tokens, cdp_endpoint, schema, sitemap, dedup, proxy
     let crawl_tool = tools_array
         .iter()
         .find(|t| t["name"] == "crawl_site")
@@ -79,6 +80,16 @@ async fn test_mcp_protocol_lifecycle() {
     assert!(crawl_props.get("cdp_endpoint").is_some());
     assert!(crawl_props.get("schema").is_some());
     assert!(crawl_props.get("sitemap").is_some());
+    assert!(crawl_props.get("dedup").is_some());
+    assert!(crawl_props.get("proxy").is_some());
+
+    // Verify batch_fetch_webpages schema contains proxy
+    let batch_tool = tools_array
+        .iter()
+        .find(|t| t["name"] == "batch_fetch_webpages")
+        .expect("batch_fetch_webpages must exist");
+    let batch_props = &batch_tool["inputSchema"]["properties"];
+    assert!(batch_props.get("proxy").is_some());
 
     // Verify fetch_webpage schema contains new Direction 2 & 3 parameters
     let fetch_tool = tools_array
@@ -101,6 +112,7 @@ async fn test_mcp_protocol_lifecycle() {
     assert!(props.get("chunk").is_some());
     assert!(props.get("chunk_size").is_some());
     assert!(props.get("chunk_overlap").is_some());
+    assert!(props.get("proxy").is_some());
 
     // 5. Tools Call (Validation Error)
     let call_req = r#"{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"search_bilibili","arguments":{}}}"#;

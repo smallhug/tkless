@@ -481,6 +481,7 @@ impl ZhihuAdapter {
             tables: None,
             entity: None,
             chunks: None,
+            content_hash: None,
         })
     }
 
@@ -541,6 +542,7 @@ impl ZhihuAdapter {
             tables: None,
             entity: None,
             chunks: None,
+            content_hash: None,
         })
     }
 
@@ -635,6 +637,7 @@ impl ZhihuAdapter {
             tables: None,
             entity: None,
             chunks: None,
+            content_hash: None,
         })
     }
 }
