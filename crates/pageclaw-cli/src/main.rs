@@ -267,6 +267,9 @@ async fn run(args: CliArgs) -> Result<()> {
         cdp_endpoint: args.cdp.clone(),
         cdp_wait_ms: args.cdp_wait_ms,
         schema: args.schema.clone(),
+        chunk: args.chunk,
+        chunk_size: args.chunk_size,
+        chunk_overlap: args.chunk_overlap,
     };
 
     // -------------------------------------------------------------------------
@@ -450,6 +453,9 @@ async fn run(args: CliArgs) -> Result<()> {
             cdp_endpoint: batch_args.cdp.clone().or_else(|| args.cdp.clone()),
             cdp_wait_ms: batch_args.cdp_wait_ms.or(args.cdp_wait_ms),
             schema: batch_args.schema.clone().or_else(|| args.schema.clone()),
+            chunk: args.chunk,
+            chunk_size: args.chunk_size,
+            chunk_overlap: args.chunk_overlap,
         });
 
         let semaphore =

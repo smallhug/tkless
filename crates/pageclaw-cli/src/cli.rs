@@ -233,6 +233,26 @@ pub struct CliArgs {
     #[arg(long = "scaffold", help_heading = "通用提取选项 (General Options)")]
     pub scaffold: bool,
 
+    /// 启用语义感知切块 (Semantic Chunking，按标题层级与段落切分，保护代码块与表格，供 RAG 向量入库)
+    #[arg(long = "chunk", help_heading = "通用提取选项 (General Options)")]
+    pub chunk: bool,
+
+    /// 目标切块 Token 大小 [默认: 500]
+    #[arg(
+        long = "chunk-size",
+        value_name = "N",
+        help_heading = "通用提取选项 (General Options)"
+    )]
+    pub chunk_size: Option<usize>,
+
+    /// 相邻切块间的 Token 重叠量 [默认: 50]
+    #[arg(
+        long = "chunk-overlap",
+        value_name = "N",
+        help_heading = "通用提取选项 (General Options)"
+    )]
+    pub chunk_overlap: Option<usize>,
+
     // =========================================================================
     // 哔哩哔哩专属选项 (Bilibili Options)
     // =========================================================================

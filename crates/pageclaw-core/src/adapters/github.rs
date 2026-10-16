@@ -229,6 +229,7 @@ impl GithubAdapter {
             images: None,
             tables: None,
             entity: None,
+            chunks: None,
         })
     }
 
@@ -333,6 +334,7 @@ impl GithubAdapter {
             images: None,
             tables: None,
             entity: None,
+            chunks: None,
         })
     }
 }

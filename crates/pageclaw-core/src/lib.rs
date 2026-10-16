@@ -4,6 +4,7 @@ pub mod adapters;
 pub mod auth;
 pub mod cache;
 pub mod cdp;
+pub mod chunker;
 pub mod cleaner;
 pub mod crawler;
 pub mod downloader;
@@ -26,6 +27,7 @@ pub use auth::{
 };
 pub use cache::DocumentCache;
 pub use cdp::{fetch_html_via_cdp, CdpOptions};
+pub use chunker::chunk_markdown;
 pub use crawler::{
     crawl_site, format_crawl_report_markdown, CrawlOptions, CrawledPage, SiteCrawlReport,
 };
@@ -157,6 +159,14 @@ impl PageclawEngine {
                             initial_token_count
                         };
                         doc.tokenizer = options.tokenizer.as_str().to_string();
+                        if options.chunk {
+                            doc.chunks = Some(chunker::chunk_markdown(
+                                &doc.content,
+                                options.chunk_size.unwrap_or(500),
+                                options.chunk_overlap.unwrap_or(50),
+                                options.tokenizer,
+                            ));
+                        }
                         return Ok(doc);
                     }
                     Err(err) => {
@@ -399,6 +409,17 @@ impl PageclawEngine {
             initial_token_count
         };
 
+        let chunks = if options.chunk {
+            Some(chunker::chunk_markdown(
+                &content,
+                options.chunk_size.unwrap_or(500),
+                options.chunk_overlap.unwrap_or(50),
+                options.tokenizer,
+            ))
+        } else {
+            None
+        };
+
         Ok(PageDocument {
             url: base_url.unwrap_or("").to_string(),
             final_url: base_url.unwrap_or("").to_string(),
@@ -419,6 +440,7 @@ impl PageclawEngine {
             images,
             tables,
             entity,
+            chunks,
         })
     }
 }
