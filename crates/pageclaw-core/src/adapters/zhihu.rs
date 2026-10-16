@@ -10,12 +10,18 @@ use tracing::debug;
 use url::Url;
 
 static ZHIHU_MATH_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
-    regex::Regex::new(r#"<span[^>]*class="[^"]*ztext-math[^"]*"[^>]*data-tex="([^"]+)"[^>]*>.*?</span>"#)
-        .unwrap()
+    regex::Regex::new(
+        r#"<span[^>]*class="[^"]*ztext-math[^"]*"[^>]*data-tex="([^"]+)"[^>]*>.*?</span>"#,
+    )
+    .unwrap()
 });
 
 static ZHIHU_IMG_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
-    regex::Regex::new(r#"<img[^>]*data-actualsrc="([^"]+)"[^>]*>"#).unwrap()
+    regex::Regex::new(r#"<img[^>]*?(?:data-actualsrc|data-original)="([^"]+)"[^>]*>"#).unwrap()
+});
+
+static ZHIHU_LINK_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
+    regex::Regex::new(r#"https?://link\.zhihu\.com/\?target=([^"'\s&]+)"#).unwrap()
 });
 
 static ZHIHU_INITIAL_DATA_SELECTOR: LazyLock<Selector> =
@@ -24,9 +30,16 @@ static ZHIHU_INITIAL_DATA_SELECTOR: LazyLock<Selector> =
 /// Route types supported by ZhihuAdapter.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ZhihuRoute {
-    Question { question_id: String },
-    Answer { question_id: String, answer_id: String },
-    Article { article_id: String },
+    Question {
+        question_id: String,
+    },
+    Answer {
+        question_id: String,
+        answer_id: String,
+    },
+    Article {
+        article_id: String,
+    },
 }
 
 pub struct ZhihuAdapter;
@@ -44,7 +57,7 @@ impl ZhihuAdapter {
 
     pub fn parse_route(url: &Url) -> Option<ZhihuRoute> {
         let host = url.host_str().unwrap_or("");
-        if !host.ends_with("zhihu.com") {
+        if !crate::fetcher::is_subdomain_or_exact(host, "zhihu.com") {
             return None;
         }
 
@@ -105,16 +118,19 @@ impl ZhihuAdapter {
 
         match route {
             ZhihuRoute::Article { article_id } => {
-                self.extract_article(client, &article_id, url, options).await
+                self.extract_article(client, &article_id, url, options)
+                    .await
             }
             ZhihuRoute::Answer {
                 question_id,
                 answer_id,
             } => {
-                self.extract_single_answer(client, &question_id, &answer_id, url, options).await
+                self.extract_single_answer(client, &question_id, &answer_id, url, options)
+                    .await
             }
             ZhihuRoute::Question { question_id } => {
-                self.extract_question_top(client, &question_id, url, options).await
+                self.extract_question_top(client, &question_id, url, options)
+                    .await
             }
         }
     }
@@ -140,7 +156,11 @@ impl ZhihuAdapter {
                 .and_then(|e| e.get("articles"))
             {
                 if let Some(art) = articles.get(article_id) {
-                    let title = art.get("title").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    let title = art
+                        .get("title")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
                     let author = art
                         .get("author")
                         .and_then(|a| a.get("name"))
@@ -153,7 +173,15 @@ impl ZhihuAdapter {
                     let created = art.get("created").and_then(|v| v.as_i64()).unwrap_or(0);
                     let pub_date = format_timestamp_date(created);
 
-                    return self.build_article_doc(&title, &author, &cleaned_html, voteup_count, pub_date, url, options);
+                    return self.build_article_doc(
+                        &title,
+                        &author,
+                        &cleaned_html,
+                        voteup_count,
+                        pub_date,
+                        url,
+                        options,
+                    );
                 }
             }
         }
@@ -180,6 +208,13 @@ impl ZhihuAdapter {
             .map(|el| el.html())
             .unwrap_or_default();
 
+        if raw_content.trim().is_empty() && (title == "知乎专栏" || author.is_empty()) {
+            return Err(PageclawError::AdapterError {
+                platform: "zhihu",
+                message: "Failed to extract Zhihu article content (知乎正文提取为空，可能触发风控拦截需携带 Cookie 凭据)".to_string(),
+            });
+        }
+
         let cleaned_html = preprocess_zhihu_html(&raw_content);
         self.build_article_doc(&title, &author, &cleaned_html, 0, None, url, options)
     }
@@ -199,18 +234,37 @@ impl ZhihuAdapter {
 
         let resp = client
             .get(&api_url)
-            .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-            .header("Referer", format!("https://www.zhihu.com/question/{question_id}"))
+            .header(
+                "User-Agent",
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            )
+            .header(
+                "Referer",
+                format!("https://www.zhihu.com/question/{question_id}"),
+            )
             .send()
             .await;
 
         if let Ok(res) = resp {
             if let Ok(ans) = res.json::<ZhihuAnswerItem>().await {
-                let q_title = ans.question.map(|q| q.title).unwrap_or_else(|| "知乎问答".into());
-                let author = ans.author.map(|a| a.name).unwrap_or_else(|| "知乎用户".into());
+                let q_title = ans
+                    .question
+                    .map(|q| q.title)
+                    .unwrap_or_else(|| "知乎问答".into());
+                let author = ans
+                    .author
+                    .map(|a| a.name)
+                    .unwrap_or_else(|| "知乎用户".into());
                 let cleaned_html = preprocess_zhihu_html(&ans.content);
 
-                return self.build_single_answer_doc(&q_title, &author, &cleaned_html, ans.voteup_count, url, options);
+                return self.build_single_answer_doc(
+                    &q_title,
+                    &author,
+                    &cleaned_html,
+                    ans.voteup_count,
+                    url,
+                    options,
+                );
             }
         }
 
@@ -246,7 +300,14 @@ impl ZhihuAdapter {
                     let voteup_count = ans.get("voteupCount").and_then(|v| v.as_u64()).unwrap_or(0);
                     let cleaned_html = preprocess_zhihu_html(raw_content);
 
-                    return self.build_single_answer_doc(&title, &author, &cleaned_html, voteup_count, url, options);
+                    return self.build_single_answer_doc(
+                        &title,
+                        &author,
+                        &cleaned_html,
+                        voteup_count,
+                        url,
+                        options,
+                    );
                 }
             }
         }
@@ -272,8 +333,14 @@ impl ZhihuAdapter {
 
         let resp = client
             .get(&api_url)
-            .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-            .header("Referer", format!("https://www.zhihu.com/question/{question_id}"))
+            .header(
+                "User-Agent",
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            )
+            .header(
+                "Referer",
+                format!("https://www.zhihu.com/question/{question_id}"),
+            )
             .send()
             .await;
 
@@ -346,25 +413,45 @@ impl ZhihuAdapter {
         url: &Url,
         options: &ExtractionOptions,
     ) -> Result<PageDocument, PageclawError> {
-        let converter = MarkdownConverter::new();
-        let md_body = converter.convert(cleaned_html, options.strip_images, options.strip_links)?;
+        let content = match options.format {
+            OutputFormat::Html => cleaned_html.to_string(),
+            OutputFormat::Raw => cleaned_html.to_string(),
+            OutputFormat::Text => zhihu_html_to_plain_text(cleaned_html),
+            OutputFormat::Markdown | OutputFormat::Json => {
+                let converter = MarkdownConverter::new();
+                let md_body =
+                    converter.convert(cleaned_html, options.strip_images, options.strip_links)?;
 
-        let mut content = String::new();
-        if options.frontmatter && options.format == OutputFormat::Markdown {
-            content.push_str("---\n");
-            content.push_str(&format!("title: \"{}\"\n", title.replace('"', "\\\"")));
-            content.push_str(&format!("author: \"{}\"\n", author.replace('"', "\\\"")));
-            content.push_str(&format!("url: \"{url}\"\n"));
-            if let Some(ref p) = pub_date {
-                content.push_str(&format!("published: \"{p}\"\n"));
+                let mut md = String::new();
+                if options.frontmatter && options.format == OutputFormat::Markdown {
+                    md.push_str("---\n");
+                    md.push_str(&format!("title: \"{}\"\n", title.replace('"', "\\\"")));
+                    if !author.is_empty() {
+                        md.push_str(&format!("author: \"{}\"\n", author.replace('"', "\\\"")));
+                    }
+                    md.push_str(&format!("url: \"{url}\"\n"));
+                    if let Some(ref p) = pub_date {
+                        md.push_str(&format!("published: \"{p}\"\n"));
+                    }
+                    md.push_str(&format!("votes: {voteup}\n"));
+                    md.push_str("---\n\n");
+                }
+
+                md.push_str(&format!("# {}\n\n", title));
+                let author_text = if author.is_empty() {
+                    "知乎作者"
+                } else {
+                    author
+                };
+                md.push_str(&format!(
+                    "> **作者**: {} | **赞同**: {}\n\n",
+                    author_text,
+                    format_count(voteup)
+                ));
+                md.push_str(&md_body);
+                md
             }
-            content.push_str(&format!("votes: {voteup}\n"));
-            content.push_str("---\n\n");
-        }
-
-        content.push_str(&format!("# {}\n\n", title));
-        content.push_str(&format!("> **作者**: {} | **赞同**: {}\n\n", author, format_count(voteup)));
-        content.push_str(&md_body);
+        };
 
         let token_count = count_tokens(&content, options.tokenizer);
 
@@ -404,13 +491,26 @@ impl ZhihuAdapter {
         url: &Url,
         options: &ExtractionOptions,
     ) -> Result<PageDocument, PageclawError> {
-        let converter = MarkdownConverter::new();
-        let md_body = converter.convert(cleaned_html, options.strip_images, options.strip_links)?;
+        let content = match options.format {
+            OutputFormat::Html => cleaned_html.to_string(),
+            OutputFormat::Raw => cleaned_html.to_string(),
+            OutputFormat::Text => zhihu_html_to_plain_text(cleaned_html),
+            OutputFormat::Markdown | OutputFormat::Json => {
+                let converter = MarkdownConverter::new();
+                let md_body =
+                    converter.convert(cleaned_html, options.strip_images, options.strip_links)?;
 
-        let mut content = String::new();
-        content.push_str(&format!("# {}\n\n", question_title));
-        content.push_str(&format!("> **回答作者**: {} | **赞同数**: {}\n\n", author, format_count(voteup)));
-        content.push_str(&md_body);
+                let mut md = String::new();
+                md.push_str(&format!("# {}\n\n", question_title));
+                md.push_str(&format!(
+                    "> **回答作者**: {} | **赞同数**: {}\n\n",
+                    author,
+                    format_count(voteup)
+                ));
+                md.push_str(&md_body);
+                md
+            }
+        };
 
         let token_count = count_tokens(&content, options.tokenizer);
 
@@ -447,26 +547,63 @@ impl ZhihuAdapter {
         url: &Url,
         options: &ExtractionOptions,
     ) -> Result<PageDocument, PageclawError> {
-        let converter = MarkdownConverter::new();
-        let mut content = String::new();
+        let content = match options.format {
+            OutputFormat::Html | OutputFormat::Raw => {
+                let mut out = String::new();
+                for ans in &answers {
+                    out.push_str(&preprocess_zhihu_html(&ans.content));
+                    out.push_str("\n<hr/>\n");
+                }
+                out
+            }
+            OutputFormat::Text => {
+                let mut out = String::new();
+                out.push_str(question_title);
+                out.push_str("\n\n");
+                for (idx, ans) in answers.iter().enumerate() {
+                    let author = ans
+                        .author
+                        .as_ref()
+                        .map(|a| a.name.as_str())
+                        .unwrap_or("知乎用户");
+                    out.push_str(&format!("回答 #{} ({}):\n", idx + 1, author));
+                    out.push_str(&zhihu_html_to_plain_text(&ans.content));
+                    out.push_str("\n\n");
+                }
+                out
+            }
+            OutputFormat::Markdown | OutputFormat::Json => {
+                let converter = MarkdownConverter::new();
+                let mut md = String::new();
 
-        content.push_str(&format!("# {}\n\n", question_title));
-        content.push_str(&format!("> 本问题精选了前 {} 个高赞回答：\n\n", answers.len()));
+                md.push_str(&format!("# {}\n\n", question_title));
+                md.push_str(&format!(
+                    "> 本问题精选了前 {} 个高赞回答：\n\n",
+                    answers.len()
+                ));
 
-        for (idx, ans) in answers.iter().enumerate() {
-            let author = ans.author.as_ref().map(|a| a.name.as_str()).unwrap_or("知乎用户");
-            let cleaned = preprocess_zhihu_html(&ans.content);
-            let md = converter.convert(&cleaned, options.strip_images, options.strip_links)?;
+                for (idx, ans) in answers.iter().enumerate() {
+                    let author = ans
+                        .author
+                        .as_ref()
+                        .map(|a| a.name.as_str())
+                        .unwrap_or("知乎用户");
+                    let cleaned = preprocess_zhihu_html(&ans.content);
+                    let md_body =
+                        converter.convert(&cleaned, options.strip_images, options.strip_links)?;
 
-            content.push_str(&format!(
-                "## 回答 #{} by {} (赞同: {})\n\n",
-                idx + 1,
-                author,
-                format_count(ans.voteup_count)
-            ));
-            content.push_str(&md);
-            content.push_str("\n\n---\n\n");
-        }
+                    md.push_str(&format!(
+                        "## 回答 #{} by {} (赞同: {})\n\n",
+                        idx + 1,
+                        author,
+                        format_count(ans.voteup_count)
+                    ));
+                    md.push_str(&md_body);
+                    md.push_str("\n\n---\n\n");
+                }
+                md
+            }
+        };
 
         let token_count = count_tokens(&content, options.tokenizer);
 
@@ -503,7 +640,7 @@ impl PlatformAdapter for ZhihuAdapter {
 
     fn matches(&self, url: &Url) -> bool {
         let host = url.host_str().unwrap_or("");
-        host.ends_with("zhihu.com")
+        crate::fetcher::is_subdomain_or_exact(host, "zhihu.com")
     }
 
     fn extract<'a>(
@@ -519,6 +656,7 @@ impl PlatformAdapter for ZhihuAdapter {
 /// Preprocesses Zhihu HTML content:
 /// 1. Converts `<span class="ztext-math" data-tex="...">` to `$$...$$` LaTeX syntax
 /// 2. Promotes `data-actualsrc` or `data-original` to `src`
+/// 3. Unpacks `link.zhihu.com/?target=...` redirected external URLs
 pub fn preprocess_zhihu_html(raw_html: &str) -> String {
     // 1. Math formulas
     let with_math = ZHIHU_MATH_RE.replace_all(raw_html, |caps: &regex::Captures| {
@@ -526,16 +664,29 @@ pub fn preprocess_zhihu_html(raw_html: &str) -> String {
         format!(" $${tex}$$ ")
     });
 
-    // 2. Images
+    // 2. Images: promote data-actualsrc or data-original to src
     let with_images = ZHIHU_IMG_RE.replace_all(&with_math, |caps: &regex::Captures| {
         let src = caps.get(1).map_or("", |m| m.as_str());
         format!("<img src=\"{src}\" />")
     });
 
-    with_images.to_string()
+    // 3. Unpack link.zhihu.com/?target=...
+    let with_links = ZHIHU_LINK_RE.replace_all(&with_images, |caps: &regex::Captures| {
+        let target = caps.get(1).map_or("", |m| m.as_str());
+        let decoded: String = url::form_urlencoded::byte_serialize(target.as_bytes()).collect();
+        url::form_urlencoded::parse(target.as_bytes())
+            .map(|(k, _)| k.to_string())
+            .next()
+            .unwrap_or_else(|| decoded)
+    });
+
+    with_links.to_string()
 }
 
-async fn fetch_zhihu_html(client: &reqwest::Client, target_url: &str) -> Result<String, PageclawError> {
+async fn fetch_zhihu_html(
+    client: &reqwest::Client,
+    target_url: &str,
+) -> Result<String, PageclawError> {
     let resp = client
         .get(target_url)
         .header(
@@ -547,7 +698,36 @@ async fn fetch_zhihu_html(client: &reqwest::Client, target_url: &str) -> Result<
         .send()
         .await?;
 
-    Ok(resp.text().await?)
+    let status = resp.status();
+    let html = resp.text().await?;
+
+    if status == reqwest::StatusCode::FORBIDDEN
+        || html.contains("id=\"zh-zse-ck\"")
+        || html.contains("static.zhihu.com/zse-ck")
+        || html.contains("code\":40362")
+        || html.contains("当前环境异常")
+    {
+        return Err(PageclawError::AdapterError {
+            platform: "zhihu",
+            message: "Zhihu anti-scraping verification challenge triggered (知乎反爬安全验证拦截 / 需携带 Cookie 凭据，可通过 --cookie 或 --cookie-file 传入，或运行 pageclaw login zhihu 登录)".to_string(),
+        });
+    }
+
+    Ok(html)
+}
+
+fn zhihu_html_to_plain_text(html: &str) -> String {
+    let doc = Html::parse_fragment(html);
+    let mut text_parts = Vec::new();
+
+    for text in doc.root_element().text() {
+        let trimmed = text.trim();
+        if !trimmed.is_empty() {
+            text_parts.push(trimmed);
+        }
+    }
+
+    text_parts.join(" ")
 }
 
 fn extract_initial_data(doc: &Html) -> Option<serde_json::Value> {
@@ -646,5 +826,92 @@ mod tests {
         assert!(processed.contains("$$e^{i\\pi} + 1 = 0$$"));
         assert!(processed.contains("https://pic1.zhimg.com/v2-abc.jpg"));
         assert!(!processed.contains("data:image/svg+xml"));
+    }
+
+    #[test]
+    fn test_zhihu_link_unpacking_and_original_images() {
+        let raw = r#"
+            <p>点击参考文章：<a href="https://link.zhihu.com/?target=https%3A%2F%2Fgithub.com%2Ftokio-rs%2Ftokio">Tokio源码</a></p>
+            <p><img data-original="https://pic2.zhimg.com/v2-original.png" src="data:image/svg+xml;..." /></p>
+        "#;
+
+        let processed = preprocess_zhihu_html(raw);
+        assert!(processed.contains("https://github.com/tokio-rs/tokio"));
+        assert!(!processed.contains("link.zhihu.com/?target="));
+        assert!(processed.contains("https://pic2.zhimg.com/v2-original.png"));
+    }
+
+    #[test]
+    fn test_zhihu_anti_scraping_challenge_detection() {
+        let challenge_html = r#"
+            <!DOCTYPE html><html lang="en">
+            <head><meta id="zh-zse-ck" content="xyz"></head>
+            <body><script src="https://static.zhihu.com/zse-ck/v4/sample.js"></script></body>
+            </html>
+        "#;
+
+        assert!(challenge_html.contains("id=\"zh-zse-ck\""));
+        assert!(challenge_html.contains("static.zhihu.com/zse-ck"));
+    }
+
+    #[test]
+    fn test_zhihu_output_formats() {
+        let adapter = ZhihuAdapter::new();
+        let sample_html = "<p>知乎专栏<strong>加粗内容</strong>与公式说明。</p>";
+        let url = Url::parse("https://zhuanlan.zhihu.com/p/123456").unwrap();
+
+        // 1. Markdown
+        let doc_md = adapter
+            .build_article_doc(
+                "Rust高并发实战",
+                "张三",
+                sample_html,
+                1500,
+                Some("2026-08-01".into()),
+                &url,
+                &ExtractionOptions::default(),
+            )
+            .unwrap();
+        assert!(doc_md.content.contains("# Rust高并发实战"));
+        assert!(doc_md.content.contains("**作者**: 张三 | **赞同**: 1500"));
+        assert!(doc_md.content.contains("**加粗内容**"));
+
+        // 2. Text
+        let text_options = ExtractionOptions {
+            format: OutputFormat::Text,
+            ..Default::default()
+        };
+        let doc_text = adapter
+            .build_article_doc(
+                "Rust高并发实战",
+                "张三",
+                sample_html,
+                1500,
+                Some("2026-08-01".into()),
+                &url,
+                &text_options,
+            )
+            .unwrap();
+        assert!(doc_text.content.contains("加粗内容"));
+        assert!(!doc_text.content.contains("<strong>"));
+        assert!(!doc_text.content.contains("**加粗内容**"));
+
+        // 3. Html
+        let html_options = ExtractionOptions {
+            format: OutputFormat::Html,
+            ..Default::default()
+        };
+        let doc_html = adapter
+            .build_article_doc(
+                "Rust高并发实战",
+                "张三",
+                sample_html,
+                1500,
+                Some("2026-08-01".into()),
+                &url,
+                &html_options,
+            )
+            .unwrap();
+        assert!(doc_html.content.contains("<strong>加粗内容</strong>"));
     }
 }

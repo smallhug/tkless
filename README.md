@@ -191,18 +191,32 @@ pageclaw BV1xx411c7mD --comments-limit 10
 # 20. 🧠 官方 AI 总结提纲提取 (直接获取官方大模型核心摘要与带时间戳的章节提纲，省去重度总结 Token)
 pageclaw BV1xx411c7mD --bili-sum
 
-# 21. 🎬 方向二：双格式 Cookie 凭证载入 (支持 Netscape 浏览器插件格式与标准 Header 格式)
+# 21. 🎬 方向二：多平台前缀 Cookie 凭据管理与双格式载入 (自动按网站前缀区分，避免同一文件中多网站信息覆盖)
+# cookies.txt 支持多平台前缀共存：
+#   bilibili: SESSDATA=xxx; bili_jct=yyy
+#   zhihu: d_c0="xyz"; z_c0="abc"
+#   wechat: wx_token=...
 pageclaw BV1xx411c7mD --cookie-file ./cookies.txt
+pageclaw "https://zhuanlan.zhihu.com/p/123456" --cookie-file ./cookies.txt
 
 # 22. 🔑 一行命令唤起本地浏览器扫码登录并自动提取保存 Cookie 凭据 (支持 bilibili, zhihu)
+# 自动以平台前缀合并写入 cookies.txt，安全保留已有其它网站凭据，绝不覆盖冲掉历史配置
 pageclaw login bilibili
 pageclaw login zhihu
 # 或指定凭据保存路径与禁止自动拉起浏览器（纯终端字符画二维码，单行文字提示）：
 pageclaw login bilibili -o ./my_bilibili_cookies.txt --no-browser
 
-# 23. 🌐 免 Key 通用网页搜索 (集成 DuckDuckGo HTML，直供 AI Agent 全流程搜索闭环)
+# 23. 🌐 免 Key 通用网页搜索与平台定向搜索 (集成 Bing & Google 双引擎，直供 AI Agent 全流程搜索闭环)
+# 默认使用 Bing 搜索引擎（国内网络访问极佳，自动解包去除重定向追踪）
 pageclaw search "Rust 异步编程最佳实践" --limit 5
-pageclaw search "Tokio 教程" -f json
+# 显式指定使用 Google 或 Bing 引擎
+pageclaw search "Tokio 教程" --engine bing -f json
+pageclaw search "Rust compilation optimization" --engine google --limit 5
+# 自动容灾模式（首选 Bing，遇阻断自动平滑降级到 Google）
+pageclaw search "DeepSeek V3" --engine auto --limit 5
+# 专享生态定向：一键限定抓取微信公众号或知乎平台
+pageclaw search "开源项目" --wechat --limit 5
+pageclaw search "Rust 异步运行时" --zhihu --limit 5
 
 # 24. ⚡ 批量并发抓取与多 URL 流水线 (通过多协程并发池并发处理，支持从文件或管道批量输入)
 pageclaw batch ./urls.txt --concurrency 5 -o ./batch_results.md
@@ -247,7 +261,7 @@ AI Agent（如 **Claude Desktop**、**Cursor**、**Windsurf** 等）可以直接
 | MCP 工具名 | 功能说明 | 核心入参 |
 |---|---|---|
 | **`fetch_webpage`** | 全网网页/B站视频智能抓取与清洗，输出 Markdown 或结构化 JSON，支持 Token 预算截断与缓存，全功能支持 CSS 选择器定向提取、链接/图片/表格结构化资产解析，以及 B站 字幕/弹幕/评论/官方AI大纲提纲提取与 Cookie 鉴权 | `url` (必填), `format`, `mode`, `selector`, `extract_links`, `extract_images`, `extract_tables`, `subtitles`, `danmaku`, `comments`, `conclusion`, `cookie`, `cookie_file`, `max_tokens`, `use_cache` |
-| **`web_search`** | **免 API Key 的通用全网搜索**，输出清晰带链接的检索结果与摘要描述，供 Agent 完成调研决策闭环 | `query` (必填), `limit` (默认 5), `format` (markdown/json) |
+| **`web_search`** | **免 API Key 的通用全网搜索**（支持 Bing、Google 与 Auto 容灾），输出清晰带链接的检索结果与摘要描述，供 Agent 完成调研决策闭环 | `query` (必填), `engine` (bing/google/auto, 默认 bing), `limit` (默认 5), `format` (markdown/json) |
 | **`fetch_bilibili_feed`** | 毫秒级拉取 B站 首页推荐流、全站热榜或分区排行榜 GFM 表格 | `feed_type` (recommendations/popular/ranking), `partition`, `format` |
 | **`search_bilibili`** | 按关键词搜索 B站 视频，输出结构化 GFM 表格或 JSON，支持分页与排序 | `keyword` (必填), `page`, `order`, `format`, `use_cache` |
 | **`download_media`** | 下载 B站 视频高清封面图片或免登录渐进式 MP4 视频流至本地磁盘 | `url_or_bvid` (必填), `media_type` (video/cover), `quality`, `destination` |
@@ -263,7 +277,7 @@ USAGE:
 COMMANDS:
     mcp                        启动原生 Model Context Protocol (MCP) stdio 服务端
     login <PLATFORM>           唤起本地浏览器登录提取 Cookie 凭据并保存至文件 (支持 bilibili, zhihu)
-    search <QUERY>             免 API Key 的全网通用搜索，直接输出 Markdown 编号列表或 JSON (支持 -l, -f, -o)
+    search <QUERY>             免 API Key 的全网通用搜索，直接输出 Markdown 编号列表或 JSON (支持 -l, -f, -o, -e/--engine, --wechat, --zhihu)
     batch <FILE>               并发抓取与批量 URL 提取流水线 (支持 -c, -f, -t, --selector, -o)
 
 ARGS:
@@ -299,7 +313,7 @@ OPTIONS:
         --bili-dl [<PATH>]     下载 B站 渐进式 MP4 视频流
         --bili-quality <QN>    B站 视频清晰度选择: 720p (默认), 480p, 360p
         --cookie <COOKIE>      指定 Cookie 字符串凭据
-        --cookie-file <PATH>   指定 Cookie 凭证文件路径 (支持 Netscape 格式与标准 Header 格式)
+        --cookie-file <PATH>   指定 Cookie 凭证文件路径 (支持多平台前缀格式，如 bilibili: ..., zhihu: ...)
         --no-images            移除所有图片以节省 Token
         --no-links             移除超链接 URL，仅保留锚点文本
         --no-metadata          跳过文档元数据 (OG/Twitter/Meta) 提取

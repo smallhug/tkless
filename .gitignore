@@ -8,3 +8,4 @@
 *.rlib
 .pageclaw_cache/
 cookies.txt
+.trae/

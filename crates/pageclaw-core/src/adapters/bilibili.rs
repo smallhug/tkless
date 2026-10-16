@@ -12,15 +12,15 @@ use std::sync::LazyLock;
 use tracing::{debug, warn};
 use url::Url;
 
-static EM_RE: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r#"</?em[^>]*>"#).unwrap());
+static EM_RE: LazyLock<regex::Regex> =
+    LazyLock::new(|| regex::Regex::new(r#"</?em[^>]*>"#).unwrap());
 static DANMAKU_RE: LazyLock<regex::Regex> =
     LazyLock::new(|| regex::Regex::new(r#"<d\s+p="([^"]*)">([\s\S]*?)</d>"#).unwrap());
 
 const WBI_MIXIN_TABLE: [usize; 64] = [
-    46, 47, 18, 2, 53, 8, 23, 32, 15, 50, 10, 31, 58, 3, 45, 35, 27, 43, 5, 49,
-    33, 9, 42, 19, 29, 28, 14, 39, 12, 38, 41, 13, 37, 48, 7, 16, 24, 55, 40,
-    61, 26, 17, 0, 1, 60, 51, 30, 4, 22, 25, 54, 21, 56, 59, 6, 63, 57, 62, 11,
-    36, 20, 34, 44, 52,
+    46, 47, 18, 2, 53, 8, 23, 32, 15, 50, 10, 31, 58, 3, 45, 35, 27, 43, 5, 49, 33, 9, 42, 19, 29,
+    28, 14, 39, 12, 38, 41, 13, 37, 48, 7, 16, 24, 55, 40, 61, 26, 17, 0, 1, 60, 51, 30, 4, 22, 25,
+    54, 21, 56, 59, 6, 63, 57, 62, 11, 36, 20, 34, 44, 52,
 ];
 
 static WBI_CACHE: std::sync::RwLock<Option<(String, u64)>> = std::sync::RwLock::new(None);
@@ -60,7 +60,9 @@ impl BilibiliAdapter {
     /// Analyzes the URL and extraction options to determine the appropriate Bilibili route.
     pub fn parse_route(url: &Url, options: &ExtractionOptions) -> Option<BilibiliRoute> {
         let host = url.host_str()?;
-        if !host.ends_with("bilibili.com") && host != "b23.tv" {
+        if !crate::fetcher::is_subdomain_or_exact(host, "bilibili.com")
+            && !crate::fetcher::is_subdomain_or_exact(host, "b23.tv")
+        {
             return None;
         }
 
@@ -190,12 +192,20 @@ impl BilibiliAdapter {
         match route {
             BilibiliRoute::Video(bvid) => self.extract_video(client, &bvid, url, options).await,
             BilibiliRoute::Ranking { rid, category_name } => {
-                self.extract_ranking(client, rid, &category_name, url, options).await
+                self.extract_ranking(client, rid, &category_name, url, options)
+                    .await
             }
             BilibiliRoute::Popular => self.extract_popular(client, url, options).await,
-            BilibiliRoute::Recommendations => self.extract_recommendations(client, url, options).await,
-            BilibiliRoute::Search { keyword, page, order } => {
-                self.extract_search(client, &keyword, page, order.as_deref(), url, options).await
+            BilibiliRoute::Recommendations => {
+                self.extract_recommendations(client, url, options).await
+            }
+            BilibiliRoute::Search {
+                keyword,
+                page,
+                order,
+            } => {
+                self.extract_search(client, &keyword, page, order.as_deref(), url, options)
+                    .await
             }
         }
     }
@@ -338,7 +348,9 @@ impl BilibiliAdapter {
         while comments.len() < max_items {
             let remaining = max_items - comments.len();
             let ps = remaining.clamp(1, 20);
-            let api_url = format!("https://api.bilibili.com/x/v2/reply?type=1&oid={aid}&sort=2&pn={page}&ps={ps}");
+            let api_url = format!(
+                "https://api.bilibili.com/x/v2/reply?type=1&oid={aid}&sort=2&pn={page}&ps={ps}"
+            );
 
             let resp: BiliResponse<ReplyData> = client
                 .get(&api_url)
@@ -352,7 +364,10 @@ impl BilibiliAdapter {
                 if comments.is_empty() {
                     return Err(PageclawError::AdapterError {
                         platform: "bilibili",
-                        message: format!("Comments API error (code={}): {}", resp.code, resp.message),
+                        message: format!(
+                            "Comments API error (code={}): {}",
+                            resp.code, resp.message
+                        ),
                     });
                 } else {
                     break;
@@ -419,7 +434,8 @@ impl BilibiliAdapter {
         ];
 
         let signed_query = sign_wbi_params(&params, &mixin_key);
-        let api_url = format!("https://api.bilibili.com/x/web-interface/view/conclusion/get?{signed_query}");
+        let api_url =
+            format!("https://api.bilibili.com/x/web-interface/view/conclusion/get?{signed_query}");
 
         let resp: ConclusionApiResponse = client
             .get(&api_url)
@@ -648,8 +664,12 @@ impl BilibiliAdapter {
             ..Default::default()
         };
         metadata.open_graph.insert("og:title".into(), title.clone());
-        metadata.open_graph.insert("og:description".into(), data.desc.clone());
-        metadata.open_graph.insert("og:image".into(), cover_url.clone());
+        metadata
+            .open_graph
+            .insert("og:description".into(), data.desc.clone());
+        metadata
+            .open_graph
+            .insert("og:image".into(), cover_url.clone());
 
         // JSON-LD structured VideoObject
         let json_ld_object = serde_json::json!({
@@ -797,10 +817,18 @@ impl BilibiliAdapter {
                         content.push_str("#### 章节提纲\n\n");
                         for ch in &conc.outline {
                             let time_str = format_duration(ch.timestamp);
-                            content.push_str(&format!("- **[{}] {}**\n", time_str, ch.title.trim()));
+                            content.push_str(&format!(
+                                "- **[{}] {}**\n",
+                                time_str,
+                                ch.title.trim()
+                            ));
                             for part in &ch.parts {
                                 let part_time = format_duration(part.timestamp);
-                                content.push_str(&format!("  - [{}] {}\n", part_time, part.content.trim()));
+                                content.push_str(&format!(
+                                    "  - [{}] {}\n",
+                                    part_time,
+                                    part.content.trim()
+                                ));
                             }
                         }
                         content.push('\n');
@@ -808,7 +836,10 @@ impl BilibiliAdapter {
                     conclusion = Some(conc);
                 }
                 Ok(None) => {
-                    tracing::info!(bvid = bvid, "No official AI conclusion/summary available for this video");
+                    tracing::info!(
+                        bvid = bvid,
+                        "No official AI conclusion/summary available for this video"
+                    );
                 }
                 Err(e) => {
                     warn!(error = %e, "Failed to fetch video AI conclusion");
@@ -855,7 +886,8 @@ impl BilibiliAdapter {
         url: &Url,
         options: &ExtractionOptions,
     ) -> Result<PageDocument, PageclawError> {
-        let api_url = format!("https://api.bilibili.com/x/web-interface/ranking/v2?rid={rid}&type=all");
+        let api_url =
+            format!("https://api.bilibili.com/x/web-interface/ranking/v2?rid={rid}&type=all");
 
         let resp: BiliResponse<RankingData> = client
             .get(&api_url)
@@ -995,8 +1027,10 @@ impl BilibiliAdapter {
         url: &Url,
         options: &ExtractionOptions,
     ) -> Result<PageDocument, PageclawError> {
-        let mut api_url = Url::parse("https://api.bilibili.com/x/web-interface/search/type").unwrap();
-        api_url.query_pairs_mut()
+        let mut api_url =
+            Url::parse("https://api.bilibili.com/x/web-interface/search/type").unwrap();
+        api_url
+            .query_pairs_mut()
             .append_pair("search_type", "video")
             .append_pair("keyword", keyword)
             .append_pair("page", &page.to_string());
@@ -1038,7 +1072,9 @@ impl BilibiliAdapter {
         let mut metadata = PageMetadata {
             description: Some(format!(
                 "搜索关键词 \"{}\" 的结果列表，当前第 {} 页，共检索到 {} 条视频",
-                keyword, page, items.len()
+                keyword,
+                page,
+                items.len()
             )),
             canonical_url: Some(url.to_string()),
             ..Default::default()
@@ -1200,7 +1236,8 @@ impl PlatformAdapter for BilibiliAdapter {
 
     fn matches(&self, url: &Url) -> bool {
         let host = url.host_str().unwrap_or("");
-        host.ends_with("bilibili.com") || host == "b23.tv"
+        crate::fetcher::is_subdomain_or_exact(host, "bilibili.com")
+            || crate::fetcher::is_subdomain_or_exact(host, "b23.tv")
     }
 
     fn extract<'a>(
@@ -1353,7 +1390,11 @@ pub fn format_seconds_friendly(secs_f64: f64) -> String {
 }
 
 pub fn format_subtitle_range(from: f64, to: f64) -> String {
-    format!("{} - {}", format_seconds_friendly(from), format_seconds_friendly(to))
+    format!(
+        "{} - {}",
+        format_seconds_friendly(from),
+        format_seconds_friendly(to)
+    )
 }
 
 pub fn decode_xml_body(bytes: &[u8]) -> Result<String, PageclawError> {
@@ -1406,7 +1447,11 @@ pub fn parse_danmaku_xml(xml: &str) -> Vec<DanmakuEntry> {
         }
     }
 
-    entries.sort_by(|a, b| a.time.partial_cmp(&b.time).unwrap_or(std::cmp::Ordering::Equal));
+    entries.sort_by(|a, b| {
+        a.time
+            .partial_cmp(&b.time)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     entries
 }
 
@@ -1612,21 +1657,22 @@ pub fn resolve_download_path(user_path: Option<&Path>, default_filename: &str) -
 #[allow(clippy::chunks_exact_to_as_chunks)]
 pub fn compute_md5(input: &[u8]) -> String {
     let s: [u32; 64] = [
-        7, 12, 17, 22,  7, 12, 17, 22,  7, 12, 17, 22,  7, 12, 17, 22,
-        5,  9, 14, 20,  5,  9, 14, 20,  5,  9, 14, 20,  5,  9, 14, 20,
-        4, 11, 16, 23,  4, 11, 16, 23,  4, 11, 16, 23,  4, 11, 16, 23,
-        6, 10, 15, 21,  6, 10, 15, 21,  6, 10, 15, 21,  6, 10, 15, 21,
+        7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 5, 9, 14, 20, 5, 9, 14, 20, 5,
+        9, 14, 20, 5, 9, 14, 20, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 6, 10,
+        15, 21, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21,
     ];
 
     let k: [u32; 64] = [
-        0xd76aa478, 0xe8c7b756, 0x242070db, 0xc1bdceee, 0xf57c0faf, 0x4787c62a, 0xa8304613, 0xfd469501,
-        0x698098d8, 0x8b44f7af, 0xffff5bb1, 0x895cd7be, 0x6b901122, 0xfd987193, 0xa679438e, 0x49b40821,
-        0xf61e2562, 0xc040b340, 0x265e5a51, 0xe9b6c7aa, 0xd62f105d, 0x02441453, 0xd8a1e681, 0xe7d3fbc8,
-        0x21e1cde6, 0xc33707d6, 0xf4d50d87, 0x455a14ed, 0xa9e3e905, 0xfcefa3f8, 0x676f02d9, 0x8d2a4c8a,
-        0xfffa3942, 0x8771f681, 0x6d9d6122, 0xfde5380c, 0xa4beea44, 0x4bdecfa9, 0xf6bb4b60, 0xbebfbc70,
-        0x289b7ec6, 0xeaa127fa, 0xd4ef3085, 0x04881d05, 0xd9d4d039, 0xe6db99e5, 0x1fa27cf8, 0xc4ac5665,
-        0xf4292244, 0x432aff97, 0xab9423a7, 0xfc93a039, 0x655b59c3, 0x8f0ccc92, 0xffeff47d, 0x85845dd1,
-        0x6fa87e4f, 0xfe2ce6e0, 0xa3014314, 0x4e0811a1, 0xf7537e82, 0xbd3af235, 0x2ad7d2bb, 0xeb86d391,
+        0xd76aa478, 0xe8c7b756, 0x242070db, 0xc1bdceee, 0xf57c0faf, 0x4787c62a, 0xa8304613,
+        0xfd469501, 0x698098d8, 0x8b44f7af, 0xffff5bb1, 0x895cd7be, 0x6b901122, 0xfd987193,
+        0xa679438e, 0x49b40821, 0xf61e2562, 0xc040b340, 0x265e5a51, 0xe9b6c7aa, 0xd62f105d,
+        0x02441453, 0xd8a1e681, 0xe7d3fbc8, 0x21e1cde6, 0xc33707d6, 0xf4d50d87, 0x455a14ed,
+        0xa9e3e905, 0xfcefa3f8, 0x676f02d9, 0x8d2a4c8a, 0xfffa3942, 0x8771f681, 0x6d9d6122,
+        0xfde5380c, 0xa4beea44, 0x4bdecfa9, 0xf6bb4b60, 0xbebfbc70, 0x289b7ec6, 0xeaa127fa,
+        0xd4ef3085, 0x04881d05, 0xd9d4d039, 0xe6db99e5, 0x1fa27cf8, 0xc4ac5665, 0xf4292244,
+        0x432aff97, 0xab9423a7, 0xfc93a039, 0x655b59c3, 0x8f0ccc92, 0xffeff47d, 0x85845dd1,
+        0x6fa87e4f, 0xfe2ce6e0, 0xa3014314, 0x4e0811a1, 0xf7537e82, 0xbd3af235, 0x2ad7d2bb,
+        0xeb86d391,
     ];
 
     let mut a0: u32 = 0x67452301;
@@ -1664,7 +1710,9 @@ pub fn compute_md5(input: &[u8]) -> String {
             let temp = d;
             d = c;
             c = b;
-            b = b.wrapping_add((a.wrapping_add(f).wrapping_add(k[i]).wrapping_add(m[g])).rotate_left(s[i]));
+            b = b.wrapping_add(
+                (a.wrapping_add(f).wrapping_add(k[i]).wrapping_add(m[g])).rotate_left(s[i]),
+            );
             a = temp;
         }
 
@@ -1706,15 +1754,30 @@ pub async fn get_wbi_mixin_key(client: &reqwest::Client) -> Result<String, Pagec
         .json()
         .await?;
 
-    let wbi_img = resp.data.and_then(|d| d.wbi_img).ok_or_else(|| {
-        PageclawError::AdapterError {
+    let wbi_img = resp
+        .data
+        .and_then(|d| d.wbi_img)
+        .ok_or_else(|| PageclawError::AdapterError {
             platform: "bilibili",
             message: "Failed to extract wbi_img keys from nav endpoint".to_string(),
-        }
-    })?;
+        })?;
 
-    let img_key = wbi_img.img_url.rsplit('/').next().unwrap_or("").split('.').next().unwrap_or("");
-    let sub_key = wbi_img.sub_url.rsplit('/').next().unwrap_or("").split('.').next().unwrap_or("");
+    let img_key = wbi_img
+        .img_url
+        .rsplit('/')
+        .next()
+        .unwrap_or("")
+        .split('.')
+        .next()
+        .unwrap_or("");
+    let sub_key = wbi_img
+        .sub_url
+        .rsplit('/')
+        .next()
+        .unwrap_or("")
+        .split('.')
+        .next()
+        .unwrap_or("");
     let raw_key = format!("{img_key}{sub_key}");
 
     if raw_key.len() < 64 {
@@ -1725,7 +1788,11 @@ pub async fn get_wbi_mixin_key(client: &reqwest::Client) -> Result<String, Pagec
     }
 
     let chars: Vec<char> = raw_key.chars().collect();
-    let mixin_key: String = WBI_MIXIN_TABLE.iter().take(32).map(|&idx| chars[idx]).collect();
+    let mixin_key: String = WBI_MIXIN_TABLE
+        .iter()
+        .take(32)
+        .map(|&idx| chars[idx])
+        .collect();
 
     if let Ok(mut guard) = WBI_CACHE.write() {
         *guard = Some((mixin_key.clone(), now));
@@ -2131,7 +2198,8 @@ mod tests {
 
     #[test]
     fn test_parse_route_search() {
-        let url = Url::parse("https://search.bilibili.com/all?keyword=Rust&page=2&order=click").unwrap();
+        let url =
+            Url::parse("https://search.bilibili.com/all?keyword=Rust&page=2&order=click").unwrap();
         let options = ExtractionOptions::default();
         let route = BilibiliAdapter::parse_route(&url, &options);
         assert_eq!(
@@ -2201,14 +2269,12 @@ mod tests {
 
     #[test]
     fn test_render_comments_table() {
-        let comments = vec![
-            CommentEntry {
-                user: "Alice | Dev".to_string(),
-                like: 15200,
-                content: "Very informative video!\nThanks.".to_string(),
-                time: "2026-03-01 12:00:00".to_string(),
-            },
-        ];
+        let comments = vec![CommentEntry {
+            user: "Alice | Dev".to_string(),
+            like: 15200,
+            content: "Very informative video!\nThanks.".to_string(),
+            time: "2026-03-01 12:00:00".to_string(),
+        }];
         let rendered = render_comments_table(&comments);
         assert!(rendered.contains("| # | 评论用户 | 点赞数 | 评论内容 | 发布时间 |"));
         assert!(rendered.contains("Alice \\| Dev"));

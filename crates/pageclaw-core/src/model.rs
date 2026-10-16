@@ -42,6 +42,29 @@ pub enum OnTooLarge {
     Truncate,
 }
 
+/// Search engine provider for web searching.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SearchEngineKind {
+    /// Microsoft Bing search (default, fast connectivity and great Chinese coverage)
+    #[default]
+    Bing,
+    /// Google search (global technical community and documentation index)
+    Google,
+    /// Automatic failover mode (prefers Bing, falls back to Google on error)
+    Auto,
+}
+
+impl SearchEngineKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            SearchEngineKind::Bing => "bing",
+            SearchEngineKind::Google => "google",
+            SearchEngineKind::Auto => "auto",
+        }
+    }
+}
+
 /// Tokenizer model encoding scheme.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -84,7 +107,7 @@ pub struct FetchOptions {
     pub headers: Vec<(String, String)>,
     /// Cookie header string.
     pub cookie: Option<String>,
-    /// Path to cookie credential file (Netscape or standard header format).
+    /// Path to cookie credential file (supports multi-platform prefix format, e.g. bilibili: ..., zhihu: ...).
     pub cookie_file: Option<String>,
     /// Allow fetching private IP addresses, localhost, and internal network endpoints.
     pub allow_private_addresses: bool,

@@ -69,7 +69,9 @@ impl Default for LoginOptions {
 }
 
 /// Requests a new QR code URL and key from Bilibili passport API.
-pub async fn generate_qrcode(client: &reqwest::Client) -> Result<BiliQrGenerateData, PageclawError> {
+pub async fn generate_qrcode(
+    client: &reqwest::Client,
+) -> Result<BiliQrGenerateData, PageclawError> {
     let api_url = "https://passport.bilibili.com/x/passport-login/web/qrcode/generate";
     let resp: BiliApiResponse<BiliQrGenerateData> = client
         .get(api_url)
@@ -82,7 +84,10 @@ pub async fn generate_qrcode(client: &reqwest::Client) -> Result<BiliQrGenerateD
     if resp.code != 0 {
         return Err(PageclawError::AdapterError {
             platform: "bilibili",
-            message: format!("Failed to generate QR code (code={}): {}", resp.code, resp.message),
+            message: format!(
+                "Failed to generate QR code (code={}): {}",
+                resp.code, resp.message
+            ),
         });
     }
 
@@ -97,7 +102,9 @@ pub async fn poll_qrcode_status(
     client: &reqwest::Client,
     qrcode_key: &str,
 ) -> Result<QrPollStatus, PageclawError> {
-    let api_url = format!("https://passport.bilibili.com/x/passport-login/web/qrcode/poll?qrcode_key={qrcode_key}");
+    let api_url = format!(
+        "https://passport.bilibili.com/x/passport-login/web/qrcode/poll?qrcode_key={qrcode_key}"
+    );
 
     let resp = client
         .get(&api_url)
@@ -113,7 +120,10 @@ pub async fn poll_qrcode_status(
     if poll_resp.code != 0 {
         return Err(PageclawError::AdapterError {
             platform: "bilibili",
-            message: format!("QR poll API returned error (code={}): {}", poll_resp.code, poll_resp.message),
+            message: format!(
+                "QR poll API returned error (code={}): {}",
+                poll_resp.code, poll_resp.message
+            ),
         });
     }
 
@@ -129,8 +139,13 @@ pub async fn poll_qrcode_status(
         0 => {
             // Success! Combine cookies from Set-Cookie headers and data.url query params
             let cross_domain_cookies = extract_cookies_from_url(&data.url);
-            let final_cookies = match (set_cookie_string.is_empty(), cross_domain_cookies.is_empty()) {
-                (false, false) => crate::fetcher::merge_cookies(&cross_domain_cookies, &set_cookie_string),
+            let final_cookies = match (
+                set_cookie_string.is_empty(),
+                cross_domain_cookies.is_empty(),
+            ) {
+                (false, false) => {
+                    crate::fetcher::merge_cookies(&cross_domain_cookies, &set_cookie_string)
+                }
                 (false, true) => set_cookie_string,
                 (true, false) => cross_domain_cookies,
                 (true, true) => String::new(),
@@ -140,7 +155,9 @@ pub async fn poll_qrcode_status(
                 warn!("Login poll succeeded but no cookies were extracted");
             }
 
-            Ok(QrPollStatus::Success { cookies: final_cookies })
+            Ok(QrPollStatus::Success {
+                cookies: final_cookies,
+            })
         }
         other => {
             warn!(code = other, message = %data.message, "Unknown QR code poll status");
@@ -153,10 +170,7 @@ pub async fn poll_qrcode_status(
 pub fn render_svg_qrcode(url: &str) -> Result<String, PageclawError> {
     let code = QrCode::new(url.as_bytes())
         .map_err(|e| PageclawError::InvalidArgument(format!("Failed to generate QR code: {e}")))?;
-    let svg_str = code
-        .render::<svg::Color>()
-        .min_dimensions(260, 260)
-        .build();
+    let svg_str = code.render::<svg::Color>().min_dimensions(260, 260).build();
     Ok(svg_str)
 }
 
@@ -401,7 +415,10 @@ pub async fn execute_login_flow(
             server_handle.abort();
             return Err(PageclawError::AdapterError {
                 platform: "bilibili",
-                message: format!("Login timed out after {} seconds without confirmation", options.timeout_secs),
+                message: format!(
+                    "Login timed out after {} seconds without confirmation",
+                    options.timeout_secs
+                ),
             });
         }
 
@@ -440,9 +457,16 @@ pub async fn execute_login_flow(
         }
     };
 
-    // 7. Save to destination file
-    save_cookies_to_file(&options.output_path, &final_cookies)?;
-    eprintln!("[PageClaw] 凭据已成功保存至: {}", options.output_path.display());
+    // 7. Save to destination file with platform prefix to avoid overwriting other websites
+    crate::fetcher::save_platform_cookies_to_file(
+        &options.output_path,
+        "bilibili",
+        &final_cookies,
+    )?;
+    eprintln!(
+        "[PageClaw] bilibili 凭据已成功保存至: {} (已添加 bilibili: 前缀区分，多网站互不覆盖)",
+        options.output_path.display()
+    );
     eprintln!("========================================================");
     eprintln!();
 
@@ -458,8 +482,7 @@ pub fn save_cookies_to_file(path: &Path, cookies: &str) -> Result<(), PageclawEr
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    std::fs::write(path, cookies.trim())
-        .map_err(PageclawError::Io)
+    std::fs::write(path, cookies.trim()).map_err(PageclawError::Io)
 }
 
 fn extract_set_cookie_headers(headers: &reqwest::header::HeaderMap) -> String {
@@ -484,7 +507,12 @@ fn extract_cookies_from_url(url_str: &str) -> String {
     if let Ok(parsed) = url::Url::parse(url_str) {
         let mut pairs = Vec::new();
         for (k, v) in parsed.query_pairs() {
-            if k == "SESSDATA" || k == "bili_jct" || k == "DedeUserID" || k == "DedeUserID__ckMd5" || k == "sid" {
+            if k == "SESSDATA"
+                || k == "bili_jct"
+                || k == "DedeUserID"
+                || k == "DedeUserID__ckMd5"
+                || k == "sid"
+            {
                 pairs.push(format!("{k}={v}"));
             }
         }

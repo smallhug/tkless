@@ -44,7 +44,10 @@ impl DownloadProgressReporter for ConsoleProgressReporter {
             Some(t) => format!(" (total: {})", format_bytes(t)),
             None => String::new(),
         };
-        eprintln!("[PageClaw] Starting {} download{}...", self.label, total_str);
+        eprintln!(
+            "[PageClaw] Starting {} download{}...",
+            self.label, total_str
+        );
     }
 
     fn on_progress(&self, downloaded_bytes: u64, total_bytes: Option<u64>) {
@@ -91,7 +94,10 @@ impl DownloadProgressReporter for ConsoleProgressReporter {
         }
         let elapsed = self.start_time.elapsed();
         let speed = if elapsed.as_secs_f64() > 0.0 {
-            format!("{}/s", format_bytes((total_bytes as f64 / elapsed.as_secs_f64()) as u64))
+            format!(
+                "{}/s",
+                format_bytes((total_bytes as f64 / elapsed.as_secs_f64()) as u64)
+            )
         } else {
             "N/A".into()
         };
@@ -129,8 +135,7 @@ async fn run(args: CliArgs) -> Result<()> {
             _ => "pageclaw=trace,pageclaw_core=trace",
         };
 
-        let env_filter = EnvFilter::try_new(filter_str)
-            .unwrap_or_else(|_| EnvFilter::new("warn"));
+        let env_filter = EnvFilter::try_new(filter_str).unwrap_or_else(|_| EnvFilter::new("warn"));
 
         tracing_subscriber::fmt()
             .with_writer(io::stderr)
@@ -144,7 +149,9 @@ async fn run(args: CliArgs) -> Result<()> {
         if let Some((k, v)) = h.split_once(':') {
             custom_headers.push((k.trim().to_string(), v.trim().to_string()));
         } else {
-            eprintln!("[PageClaw warning] Skipping invalid header format (expected Key: Value): '{h}'");
+            eprintln!(
+                "[PageClaw warning] Skipping invalid header format (expected Key: Value): '{h}'"
+            );
         }
     }
 
@@ -172,7 +179,9 @@ async fn run(args: CliArgs) -> Result<()> {
                         eprintln!("[PageClaw warning] Failed to launch browser: {e}");
                     }
                 }
-                eprintln!("[PageClaw] 登录完成后，您可在浏览器中导出 Cookie 凭据，使用 pageclaw <URL> --cookie 或保存至 cookies.txt");
+                eprintln!("[PageClaw] 登录完成后，可将 Cookie 凭据按前缀格式保存至 cookies.txt（自动区分多网站，互不覆盖）：");
+                eprintln!("  zhihu: d_c0=\"...\"; z_c0=\"...\"");
+                eprintln!("或直接使用命令行参数: pageclaw <URL> --cookie \"...\"");
                 return Ok(());
             }
             other => {
@@ -183,15 +192,27 @@ async fn run(args: CliArgs) -> Result<()> {
 
     // Resolve cookies from --cookie-file and --cookie with CLI priority (auto-fallback to ./cookies.txt if present)
     let default_cookie_path = std::path::Path::new("./cookies.txt");
+    let target_url_ref = args.target.as_deref();
     let cookie_from_file = if let Some(ref cf) = args.cookie_file {
         Some(
-            pageclaw_core::fetcher::load_cookie_from_file(cf)
+            pageclaw_core::fetcher::load_cookie_from_file_for_url(cf, target_url_ref)
                 .with_context(|| format!("Failed to read cookie file: {}", cf.display()))?,
         )
     } else if args.cookie.is_none() && default_cookie_path.is_file() {
-        if let Ok(c) = pageclaw_core::fetcher::load_cookie_from_file(default_cookie_path) {
+        if let Ok(c) = pageclaw_core::fetcher::load_cookie_from_file_for_url(
+            default_cookie_path,
+            target_url_ref,
+        ) {
             if !args.quiet && !c.trim().is_empty() {
-                eprintln!("[PageClaw] Automatically loaded default credentials from ./cookies.txt");
+                if let Some(platform) =
+                    target_url_ref.and_then(pageclaw_core::fetcher::detect_platform_from_url)
+                {
+                    eprintln!("[PageClaw] Automatically loaded [{platform}] credentials from ./cookies.txt");
+                } else {
+                    eprintln!(
+                        "[PageClaw] Automatically loaded default credentials from ./cookies.txt"
+                    );
+                }
             }
             Some(c)
         } else {
@@ -281,14 +302,37 @@ async fn run(args: CliArgs) -> Result<()> {
         let engine = PageclawEngine::with_options(fetch_options)
             .context("Failed to initialize PageClaw engine")?;
 
-        let results = pageclaw_core::web_search(engine.client(), &search_args.query, search_args.limit)
-            .await
-            .context("Failed to perform web search")?;
+        let effective_query = if search_args.wechat {
+            let clean = search_args.query.trim();
+            if clean.starts_with("site:") {
+                clean.to_string()
+            } else {
+                format!("site:mp.weixin.qq.com {clean}")
+            }
+        } else if search_args.zhihu {
+            let clean = search_args.query.trim();
+            if clean.starts_with("site:") {
+                clean.to_string()
+            } else {
+                format!("site:zhihu.com {clean}")
+            }
+        } else {
+            search_args.query.clone()
+        };
+
+        let results = pageclaw_core::web_search_with_engine(
+            engine.client(),
+            &effective_query,
+            search_args.limit,
+            search_args.engine.into(),
+        )
+        .await
+        .context("Failed to perform web search")?;
 
         let payload = match search_args.format {
             CliFormat::Json => serde_json::to_string_pretty(&results)
                 .context("Failed to serialize search results to JSON")?,
-            _ => pageclaw_core::format_search_results_markdown(&search_args.query, &results),
+            _ => pageclaw_core::format_search_results_markdown(&effective_query, &results),
         };
 
         output::write_payload(&payload, search_args.output.as_deref())?;
@@ -349,7 +393,8 @@ async fn run(args: CliArgs) -> Result<()> {
             conclusion: false,
         });
 
-        let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(batch_args.concurrency.max(1)));
+        let semaphore =
+            std::sync::Arc::new(tokio::sync::Semaphore::new(batch_args.concurrency.max(1)));
         let total = urls.len();
         let counter = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
 
@@ -370,7 +415,9 @@ async fn run(args: CliArgs) -> Result<()> {
                     match &res {
                         Ok(doc) => {
                             let title_disp = doc.title.as_deref().unwrap_or("<no title>");
-                            eprintln!("[PageClaw Batch] [{done}/{total}] OK: \"{title_disp}\" ({url})");
+                            eprintln!(
+                                "[PageClaw Batch] [{done}/{total}] OK: \"{title_disp}\" ({url})"
+                            );
                         }
                         Err(e) => {
                             eprintln!("[PageClaw Batch] [{done}/{total}] FAILED ({url}): {e}");
@@ -441,8 +488,9 @@ async fn run(args: CliArgs) -> Result<()> {
     // Dedicated Media Action 1: Download Video Stream
     // -------------------------------------------------------------------------
     if let Some(ref dest_val) = args.bili_dl {
-        let (bvid, default_page) = pageclaw_core::adapters::bilibili::extract_video_info(&target)
-            .context("The --bili-dl option requires a valid Bilibili video URL or BV ID")?;
+        let (bvid, default_page) =
+            pageclaw_core::adapters::bilibili::extract_video_info(&target)
+                .context("The --bili-dl option requires a valid Bilibili video URL or BV ID")?;
 
         let page_num = args.bili_page.map(|p| p as usize).unwrap_or(default_page);
 
@@ -484,14 +532,10 @@ async fn run(args: CliArgs) -> Result<()> {
         };
 
         let reporter = ConsoleProgressReporter::new("Cover", args.quiet);
-        let saved_path = BilibiliAdapter::download_cover(
-            engine.client(),
-            &bvid,
-            user_dest,
-            Some(&reporter),
-        )
-        .await
-        .context("Failed to download video cover image")?;
+        let saved_path =
+            BilibiliAdapter::download_cover(engine.client(), &bvid, user_dest, Some(&reporter))
+                .await
+                .context("Failed to download video cover image")?;
 
         if !args.quiet {
             eprintln!("[PageClaw] Saved cover to: {}", saved_path.display());
