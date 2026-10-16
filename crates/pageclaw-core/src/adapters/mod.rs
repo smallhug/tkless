@@ -1,9 +1,15 @@
 pub mod bilibili;
+pub mod github;
+pub mod juejin;
 pub mod wechat;
+pub mod xiaohongshu;
 pub mod zhihu;
 
 pub use bilibili::BilibiliAdapter;
+pub use github::GithubAdapter;
+pub use juejin::JuejinAdapter;
 pub use wechat::WechatAdapter;
+pub use xiaohongshu::XiaohongshuAdapter;
 pub use zhihu::ZhihuAdapter;
 
 use crate::error::PageclawError;
@@ -59,6 +65,9 @@ impl AdapterRegistry {
         registry.register(Arc::new(BilibiliAdapter::new()));
         registry.register(Arc::new(WechatAdapter::new()));
         registry.register(Arc::new(ZhihuAdapter::new()));
+        registry.register(Arc::new(XiaohongshuAdapter::new()));
+        registry.register(Arc::new(JuejinAdapter::new()));
+        registry.register(Arc::new(GithubAdapter::new()));
         registry
     }
 

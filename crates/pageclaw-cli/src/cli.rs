@@ -576,6 +576,20 @@ pub struct SearchSubArgs {
     )]
     pub zhihu: bool,
 
+    /// Scope search to GitHub repositories, issues, and discussions (github.com)
+    #[arg(
+        long = "github",
+        help = "Scope search to GitHub repositories, issues, and discussions (github.com)"
+    )]
+    pub github: bool,
+
+    /// Scope search to Juejin technical articles (juejin.cn)
+    #[arg(
+        long = "juejin",
+        help = "Scope search to Juejin technical articles (juejin.cn)"
+    )]
+    pub juejin: bool,
+
     /// Search engine provider: bing (default), google, auto (failover)
     #[arg(
         short = 'e',
