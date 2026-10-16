@@ -286,6 +286,16 @@ pub fn get_available_tools() -> Vec<McpTool> {
                         "default": "bing",
                         "description": "Search engine provider: 'bing' (default, fast connectivity and great Chinese coverage), 'google' (global documentation index), or 'auto' (failover)"
                     },
+                    "fetch_content": {
+                        "type": "boolean",
+                        "default": false,
+                        "description": "Concurrently fetch and extract clean Markdown content for each search result in parallel (All-in-One search & fetch)"
+                    },
+                    "max_tokens_per_page": {
+                        "type": "integer",
+                        "default": 1500,
+                        "description": "Maximum tokens extracted per webpage when fetch_content is enabled [default: 1500]"
+                    },
                     "format": {
                         "type": "string",
                         "enum": ["markdown", "json"],

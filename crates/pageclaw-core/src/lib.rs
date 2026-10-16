@@ -30,8 +30,8 @@ pub use model::{
     VideoConclusion, VideoQuality,
 };
 pub use search::{
-    format_search_results_markdown, search_bing, search_google, web_search, web_search_with_engine,
-    SearchResultItem,
+    format_search_fetch_markdown, format_search_results_markdown, search_bing, search_google,
+    web_search, web_search_and_fetch, web_search_with_engine, SearchFetchItem, SearchResultItem,
 };
 
 use cleaner::{clean_html, extract_selector};
@@ -45,6 +45,7 @@ use url::Url;
 
 /// The central engine coordinating web fetching, sanitization, markdown conversion,
 /// metadata extraction, and token budget management.
+#[derive(Clone)]
 pub struct PageclawEngine {
     fetcher: Fetcher,
     markdown_converter: MarkdownConverter,

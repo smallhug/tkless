@@ -19,6 +19,7 @@ pub struct FetchedResponse {
     pub truncated: bool,
 }
 
+#[derive(Clone)]
 pub struct Fetcher {
     client: reqwest::Client,
     options: FetchOptions,
@@ -314,7 +315,6 @@ fn is_private_ip(ip: std::net::IpAddr) -> bool {
                 || (oct[0] == 100 && (oct[1] & 0xc0) == 64) // 100.64.0.0/10 (CGNAT)
                 || (oct[0] == 192 && oct[1] == 0 && oct[2] == 0) // 192.0.0.0/24 (IETF Protocol Assignments)
                 || (oct[0] == 192 && oct[1] == 0 && oct[2] == 2) // 192.0.2.0/24 (TEST-NET-1)
-                || (oct[0] == 198 && (oct[1] & 0xfe) == 18) // 198.18.0.0/15 (Benchmarking)
                 || (oct[0] == 198 && oct[1] == 51 && oct[2] == 100) // 198.51.100.0/24 (TEST-NET-2)
                 || (oct[0] == 203 && oct[1] == 0 && oct[2] == 113) // 203.0.113.0/24 (TEST-NET-3)
                 || (oct[0] & 0xf0) == 240 // 240.0.0.0/4 (Reserved)
@@ -909,9 +909,10 @@ mod tests {
         assert!(is_private_ip("203.0.113.1".parse::<IpAddr>().unwrap()));
         assert!(is_private_ip("240.0.0.1".parse::<IpAddr>().unwrap()));
 
-        // Public IPs should NOT be marked as private
+        // Public IPs and Fake-IP proxy addresses should NOT be marked as private
         assert!(!is_private_ip("1.1.1.1".parse::<IpAddr>().unwrap()));
         assert!(!is_private_ip("8.8.8.8".parse::<IpAddr>().unwrap()));
+        assert!(!is_private_ip("198.18.0.1".parse::<IpAddr>().unwrap()));
         assert!(!is_private_ip("104.16.132.229".parse::<IpAddr>().unwrap()));
 
         // IPv6 loopback, unspecified, ULA & link-local

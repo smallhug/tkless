@@ -320,6 +320,42 @@ async fn run(args: CliArgs) -> Result<()> {
             search_args.query.clone()
         };
 
+        if search_args.fetch_content {
+            let items = pageclaw_core::web_search_and_fetch(
+                &engine,
+                &effective_query,
+                search_args.limit,
+                search_args.engine.into(),
+                &extraction_options,
+                search_args.max_tokens_per_page,
+            )
+            .await
+            .context("Failed to perform search and fetch")?;
+
+            let mut payload = match search_args.format {
+                CliFormat::Json => serde_json::to_string_pretty(&items)
+                    .context("Failed to serialize search & fetch items to JSON")?,
+                _ => pageclaw_core::format_search_fetch_markdown(&effective_query, &items),
+            };
+
+            // Enforce overall max-tokens limit if specified
+            if let Some(total_limit) = args.max_tokens {
+                let initial_tokens =
+                    pageclaw_core::token::count_tokens(&payload, args.tokenizer.into());
+                if initial_tokens > total_limit {
+                    let (truncated_payload, _) = pageclaw_core::token::truncate_to_tokens(
+                        &payload,
+                        total_limit,
+                        args.tokenizer.into(),
+                    );
+                    payload = truncated_payload;
+                }
+            }
+
+            output::write_payload(&payload, search_args.output.as_deref())?;
+            return Ok(());
+        }
+
         let results = pageclaw_core::web_search_with_engine(
             engine.client(),
             &effective_query,

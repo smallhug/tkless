@@ -574,21 +574,59 @@ impl McpServer {
             Some("auto") => SearchEngineKind::Auto,
             _ => SearchEngineKind::Bing,
         };
+        let fetch_content = args
+            .get("fetch_content")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let max_tokens_per_page = args
+            .get("max_tokens_per_page")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as usize);
 
-        match crate::search::web_search_with_engine(self.engine.client(), query, limit, engine)
+        if fetch_content {
+            let options = ExtractionOptions::default();
+            match crate::search::web_search_and_fetch(
+                &self.engine,
+                query,
+                limit,
+                engine,
+                &options,
+                max_tokens_per_page,
+            )
             .await
-        {
-            Ok(results) => match format {
-                OutputFormat::Json => match serde_json::to_string_pretty(&results) {
-                    Ok(json_str) => McpToolCallResult::success(json_str),
-                    Err(e) => McpToolCallResult::error(format!("Failed to serialize JSON: {e}")),
+            {
+                Ok(items) => match format {
+                    OutputFormat::Json => match serde_json::to_string_pretty(&items) {
+                        Ok(json_str) => McpToolCallResult::success(json_str),
+                        Err(e) => {
+                            McpToolCallResult::error(format!("Failed to serialize JSON: {e}"))
+                        }
+                    },
+                    _ => {
+                        let md = crate::search::format_search_fetch_markdown(query, &items);
+                        McpToolCallResult::success(md)
+                    }
                 },
-                _ => {
-                    let md = crate::search::format_search_results_markdown(query, &results);
-                    McpToolCallResult::success(md)
-                }
-            },
-            Err(e) => McpToolCallResult::error(format!("Web search failed: {e}")),
+                Err(e) => McpToolCallResult::error(format!("Search & fetch failed: {e}")),
+            }
+        } else {
+            match crate::search::web_search_with_engine(self.engine.client(), query, limit, engine)
+                .await
+            {
+                Ok(results) => match format {
+                    OutputFormat::Json => match serde_json::to_string_pretty(&results) {
+                        Ok(json_str) => McpToolCallResult::success(json_str),
+                        Err(e) => {
+                            McpToolCallResult::error(format!("Failed to serialize JSON: {e}"))
+                        }
+                    },
+                    _ => {
+                        let md = crate::search::format_search_results_markdown(query, &results);
+                        McpToolCallResult::success(md)
+                    }
+                },
+                Err(e) => McpToolCallResult::error(format!("Web search failed: {e}")),
+            }
         }
     }
 }

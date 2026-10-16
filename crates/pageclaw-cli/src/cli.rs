@@ -576,7 +576,7 @@ pub struct SearchSubArgs {
     )]
     pub zhihu: bool,
 
-    /// Search engine provider: bing (default), google, or auto (failover)
+    /// Search engine provider: bing (default), google, auto (failover)
     #[arg(
         short = 'e',
         long = "engine",
@@ -585,6 +585,21 @@ pub struct SearchSubArgs {
         help = "Search engine provider: bing (default), google, auto (failover)"
     )]
     pub engine: CliSearchEngine,
+
+    /// Fetch and extract full cleaned content for each search result in parallel
+    #[arg(
+        long = "fetch-content",
+        help = "Concurrently fetch and extract clean Markdown content for each search result"
+    )]
+    pub fetch_content: bool,
+
+    /// Maximum tokens extracted per webpage during search & fetch [default: 1500]
+    #[arg(
+        long = "max-tokens-per-page",
+        value_name = "N",
+        help = "Maximum tokens extracted per webpage during search & fetch [default: 1500]"
+    )]
+    pub max_tokens_per_page: Option<usize>,
 }
 
 #[derive(clap::Args, Debug, Clone)]
