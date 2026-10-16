@@ -137,10 +137,10 @@ impl From<CliSearchEngine> for pageclaw_core::model::SearchEngineKind {
 #[command(
     name = "pageclaw",
     version = concat!(env!("CARGO_PKG_VERSION"), " (built ", env!("PAGECLAW_BUILD_DATE"), ")"),
-    about = "High-performance, token-efficient web content extraction CLI for AI agents",
-    long_about = "PageClaw fetches web pages, removes navigation/ads/boilerplate using Readability heuristics, \
-and converts the core content into LLM-optimized Markdown or structured JSON. \
-Designed for sub-second agent tool calls with strict stdout/stderr stream separation.",
+    about = "PageClaw: 高性能、Token 经济型的 AI Agent 网页提取与搜索引擎",
+    long_about = "PageClaw（爪页）是一个专为大语言模型与 AI Agent 设计的高性能网页抓取、降噪清洗与搜索提取引擎。\n\
+自动剥离导航、脚本与广告噪音，将正文转化为 LLM 友好的 Markdown 或结构化 JSON，支持段落断句平滑截断与 Token 预算控制。\n\
+原生集成 B站/知乎/微信公众号/小红书/掘金/GitHub 平台适配器，内置 Bing/Google 双引擎检索，并提供原生 MCP 服务模式。",
     subcommand_precedence_over_arg = true
 )]
 pub struct CliArgs {
@@ -531,19 +531,39 @@ pub struct CliArgs {
 
 #[derive(Subcommand, Debug, Clone)]
 pub enum SubCommand {
-    /// Run as native Model Context Protocol (MCP) server over stdio
+    /// 启动原生 Model Context Protocol (MCP) stdio 服务端 (供 Claude Desktop / Cursor 直连)
+    #[command(
+        name = "mcp",
+        about = "启动原生 Model Context Protocol (MCP) 服务端 (供 Claude Desktop / Cursor 直连)"
+    )]
     Mcp(McpArgs),
 
-    /// Launch browser login to extract Cookie credentials and save to file
+    /// 交互式登录并提取保存平台凭据 (自动带平台前缀隔离存储至 cookies.txt，防覆盖)
+    #[command(
+        name = "login",
+        about = "交互式登录并提取保存平台凭据 (自动带平台前缀隔离存储至 cookies.txt，多网站互不覆盖)"
+    )]
     Login(LoginArgs),
 
-    /// Perform a zero-API-key web search (DuckDuckGo HTML) and output structured results
+    /// 免 API Key 全网搜索与生态定向检索 (支持 Bing/Google/Auto 及一键 --fetch-content 搜索即抓取)
+    #[command(
+        name = "search",
+        about = "免 API Key 全网搜索与生态定向检索 (支持 Bing/Google/Auto 及一键 --fetch-content 搜索即抓取)"
+    )]
     Search(SearchSubArgs),
 
-    /// Concurrently fetch and extract a batch of URLs from a file or stdin
+    /// 并发抓取与批量 URL 提取流水线 (多协程并发池高效处理文件或 stdin 列表)
+    #[command(
+        name = "batch",
+        about = "并发抓取与批量 URL 提取流水线 (多协程并发池高效处理文件或 stdin 列表)"
+    )]
     Batch(BatchArgs),
 
-    /// Deeply crawl a site from a seed URL and assemble a structured Markdown or JSON knowledge base
+    /// 整站文档递归爬取与知识库汇编 (自动构建带 TOC 目录索引的单文件 Markdown 知识库)
+    #[command(
+        name = "crawl",
+        about = "整站文档递归爬取与知识库汇编 (自动构建带 TOC 目录索引的单文件 Markdown 知识库)"
+    )]
     Crawl(CrawlArgs),
 }
 
