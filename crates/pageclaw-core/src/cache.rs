@@ -16,6 +16,10 @@ pub struct CacheEntry {
     pub created_at: u64,
     pub ttl_secs: u64,
     pub document: PageDocument,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub etag: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_modified: Option<String>,
 }
 
 impl CacheEntry {
@@ -139,6 +143,18 @@ impl DocumentCache {
         doc: &PageDocument,
         ttl_secs: Option<u64>,
     ) -> Result<(), PageclawError> {
+        self.set_with_validators(key, doc, ttl_secs, None, None)
+    }
+
+    /// Stores a document along with HTTP ETag and Last-Modified validators for conditional 304 revalidation.
+    pub fn set_with_validators(
+        &self,
+        key: &str,
+        doc: &PageDocument,
+        ttl_secs: Option<u64>,
+        etag: Option<String>,
+        last_modified: Option<String>,
+    ) -> Result<(), PageclawError> {
         let now = current_time_secs();
         let ttl = ttl_secs.unwrap_or(self.default_ttl_secs);
 
@@ -147,6 +163,8 @@ impl DocumentCache {
             created_at: now,
             ttl_secs: ttl,
             document: doc.clone(),
+            etag,
+            last_modified,
         };
 
         // Write L1 memory
@@ -171,6 +189,60 @@ impl DocumentCache {
         }
 
         Ok(())
+    }
+
+    /// Retrieves full cache entry (even if expired) to obtain ETag and Last-Modified validators for 304 revalidation.
+    pub fn get_entry(&self, key: &str) -> Option<CacheEntry> {
+        // 1. Check L1 memory
+        if let Ok(mem) = self.memory.read() {
+            if let Some(entry) = mem.get(key) {
+                return Some(entry.clone());
+            }
+        }
+
+        // 2. Check L2 disk
+        if let Some(ref dir) = self.cache_dir {
+            let file_path = dir.join(format!("{key}.json"));
+            if file_path.is_file() {
+                if let Ok(file) = File::open(&file_path) {
+                    let reader = BufReader::new(file);
+                    if let Ok(entry) = serde_json::from_reader::<_, CacheEntry>(reader) {
+                        // Backfill L1 memory
+                        if let Ok(mut mem) = self.memory.write() {
+                            mem.insert(key.to_string(), entry.clone());
+                        }
+                        return Some(entry);
+                    }
+                }
+            }
+        }
+
+        None
+    }
+
+    /// Re-arms the creation timestamp for a valid cached entry upon HTTP 304 Not Modified response.
+    pub fn touch(&self, key: &str, ttl_secs: Option<u64>) {
+        let now = current_time_secs();
+        let new_ttl = ttl_secs.unwrap_or(self.default_ttl_secs);
+
+        let mut updated_entry = None;
+        if let Ok(mut mem) = self.memory.write() {
+            if let Some(entry) = mem.get_mut(key) {
+                entry.created_at = now;
+                entry.ttl_secs = new_ttl;
+                updated_entry = Some(entry.clone());
+            }
+        }
+
+        if let Some(entry) = updated_entry {
+            if let Some(ref dir) = self.cache_dir {
+                let file_path = dir.join(format!("{key}.json"));
+                if let Ok(file) = File::create(&file_path) {
+                    let writer = BufWriter::new(file);
+                    let _ = serde_json::to_writer(writer, &entry);
+                }
+            }
+        }
     }
 
     /// Removes expired entries from both memory and disk.
@@ -350,5 +422,60 @@ mod tests {
         // Wait 1ms
         std::thread::sleep(std::time::Duration::from_millis(5));
         assert!(cache.get(key).is_none());
+    }
+
+    #[test]
+    fn test_cache_entry_revalidation_and_touch() {
+        let cache = DocumentCache::memory_only(10);
+        let key = "revalidate_key";
+        let doc = PageDocument {
+            url: "https://example.com/api/data".into(),
+            final_url: "https://example.com/api/data".into(),
+            status: 200,
+            title: Some("API Response".into()),
+            byline: None,
+            content: "{\"data\":\"value\"}".into(),
+            metadata: PageMetadata::default(),
+            json_ld: vec![],
+            token_count: 5,
+            tokenizer: "o200k".into(),
+            truncated: false,
+            subtitles: None,
+            danmaku: None,
+            comments: None,
+            conclusion: None,
+            links: None,
+            images: None,
+            tables: None,
+            entity: None,
+            chunks: None,
+            content_hash: None,
+        };
+
+        // 1. Store with ETag and Last-Modified validators
+        let etag = Some("\"12345678\"".to_string());
+        let last_modified = Some("Sun, 01 Mar 2026 12:00:00 GMT".to_string());
+
+        cache
+            .set_with_validators(key, &doc, Some(60), etag.clone(), last_modified.clone())
+            .expect("Should cache with validators");
+
+        // 2. Retrieve raw entry and verify validators
+        let entry = cache.get_entry(key).expect("Entry must exist");
+        assert_eq!(entry.etag, etag);
+        assert_eq!(entry.last_modified, last_modified);
+        let initial_created_at = entry.created_at;
+
+        // 3. Touch to simulate 304 re-arming
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        cache.touch(key, Some(120));
+
+        let rearmed_entry = cache.get_entry(key).expect("Entry must exist after touch");
+        assert!(
+            rearmed_entry.created_at >= initial_created_at,
+            "Touch should re-arm creation timestamp"
+        );
+        assert_eq!(rearmed_entry.ttl_secs, 120);
+        assert_eq!(rearmed_entry.etag, etag);
     }
 }

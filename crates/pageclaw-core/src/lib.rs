@@ -280,6 +280,94 @@ impl PageclawEngine {
         Ok(doc)
     }
 
+    /// Fetches and extracts a webpage with intelligent two-level caching and HTTP 304 conditional revalidation.
+    /// If a fresh cache entry exists, returns it immediately (< 1ms).
+    /// If expired, issues a conditional HTTP request with ETag / Last-Modified headers. Upon receiving HTTP 304,
+    /// re-arms the cache and returns the cached document with zero body bytes transferred.
+    pub async fn process_url_with_cache(
+        &self,
+        url: &str,
+        options: &ExtractionOptions,
+        cache: &DocumentCache,
+    ) -> Result<PageDocument, PageclawError> {
+        let key = cache.generate_key(url, options);
+
+        if let Some(entry) = cache.get_entry(&key) {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+
+            if !entry.is_expired(now) {
+                debug!(url = url, "L1/L2 cache hit (fresh)");
+                return Ok(entry.document);
+            }
+
+            // Entry expired: attempt conditional HTTP 304 revalidation
+            if entry.etag.is_some() || entry.last_modified.is_some() {
+                debug!(
+                    url = url,
+                    etag = ?entry.etag,
+                    last_modified = ?entry.last_modified,
+                    "Cache entry expired, issuing conditional HTTP 304 revalidation"
+                );
+                match self
+                    .fetcher
+                    .fetch_with_revalidation(
+                        url,
+                        entry.etag.as_deref(),
+                        entry.last_modified.as_deref(),
+                    )
+                    .await
+                {
+                    Ok(resp) if resp.not_modified => {
+                        debug!(
+                            url = url,
+                            "Server confirmed HTTP 304 Not Modified; re-arming cache with 0 body bytes"
+                        );
+                        cache.touch(&key, None);
+                        return Ok(entry.document);
+                    }
+                    Ok(resp) => {
+                        let mut doc =
+                            self.process_html(&resp.html, Some(&resp.final_url), options)?;
+                        doc.url = resp.requested_url;
+                        doc.final_url = resp.final_url;
+                        doc.status = resp.status;
+                        doc.truncated = doc.truncated || resp.truncated;
+                        let _ = cache.set_with_validators(
+                            &key,
+                            &doc,
+                            None,
+                            resp.etag,
+                            resp.last_modified,
+                        );
+                        return Ok(doc);
+                    }
+                    Err(err) => {
+                        warn!(
+                            url = url,
+                            error = %err,
+                            "Conditional revalidation failed due to network error; returning stale cached document"
+                        );
+                        return Ok(entry.document);
+                    }
+                }
+            }
+        }
+
+        // Cache miss: fetch full document and store with validators
+        let resp = self.fetcher.fetch(url).await?;
+        let mut doc = self.process_html(&resp.html, Some(&resp.final_url), options)?;
+        doc.url = resp.requested_url;
+        doc.final_url = resp.final_url;
+        doc.status = resp.status;
+        doc.truncated = doc.truncated || resp.truncated;
+
+        let _ = cache.set_with_validators(&key, &doc, None, resp.etag, resp.last_modified);
+        Ok(doc)
+    }
+
     /// Processes already-available raw HTML (e.g. from stdin, file, or headless browser).
     pub fn process_html(
         &self,

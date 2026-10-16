@@ -777,11 +777,18 @@ async fn run(args: CliArgs) -> Result<()> {
             .process_html(&raw_html, args.base_url.as_deref(), &extraction_options)
             .context("Failed to process HTML content")?
     } else {
-        // Fetch and process remote URL
-        engine
-            .process_url(&target, &extraction_options)
-            .await
-            .context(format!("Failed to fetch and process URL: {target}"))?
+        // Fetch and process remote URL (with HTTP 304 conditional revalidation when caching is enabled)
+        if let Some(ref c) = cache {
+            engine
+                .process_url_with_cache(&target, &extraction_options, c)
+                .await
+                .context(format!("Failed to fetch and process URL: {target}"))?
+        } else {
+            engine
+                .process_url(&target, &extraction_options)
+                .await
+                .context(format!("Failed to fetch and process URL: {target}"))?
+        }
     };
 
     let elapsed = start_time.elapsed();
