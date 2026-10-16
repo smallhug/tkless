@@ -29,6 +29,8 @@ static AD_SELECTOR: LazyLock<Selector> = LazyLock::new(|| {
 
 static BODY_SELECTOR: LazyLock<Selector> = LazyLock::new(|| Selector::parse("body").unwrap());
 static TITLE_SELECTOR: LazyLock<Selector> = LazyLock::new(|| Selector::parse("title").unwrap());
+static BASE_TAG_SELECTOR: LazyLock<Selector> =
+    LazyLock::new(|| Selector::parse("base[href]").unwrap());
 
 /// Cleaned HTML representation ready for conversion or downstream processing.
 #[derive(Debug, Clone)]
@@ -86,13 +88,38 @@ pub fn clean_html(
     }
 }
 
+/// Resolves effective base URL, prioritizing `<base href="...">` tag in `<head>` if present.
+pub fn resolve_effective_base_url(doc: &Html, fallback_base_url: Option<&str>) -> Option<Url> {
+    let parsed_fallback = fallback_base_url.and_then(|u| Url::parse(u).ok());
+
+    if let Some(base_el) = doc.select(&BASE_TAG_SELECTOR).next() {
+        if let Some(href) = base_el.value().attr("href") {
+            let trimmed = href.trim();
+            if !trimmed.is_empty() {
+                if let Ok(abs_base) = Url::parse(trimmed) {
+                    return Some(abs_base);
+                } else if let Some(ref parent_base) = parsed_fallback {
+                    if let Ok(joined) = parent_base.join(trimmed) {
+                        return Some(joined);
+                    }
+                }
+            }
+        }
+    }
+
+    parsed_fallback
+}
+
 /// Cleans full page by stripping boilerplate, navigation, scripts, styles, and normalizing URLs.
-fn clean_full_page(raw_html: &str, base_url_str: Option<&str>) -> Result<CleanedContent, PageclawError> {
+fn clean_full_page(
+    raw_html: &str,
+    base_url_str: Option<&str>,
+) -> Result<CleanedContent, PageclawError> {
     let document = Html::parse_document(raw_html);
     let title = extract_title_from_doc(&document);
 
-    // Parse base URL for link resolution
-    let base_url = base_url_str.and_then(|u| Url::parse(u).ok());
+    // Resolve effective base URL (auto-discovering <base href="..."> if present)
+    let base_url = resolve_effective_base_url(&document, base_url_str);
 
     let body_element = document.select(&BODY_SELECTOR).next();
 
@@ -138,10 +165,12 @@ pub fn extract_selector(
     let document = Html::parse_document(raw_html);
     let title = extract_title_from_doc(&document);
 
-    let selector = Selector::parse(selector_str)
-        .map_err(|e| PageclawError::CleaningError(format!("Invalid CSS selector '{selector_str}': {e:?}")))?;
+    let selector = Selector::parse(selector_str).map_err(|e| {
+        PageclawError::CleaningError(format!("Invalid CSS selector '{selector_str}': {e:?}"))
+    })?;
 
-    let base_url = base_url_str.and_then(|u| Url::parse(u).ok());
+    // Resolve effective base URL (auto-discovering <base href="..."> if present)
+    let base_url = resolve_effective_base_url(&document, base_url_str);
 
     let mut out_html = String::new();
     let mut matched_count = 0;
@@ -159,7 +188,11 @@ pub fn extract_selector(
         out_html.push('\n');
     }
 
-    debug!(selector = selector_str, matches = matched_count, "Targeted CSS selector extraction completed");
+    debug!(
+        selector = selector_str,
+        matches = matched_count,
+        "Targeted CSS selector extraction completed"
+    );
 
     Ok(CleanedContent {
         title,
@@ -236,7 +269,14 @@ fn render_cleaned_node(
 
         // Recurse children
         for child in node.children() {
-            render_cleaned_node(child.id(), document, remove_selector, ad_selector, base_url, out);
+            render_cleaned_node(
+                child.id(),
+                document,
+                remove_selector,
+                ad_selector,
+                base_url,
+                out,
+            );
         }
 
         // Closing tag
@@ -247,7 +287,14 @@ fn render_cleaned_node(
         out.push_str(text);
     } else {
         for child in node.children() {
-            render_cleaned_node(child.id(), document, remove_selector, ad_selector, base_url, out);
+            render_cleaned_node(
+                child.id(),
+                document,
+                remove_selector,
+                ad_selector,
+                base_url,
+                out,
+            );
         }
     }
 }
@@ -298,7 +345,8 @@ mod tests {
             </html>
         "#;
 
-        let cleaned = clean_html(html, Some("https://example.com/sub/"), ExtractionMode::Full).unwrap();
+        let cleaned =
+            clean_html(html, Some("https://example.com/sub/"), ExtractionMode::Full).unwrap();
         assert_eq!(cleaned.title.as_deref(), Some("Test Page"));
         assert!(cleaned.html.contains("Main Content"));
         assert!(cleaned.html.contains("This is genuine content."));
@@ -315,9 +363,16 @@ mod tests {
                 <img src="pic.jpg">
             </body>
         "#;
-        let cleaned = clean_html(html, Some("https://example.com/path/"), ExtractionMode::Full).unwrap();
+        let cleaned = clean_html(
+            html,
+            Some("https://example.com/path/"),
+            ExtractionMode::Full,
+        )
+        .unwrap();
         assert!(cleaned.html.contains("href=\"https://example.com/about\""));
-        assert!(cleaned.html.contains("src=\"https://example.com/path/pic.jpg\""));
+        assert!(cleaned
+            .html
+            .contains("src=\"https://example.com/path/pic.jpg\""));
     }
 
     #[test]
@@ -344,5 +399,30 @@ mod tests {
         assert!(!cleaned.html.contains("Sidebar junk"));
         assert!(!cleaned.html.contains("Extra block"));
         assert!(!cleaned.html.contains("alert(1)"));
+    }
+
+    #[test]
+    fn test_base_href_tag_resolution() {
+        let html = r#"
+            <!DOCTYPE html>
+            <html>
+                <head>
+                    <base href="https://cdn.example.com/subfolder/">
+                    <title>Base Tag Test</title>
+                </head>
+                <body>
+                    <a href="page2.html">Relative Link</a>
+                    <img src="logo.png" alt="Logo">
+                </body>
+            </html>
+        "#;
+
+        let cleaned = clean_full_page(html, None).unwrap();
+        assert!(cleaned
+            .html
+            .contains("href=\"https://cdn.example.com/subfolder/page2.html\""));
+        assert!(cleaned
+            .html
+            .contains("src=\"https://cdn.example.com/subfolder/logo.png\""));
     }
 }

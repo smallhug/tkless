@@ -257,7 +257,7 @@ pageclaw search "Rust 教程" --fetch-content --cdp http://127.0.0.1:9222
 
 # 27. 🎯 结构化实体提取 Schema (Schema-Driven Entity Extraction，极简声明式字段抽取与 Token 极致压缩)
 # 通过内联 JSON 或模式文件，直接从 DOM 抽取指定字段与属性，直出纯净结构化 JSON 或 Markdown 附录：
-pageclaw "https://store.example.com/item/1" --schema '{"fields":{"title":"h1","price":".price-val","link":"a@href","tags":"[.tag]"}}' -f json
+pageclaw "https://store.example.com/item/1" --schema '{"fields":{"title":"h1","price":".price-val | number","in_stock":".stock | bool","reviews":".review-count | int","link":"a@href"}}' -f json
 # 支持 items_selector 列表循环模式，一次性抽取整页商品卡片或文章列表：
 pageclaw "https://news.example.com/" --schema '{"items_selector":".post-item","fields":{"title":"h2","url":"a@href","author":".author"}}' -f json
 

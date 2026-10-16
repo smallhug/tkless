@@ -42,6 +42,9 @@ pub struct FieldDetail {
     pub fields: Option<HashMap<String, FieldDef>>,
     /// Default fallback value if target element is not found
     pub default: Option<Value>,
+    /// Expected data type: "string" (default), "number", "float", "int", "boolean", "bool", or "json"
+    #[serde(default, rename = "type")]
+    pub field_type: Option<String>,
 }
 
 fn default_extract_kind() -> String {
@@ -141,11 +144,32 @@ fn normalize_field_def(def: &FieldDef) -> (FieldDetail, bool) {
                 (trimmed, false)
             };
 
+            // Check for type pipe e.g. ".price | number" or "div@data-json | json"
+            let (without_pipe, explicit_type) =
+                if let Some((left, right)) = unbracketed.rsplit_once('|') {
+                    let t = right.trim().to_ascii_lowercase();
+                    if t == "number"
+                        || t == "float"
+                        || t == "int"
+                        || t == "integer"
+                        || t == "bool"
+                        || t == "boolean"
+                        || t == "json"
+                        || t == "string"
+                    {
+                        (left.trim(), Some(t))
+                    } else {
+                        (unbracketed, None)
+                    }
+                } else {
+                    (unbracketed, None)
+                };
+
             // Check for attribute shortcut e.g. "a.link @href" or "img @src"
-            let (css_sel, attr) = if let Some((css, attr)) = unbracketed.split_once('@') {
+            let (css_sel, attr) = if let Some((css, attr)) = without_pipe.split_once('@') {
                 (css.trim().to_string(), Some(attr.trim().to_string()))
             } else {
-                (unbracketed.trim().to_string(), None)
+                (without_pipe.trim().to_string(), None)
             };
 
             let extract = if attr.is_some() {
@@ -163,6 +187,7 @@ fn normalize_field_def(def: &FieldDef) -> (FieldDetail, bool) {
                     multiple: is_array,
                     fields: None,
                     default: None,
+                    field_type: explicit_type,
                 },
                 is_array,
             )
@@ -206,18 +231,64 @@ fn extract_single_field(
         let mut list = Vec::new();
         for elem in container.select(&selector) {
             if let Some(val) = extract_leaf_value(&elem, detail, base_url) {
-                list.push(Value::String(val));
+                list.push(cast_value_type(val, detail.field_type.as_deref()));
             }
         }
         Ok(Value::Array(list))
     } else if let Some(elem) = container.select(&selector).next() {
         if let Some(val) = extract_leaf_value(&elem, detail, base_url) {
-            Ok(Value::String(val))
+            Ok(cast_value_type(val, detail.field_type.as_deref()))
         } else {
             Ok(detail.default.clone().unwrap_or(Value::Null))
         }
     } else {
         Ok(detail.default.clone().unwrap_or(Value::Null))
+    }
+}
+
+/// Converts an extracted raw string into a typed JSON value based on the field_type definition.
+fn cast_value_type(raw: String, field_type: Option<&str>) -> Value {
+    match field_type.map(|s| s.to_ascii_lowercase()).as_deref() {
+        Some("number") | Some("float") | Some("double") => {
+            let cleaned: String = raw
+                .chars()
+                .filter(|c| c.is_ascii_digit() || *c == '.' || *c == '-')
+                .collect();
+            if let Ok(num) = cleaned.parse::<f64>() {
+                if let Some(n) = serde_json::Number::from_f64(num) {
+                    return Value::Number(n);
+                }
+            }
+            Value::String(raw)
+        }
+        Some("int") | Some("integer") => {
+            let cleaned: String = raw
+                .chars()
+                .filter(|c| c.is_ascii_digit() || *c == '-')
+                .collect();
+            if let Ok(num) = cleaned.parse::<i64>() {
+                return Value::Number(num.into());
+            }
+            Value::String(raw)
+        }
+        Some("bool") | Some("boolean") => {
+            let lower = raw.trim().to_ascii_lowercase();
+            match lower.as_str() {
+                "true" | "1" | "yes" | "y" | "t" | "有" | "有货" | "在售" => Value::Bool(true),
+                "false" | "0" | "no" | "n" | "f" | "无" | "缺货" | "已售罄" => {
+                    Value::Bool(false)
+                }
+                _ => Value::Bool(!raw.trim().is_empty()),
+            }
+        }
+        Some("json") => {
+            if let Ok(val) = serde_json::from_str::<Value>(raw.trim()) {
+                val
+            } else {
+                Value::String(raw)
+            }
+        }
+        _ => Value::String(raw),
     }
 }
 
@@ -679,5 +750,44 @@ mod tests {
         assert!(schema.fields.contains_key("image"));
         assert!(report.summary_markdown.contains("product-item"));
         assert!(report.summary_markdown.contains("```json"));
+    }
+
+    #[test]
+    fn test_schema_typed_casting() {
+        let html = r#"
+        <div class="product-item">
+            <h1 class="title">机械键盘 Pro</h1>
+            <span class="price-val">¥1,299.50</span>
+            <span class="stock-status">有货</span>
+            <span class="review-count">1,250 条评价</span>
+            <div class="meta-tag" data-state='{"brand":"KeyChron","wireless":true}'></div>
+        </div>
+        "#;
+
+        let schema_json = r#"
+        {
+            "fields": {
+                "title": "h1.title",
+                "price": ".price-val | number",
+                "in_stock": ".stock-status | bool",
+                "reviews": ".review-count | int",
+                "metadata": ".meta-tag @data-state | json"
+            }
+        }
+        "#;
+
+        let schema = ExtractionSchema::parse(schema_json).unwrap();
+        let entity = extract_entities(html, &schema, None).unwrap();
+
+        assert_eq!(entity["title"], "机械键盘 Pro");
+        // Verify number casting
+        assert_eq!(entity["price"], 1299.5);
+        // Verify bool casting
+        assert_eq!(entity["in_stock"], true);
+        // Verify integer casting
+        assert_eq!(entity["reviews"], 1250);
+        // Verify embedded json parsing
+        assert_eq!(entity["metadata"]["brand"], "KeyChron");
+        assert_eq!(entity["metadata"]["wireless"], true);
     }
 }
