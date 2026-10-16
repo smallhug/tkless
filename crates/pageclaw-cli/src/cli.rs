@@ -646,6 +646,10 @@ pub struct CliArgs {
         help_heading = "缓存与运行诊断 (Cache & Diagnostics)"
     )]
     pub quiet: bool,
+
+    /// 输出详细的 Token 经济性与管道耗时基准遥测报告 (显示 Token 节省比例与降噪率)
+    #[arg(long = "stats", help_heading = "缓存与运行诊断 (Cache & Diagnostics)")]
+    pub stats: bool,
 }
 
 #[derive(Subcommand, Debug, Clone)]

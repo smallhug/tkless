@@ -482,6 +482,7 @@ impl ZhihuAdapter {
             entity: None,
             chunks: None,
             content_hash: None,
+            metrics: None,
         })
     }
 
@@ -543,6 +544,7 @@ impl ZhihuAdapter {
             entity: None,
             chunks: None,
             content_hash: None,
+            metrics: None,
         })
     }
 
@@ -638,6 +640,7 @@ impl ZhihuAdapter {
             entity: None,
             chunks: None,
             content_hash: None,
+            metrics: None,
         })
     }
 }

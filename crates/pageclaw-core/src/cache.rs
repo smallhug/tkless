@@ -380,6 +380,7 @@ mod tests {
             entity: None,
             chunks: None,
             content_hash: None,
+            metrics: None,
         };
 
         assert!(cache.get(key).is_none());
@@ -416,6 +417,7 @@ mod tests {
             entity: None,
             chunks: None,
             content_hash: None,
+            metrics: None,
         };
 
         cache.set(key, &doc, Some(0)).unwrap();
@@ -450,6 +452,7 @@ mod tests {
             entity: None,
             chunks: None,
             content_hash: None,
+            metrics: None,
         };
 
         // 1. Store with ETag and Last-Modified validators

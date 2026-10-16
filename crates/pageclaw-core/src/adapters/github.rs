@@ -231,6 +231,7 @@ impl GithubAdapter {
             entity: None,
             chunks: None,
             content_hash: None,
+            metrics: None,
         })
     }
 
@@ -337,6 +338,7 @@ impl GithubAdapter {
             entity: None,
             chunks: None,
             content_hash: None,
+            metrics: None,
         })
     }
 }

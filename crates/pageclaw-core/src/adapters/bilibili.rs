@@ -886,6 +886,7 @@ impl BilibiliAdapter {
             entity: None,
             chunks: None,
             content_hash: None,
+            metrics: None,
         })
     }
 
@@ -1166,6 +1167,7 @@ impl BilibiliAdapter {
             entity: None,
             chunks: None,
             content_hash: None,
+            metrics: None,
         })
     }
 
@@ -1242,6 +1244,7 @@ impl BilibiliAdapter {
             entity: None,
             chunks: None,
             content_hash: None,
+            metrics: None,
         })
     }
 }

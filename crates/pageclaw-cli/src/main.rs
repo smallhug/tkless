@@ -276,6 +276,7 @@ async fn run(args: CliArgs) -> Result<()> {
         assets_dir: args.assets_dir.clone(),
         tables_only: args.tables_only,
         table_format: args.table_format.into(),
+        stats: args.stats,
     };
 
     // -------------------------------------------------------------------------
@@ -477,6 +478,7 @@ async fn run(args: CliArgs) -> Result<()> {
             assets_dir: None,
             tables_only: false,
             table_format: pageclaw_core::model::TableExportFormat::default(),
+            stats: false,
         });
 
         let semaphore =
@@ -817,6 +819,32 @@ async fn run(args: CliArgs) -> Result<()> {
             "[PageClaw] Finished in {:.2?}: \"{}\" (Status: {}, Tokens: {}, Truncated: {})",
             elapsed, title_disp, doc.status, doc.token_count, doc.truncated
         );
+
+        if args.stats {
+            if let Some(ref m) = doc.metrics {
+                eprintln!("\n[PageClaw Telemetry & Token Economy]");
+                eprintln!("----------------------------------------------------------");
+                eprintln!("Target URL        : {}", doc.url);
+                eprintln!(
+                    "Pipeline Latency  : {}ms (Fetch: {}ms, Clean: {}ms)",
+                    m.total_time_ms, m.fetch_time_ms, m.clean_time_ms
+                );
+                eprintln!(
+                    "Payload Reduction : {} -> {} (降噪率: {:.1}%)",
+                    pageclaw_core::downloader::format_bytes(m.raw_bytes as u64),
+                    pageclaw_core::downloader::format_bytes(m.cleaned_bytes as u64),
+                    m.noise_reduction_percent
+                );
+                eprintln!(
+                    "Token Economy     : ~{} (Raw) -> {} (Clean) [节省 {} Tokens, 节省率: {:.1}%]",
+                    m.raw_token_estimate,
+                    m.final_token_count,
+                    m.raw_token_estimate.saturating_sub(m.final_token_count),
+                    m.token_savings_percent
+                );
+                eprintln!("----------------------------------------------------------\n");
+            }
+        }
     }
 
     // Write final content to stdout or designated file

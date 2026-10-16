@@ -328,6 +328,7 @@ impl McpServer {
             Some("json") => TableExportFormat::Json,
             _ => TableExportFormat::Markdown,
         };
+        let stats = args.get("stats").and_then(|v| v.as_bool()).unwrap_or(false);
 
         let options = ExtractionOptions {
             mode,
@@ -361,6 +362,7 @@ impl McpServer {
             assets_dir,
             tables_only,
             table_format,
+            stats,
         };
 
         let initial_target_host = Url::parse(url.as_str())
@@ -1133,6 +1135,7 @@ impl McpServer {
             Some("json") => TableExportFormat::Json,
             _ => TableExportFormat::Markdown,
         };
+        let stats = args.get("stats").and_then(|v| v.as_bool()).unwrap_or(false);
 
         let options = ExtractionOptions {
             mode,
@@ -1148,6 +1151,7 @@ impl McpServer {
             chunk_overlap,
             tables_only,
             table_format,
+            stats,
             ..Default::default()
         };
 
