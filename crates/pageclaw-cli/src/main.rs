@@ -522,6 +522,7 @@ async fn run(args: CliArgs) -> Result<()> {
             same_domain_only: true,
             same_path_prefix: crawl_args.same_path_prefix,
             exclude_patterns: pageclaw_core::CrawlOptions::default().exclude_patterns,
+            sitemap: crawl_args.sitemap,
         };
 
         let mut crawl_extraction_options = extraction_options.clone();

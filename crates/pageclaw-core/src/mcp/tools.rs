@@ -361,6 +361,11 @@ pub fn get_available_tools() -> Vec<McpTool> {
                         "default": false,
                         "description": "Restrict crawling strictly to URLs sharing the same path prefix as seed URL"
                     },
+                    "sitemap": {
+                        "type": "boolean",
+                        "default": false,
+                        "description": "Whether to parse seed URL as XML sitemap to extract and crawl canonical URLs directly"
+                    },
                     "max_tokens": {
                         "type": "integer",
                         "description": "Maximum overall token budget for the assembled crawl knowledge base"

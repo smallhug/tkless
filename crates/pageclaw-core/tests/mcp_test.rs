@@ -69,7 +69,7 @@ async fn test_mcp_protocol_lifecycle() {
     assert!(search_props.get("cdp_endpoint").is_some());
     assert!(search_props.get("schema").is_some());
 
-    // Verify crawl_site schema contains max_tokens, cdp_endpoint, schema
+    // Verify crawl_site schema contains max_tokens, cdp_endpoint, schema, sitemap
     let crawl_tool = tools_array
         .iter()
         .find(|t| t["name"] == "crawl_site")
@@ -78,6 +78,7 @@ async fn test_mcp_protocol_lifecycle() {
     assert!(crawl_props.get("max_tokens").is_some());
     assert!(crawl_props.get("cdp_endpoint").is_some());
     assert!(crawl_props.get("schema").is_some());
+    assert!(crawl_props.get("sitemap").is_some());
 
     // Verify fetch_webpage schema contains new Direction 2 & 3 parameters
     let fetch_tool = tools_array
