@@ -1,0 +1,60 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/pageclaw-core",
+    "crates/pageclaw-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["PageClaw Contributors"]
+license = "MIT OR Apache-2.0"
+description = "Token-efficient, high-performance web extraction engine for AI agents"
+
+[workspace.dependencies]
+# Internal workspace crates
+pageclaw-core = { path = "crates/pageclaw-core" }
+
+# Async runtime & networking
+tokio = { version = "1.43", features = ["macros", "rt-multi-thread", "time", "io-util", "io-std"] }
+reqwest = { version = "0.12", default-features = false, features = [
+    "rustls-tls",
+    "gzip",
+    "json",
+    "stream",
+] }
+url = "2.5"
+
+# HTML parsing & DOM processing
+scraper = "0.22"
+ego-tree = "0.10"
+readability = "0.3"
+htmd = "0.4"
+encoding_rs = "0.8"
+flate2 = "1.0"
+
+# Token estimation & counting
+tiktoken-rs = "0.12"
+regex = "1.11"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+
+# CLI & Diagnostics
+clap = { version = "4.5", features = ["derive"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+thiserror = "2.0"
+anyhow = "1.0"
+winres = "0.1"
+qrcode = { version = "0.14", default-features = false, features = ["svg"] }
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

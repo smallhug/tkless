@@ -1,0 +1,360 @@
+use crate::adapters::{BoxFuture, PlatformAdapter};
+use crate::error::PageclawError;
+use crate::markdown::MarkdownConverter;
+use crate::model::{ExtractionOptions, OutputFormat, PageDocument, PageMetadata};
+use crate::token::count_tokens;
+use scraper::{Html, Selector};
+use std::sync::LazyLock;
+use tracing::debug;
+use url::Url;
+
+static WECHAT_TITLE_SELECTOR: LazyLock<Selector> =
+    LazyLock::new(|| Selector::parse("#activity-name, h1.rich_media_title").unwrap());
+static WECHAT_AUTHOR_SELECTOR: LazyLock<Selector> =
+    LazyLock::new(|| Selector::parse("#js_name, .rich_media_meta_text, meta[name='author']").unwrap());
+static WECHAT_CONTENT_SELECTOR: LazyLock<Selector> =
+    LazyLock::new(|| Selector::parse("#js_content").unwrap());
+static WECHAT_NOISE_SELECTOR: LazyLock<Selector> = LazyLock::new(|| {
+    Selector::parse("#js_profile_qrcode, .reward_area, .js_reward_wording, .qr_code_pc, #js_tags, .profile_container")
+        .unwrap()
+});
+
+pub struct WechatAdapter;
+
+impl Default for WechatAdapter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl WechatAdapter {
+    pub fn new() -> Self {
+        Self
+    }
+
+    async fn do_extract(
+        &self,
+        client: &reqwest::Client,
+        url: &Url,
+        options: &ExtractionOptions,
+    ) -> Result<PageDocument, PageclawError> {
+        debug!(url = %url, "Executing WeChat Official Accounts adapter extraction");
+
+        let resp = client
+            .get(url.as_str())
+            .header(
+                "User-Agent",
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",
+            )
+            .header("Referer", "https://mp.weixin.qq.com/")
+            .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+            .send()
+            .await?;
+
+        let html = resp.text().await?;
+        self.parse_article(&html, url, options)
+    }
+
+    pub fn parse_article(
+        &self,
+        raw_html: &str,
+        url: &Url,
+        options: &ExtractionOptions,
+    ) -> Result<PageDocument, PageclawError> {
+        let doc = Html::parse_document(raw_html);
+
+        // 1. Extract Title
+        let title = doc
+            .select(&WECHAT_TITLE_SELECTOR)
+            .next()
+            .map(|el| el.text().collect::<Vec<_>>().join(" ").trim().to_string())
+            .or_else(|| extract_meta_property(&doc, "og:title"));
+
+        // 2. Extract Author / Account Name
+        let author = doc
+            .select(&WECHAT_AUTHOR_SELECTOR)
+            .next()
+            .map(|el| {
+                if let Some(content) = el.value().attr("content") {
+                    content.trim().to_string()
+                } else {
+                    el.text().collect::<Vec<_>>().join(" ").trim().to_string()
+                }
+            })
+            .or_else(|| extract_meta_property(&doc, "author"));
+
+        // 3. Extract Metadata
+        let desc = extract_meta_property(&doc, "og:description")
+            .or_else(|| extract_meta_name(&doc, "description"));
+        let cover_url = extract_meta_property(&doc, "og:image");
+        let pub_date = extract_publish_time(raw_html);
+
+        let mut metadata = PageMetadata {
+            description: desc.clone(),
+            author: author.clone(),
+            canonical_url: Some(url.to_string()),
+            published_time: pub_date.clone(),
+            cover_image: cover_url.clone(),
+            ..Default::default()
+        };
+        if let Some(ref t) = title {
+            metadata.open_graph.insert("og:title".into(), t.clone());
+        }
+        if let Some(ref d) = desc {
+            metadata.open_graph.insert("og:description".into(), d.clone());
+        }
+        if let Some(ref c) = cover_url {
+            metadata.open_graph.insert("og:image".into(), c.clone());
+        }
+
+        // 4. Extract and Clean Article Body (#js_content)
+        let body_html = if let Some(content_el) = doc.select(&WECHAT_CONTENT_SELECTOR).next() {
+            clean_wechat_content(content_el)
+        } else {
+            raw_html.to_string()
+        };
+
+        // 5. Convert to requested format
+        let converter = MarkdownConverter::new();
+        let markdown_body = converter.convert(&body_html, options.strip_images, options.strip_links)?;
+
+        let mut content = String::new();
+        if options.frontmatter && options.format == OutputFormat::Markdown {
+            content.push_str("---\n");
+            if let Some(ref t) = title {
+                content.push_str(&format!("title: \"{}\"\n", t.replace('"', "\\\"")));
+            }
+            if let Some(ref a) = author {
+                content.push_str(&format!("account: \"{}\"\n", a.replace('"', "\\\"")));
+            }
+            content.push_str(&format!("url: \"{url}\"\n"));
+            if let Some(ref p) = pub_date {
+                content.push_str(&format!("published: \"{p}\"\n"));
+            }
+            if let Some(ref c) = cover_url {
+                content.push_str(&format!("cover: \"{c}\"\n"));
+            }
+            content.push_str("---\n\n");
+        }
+
+        if let Some(ref t) = title {
+            content.push_str(&format!("# {}\n\n", t));
+        }
+
+        let mut header_parts = Vec::new();
+        if let Some(ref a) = author {
+            header_parts.push(format!("**公众号**: {a}"));
+        }
+        if let Some(ref p) = pub_date {
+            header_parts.push(format!("**发布时间**: {p}"));
+        }
+        if !header_parts.is_empty() {
+            content.push_str(&format!("> {}\n\n", header_parts.join(" | ")));
+        }
+
+        content.push_str(&markdown_body);
+
+        let token_count = count_tokens(&content, options.tokenizer);
+
+        Ok(PageDocument {
+            url: url.to_string(),
+            final_url: url.to_string(),
+            status: 200,
+            title,
+            byline: author,
+            content,
+            metadata,
+            json_ld: Vec::new(),
+            token_count,
+            tokenizer: options.tokenizer.as_str().to_string(),
+            truncated: false,
+            subtitles: None,
+            danmaku: None,
+            comments: None,
+            conclusion: None,
+            links: None,
+            images: None,
+            tables: None,
+        })
+    }
+}
+
+impl PlatformAdapter for WechatAdapter {
+    fn name(&self) -> &'static str {
+        "wechat"
+    }
+
+    fn matches(&self, url: &Url) -> bool {
+        let host = url.host_str().unwrap_or("");
+        host == "mp.weixin.qq.com" && url.path().starts_with("/s")
+    }
+
+    fn extract<'a>(
+        &'a self,
+        client: &'a reqwest::Client,
+        url: &'a Url,
+        options: &'a ExtractionOptions,
+    ) -> BoxFuture<'a, Result<PageDocument, PageclawError>> {
+        Box::pin(self.do_extract(client, url, options))
+    }
+}
+
+/// Cleans WeChat's `#js_content` element:
+/// - Promotes `data-src` to `src` for all lazy-loaded images
+/// - Drops WeChat-specific QR codes, reward areas, and follow wrappers
+fn clean_wechat_content(content_el: scraper::ElementRef<'_>) -> String {
+    let mut out = String::with_capacity(4096);
+    render_wechat_node(content_el, &mut out);
+    out
+}
+
+fn render_wechat_node(el: scraper::ElementRef<'_>, out: &mut String) {
+    if WECHAT_NOISE_SELECTOR.matches(&el) {
+        return;
+    }
+
+    let tag_name = el.value().name();
+
+    if tag_name == "img" {
+        // Promote data-src to src
+        let mut src_url = el.value().attr("data-src").or_else(|| el.value().attr("src")).unwrap_or("");
+        src_url = src_url.trim();
+
+        if !src_url.is_empty() {
+            let alt = el.value().attr("alt").unwrap_or("").trim();
+            out.push_str("<img src=\"");
+            out.push_str(&src_url.replace('"', "&quot;"));
+            out.push_str("\" alt=\"");
+            out.push_str(&alt.replace('"', "&quot;"));
+            out.push_str("\" />");
+        }
+        return;
+    }
+
+    out.push('<');
+    out.push_str(tag_name);
+
+    for (k, v) in el.value().attrs() {
+        if k.starts_with("on") || k == "style" {
+            continue;
+        }
+        out.push(' ');
+        out.push_str(k);
+        out.push_str("=\"");
+        if v.contains('"') {
+            out.push_str(&v.replace('"', "&quot;"));
+        } else {
+            out.push_str(v);
+        }
+        out.push('"');
+    }
+    out.push('>');
+
+    for child in el.children() {
+        if let Some(child_el) = scraper::ElementRef::wrap(child) {
+            render_wechat_node(child_el, out);
+        } else if let Some(text) = child.value().as_text() {
+            out.push_str(text);
+        }
+    }
+
+    out.push_str("</");
+    out.push_str(tag_name);
+    out.push('>');
+}
+
+fn extract_meta_property(doc: &Html, property: &str) -> Option<String> {
+    let selector = Selector::parse(&format!("meta[property='{property}']")).ok()?;
+    let el = doc.select(&selector).next()?;
+    el.value().attr("content").map(|s| s.trim().to_string())
+}
+
+fn extract_meta_name(doc: &Html, name: &str) -> Option<String> {
+    let selector = Selector::parse(&format!("meta[name='{name}']")).ok()?;
+    let el = doc.select(&selector).next()?;
+    el.value().attr("content").map(|s| s.trim().to_string())
+}
+
+fn extract_publish_time(html: &str) -> Option<String> {
+    // Regex for: var createTime = '2026-03-01 12:00'; or createTime = "..."
+    static TIME_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
+        regex::Regex::new(r#"(?:createTime|publish_time|ct)\s*=\s*['"]([^'"]+)['"]"#).unwrap()
+    });
+
+    if let Some(cap) = TIME_RE.captures(html) {
+        if let Some(matched) = cap.get(1) {
+            let val = matched.as_str().trim();
+            if !val.is_empty() {
+                // If it's a timestamp
+                if let Ok(ts) = val.parse::<i64>() {
+                    if let Some(dt) = chrono::DateTime::from_timestamp(ts, 0) {
+                        return Some(dt.format("%Y-%m-%d %H:%M:%S").to_string());
+                    }
+                }
+                return Some(val.to_string());
+            }
+        }
+    }
+
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_wechat_adapter_matching() {
+        let adapter = WechatAdapter::new();
+        let url1 = Url::parse("https://mp.weixin.qq.com/s/abcdef123456").unwrap();
+        let url2 = Url::parse("https://mp.weixin.qq.com/s?__biz=abc&mid=123").unwrap();
+        let url3 = Url::parse("https://weixin.qq.com/").unwrap();
+
+        assert!(adapter.matches(&url1));
+        assert!(adapter.matches(&url2));
+        assert!(!adapter.matches(&url3));
+    }
+
+    #[test]
+    fn test_wechat_clean_content_data_src_and_noise() {
+        let adapter = WechatAdapter::new();
+        let sample_html = r#"
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <meta property="og:title" content="Rust 深度解析" />
+                <meta property="og:description" content="深入理解 Rust 所有权与生命周期。" />
+            </head>
+            <body>
+                <h1 id="activity-name">Rust 深度解析</h1>
+                <div id="js_name">Rust爱好者天地</div>
+                <div id="js_content">
+                    <p>正文第一段：Rust 是一门系统级编程语言。</p>
+                    <img data-src="https://mmbiz.qpic.cn/mmbiz_png/rust_diagram.png" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" alt="架构图" />
+                    <div class="reward_area">
+                        <p>赞赏鼓励</p>
+                    </div>
+                    <div id="js_profile_qrcode">
+                        <p>扫码关注公众号</p>
+                    </div>
+                </div>
+            </body>
+            </html>
+        "#;
+
+        let url = Url::parse("https://mp.weixin.qq.com/s/sample_test").unwrap();
+        let doc = adapter
+            .parse_article(sample_html, &url, &ExtractionOptions::default())
+            .expect("Should parse article");
+
+        assert_eq!(doc.title.as_deref(), Some("Rust 深度解析"));
+        assert_eq!(doc.byline.as_deref(), Some("Rust爱好者天地"));
+        assert!(doc.content.contains("Rust 是一门系统级编程语言。"));
+        // Image data-src must be promoted to src!
+        assert!(doc.content.contains("https://mmbiz.qpic.cn/mmbiz_png/rust_diagram.png"));
+        assert!(!doc.content.contains("data:image/gif"));
+        // Noise must be stripped!
+        assert!(!doc.content.contains("赞赏鼓励"));
+        assert!(!doc.content.contains("扫码关注公众号"));
+    }
+}

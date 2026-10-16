@@ -1,0 +1,330 @@
+//! pageclaw-core: High-performance, token-efficient web content extraction engine for AI agents.
+
+pub mod adapters;
+pub mod auth;
+pub mod cache;
+pub mod cleaner;
+pub mod downloader;
+pub mod error;
+pub mod extractor;
+pub mod fetcher;
+pub mod markdown;
+pub mod mcp;
+pub mod model;
+pub mod search;
+pub mod token;
+
+pub use adapters::{AdapterRegistry, BilibiliAdapter, PlatformAdapter, WechatAdapter, ZhihuAdapter};
+pub use auth::{execute_login_flow, generate_qrcode, poll_qrcode_status, LoginOptions, QrPollStatus};
+pub use cache::DocumentCache;
+pub use error::PageclawError;
+pub use mcp::McpServer;
+pub use search::{format_search_results_markdown, web_search, SearchResultItem};
+pub use model::{
+    CommentEntry, ConclusionChapter, ConclusionKeypoint, DanmakuEntry, ExtractedImage,
+    ExtractedLink, ExtractedTable, ExtractionMode, ExtractionOptions, FetchOptions, OnTooLarge,
+    OutputFormat, PageDocument, PageMetadata, SubtitleLine, TokenizerKind, VideoConclusion,
+    VideoQuality,
+};
+
+use cleaner::{clean_html, extract_selector};
+use extractor::{extract_images, extract_json_ld, extract_links, extract_metadata, extract_tables};
+use fetcher::Fetcher;
+use markdown::MarkdownConverter;
+use scraper::Html;
+use token::{count_tokens, truncate_to_tokens};
+use tracing::{debug, warn};
+use url::Url;
+
+/// The central engine coordinating web fetching, sanitization, markdown conversion,
+/// metadata extraction, and token budget management.
+pub struct PageclawEngine {
+    fetcher: Fetcher,
+    markdown_converter: MarkdownConverter,
+    adapter_registry: AdapterRegistry,
+}
+
+impl Default for PageclawEngine {
+    fn default() -> Self {
+        Self::new().expect("Failed to initialize default PageclawEngine")
+    }
+}
+
+impl PageclawEngine {
+    /// Creates a new engine instance with default network options.
+    pub fn new() -> Result<Self, PageclawError> {
+        Self::with_options(FetchOptions::default())
+    }
+
+    /// Creates a new engine instance with custom network and request options.
+    pub fn with_options(fetch_options: FetchOptions) -> Result<Self, PageclawError> {
+        Self::with_options_and_adapters(fetch_options, AdapterRegistry::default())
+    }
+
+    /// Creates an engine instance with custom network options and a customized adapter registry.
+    pub fn with_options_and_adapters(
+        fetch_options: FetchOptions,
+        adapter_registry: AdapterRegistry,
+    ) -> Result<Self, PageclawError> {
+        let fetcher = Fetcher::new(fetch_options)?;
+        let markdown_converter = MarkdownConverter::new();
+        Ok(Self {
+            fetcher,
+            markdown_converter,
+            adapter_registry,
+        })
+    }
+
+    /// Access the underlying HTTP client.
+    pub fn client(&self) -> &reqwest::Client {
+        self.fetcher.client()
+    }
+
+    /// Fetches a remote URL and transforms it according to extraction options.
+    /// Intercepts platform-specific URLs when a matching adapter exists unless disabled.
+    pub async fn process_url(
+        &self,
+        url: &str,
+        options: &ExtractionOptions,
+    ) -> Result<PageDocument, PageclawError> {
+        let parsed_url = Url::parse(url)?;
+
+        // 1. Attempt platform adapter fast path if enabled
+        if !options.no_adapter {
+            if let Some(adapter) = self.adapter_registry.find_adapter(&parsed_url) {
+                debug!(platform = adapter.name(), url = url, "Intercepting with platform adapter");
+                match adapter.extract(self.fetcher.client(), &parsed_url, options).await {
+                    Ok(mut doc) => {
+                        // Enforce token counting and budget truncation
+                        let initial_token_count = count_tokens(&doc.content, options.tokenizer);
+                        if let Some(limit) = options.max_tokens {
+                            if initial_token_count > limit {
+                                let (truncated_content, was_truncated) =
+                                    truncate_to_tokens(&doc.content, limit, options.tokenizer);
+                                doc.content = truncated_content;
+                                doc.truncated = was_truncated;
+                            }
+                        }
+                        doc.token_count = if doc.truncated {
+                            count_tokens(&doc.content, options.tokenizer)
+                        } else {
+                            initial_token_count
+                        };
+                        doc.tokenizer = options.tokenizer.as_str().to_string();
+                        return Ok(doc);
+                    }
+                    Err(err) => {
+                        warn!(
+                            platform = adapter.name(),
+                            error = %err,
+                            "Platform adapter extraction failed, falling back to standard HTML fetch"
+                        );
+                    }
+                }
+            }
+        }
+
+        // 2. Standard HTML fetch and Readability extraction fallback
+        let response = self.fetcher.fetch(url).await?;
+
+        let mut doc = self.process_html(&response.html, Some(&response.final_url), options)?;
+        doc.url = response.requested_url;
+        doc.final_url = response.final_url;
+        doc.status = response.status;
+        doc.truncated = doc.truncated || response.truncated;
+
+        Ok(doc)
+    }
+
+    /// Processes already-available raw HTML (e.g. from stdin, file, or headless browser).
+    pub fn process_html(
+        &self,
+        raw_html: &str,
+        base_url: Option<&str>,
+        options: &ExtractionOptions,
+    ) -> Result<PageDocument, PageclawError> {
+        let parsed_doc = Html::parse_document(raw_html);
+
+        // 1. Extract metadata and JSON-LD
+        let metadata = if options.include_metadata {
+            extract_metadata(&parsed_doc)
+        } else {
+            PageMetadata::default()
+        };
+
+        let json_ld = if options.include_json_ld {
+            extract_json_ld(&parsed_doc)
+        } else {
+            Vec::new()
+        };
+
+        // 2. Extract structured assets (links, images, tables)
+        let links = if options.extract_links {
+            Some(extract_links(&parsed_doc, base_url))
+        } else {
+            None
+        };
+
+        let images = if options.extract_images {
+            Some(extract_images(&parsed_doc, base_url))
+        } else {
+            None
+        };
+
+        let tables = if options.extract_tables {
+            Some(extract_tables(&parsed_doc))
+        } else {
+            None
+        };
+
+        // 3. Clean and isolate target content (targeted CSS selector or heuristic cleaning)
+        let cleaned = if let Some(ref sel) = options.selector {
+            extract_selector(raw_html, sel, base_url)?
+        } else {
+            clean_html(raw_html, base_url, options.mode)?
+        };
+
+        let title = cleaned.title.or_else(|| {
+            metadata
+                .open_graph
+                .get("og:title")
+                .cloned()
+                .or_else(|| metadata.description.clone())
+        });
+
+        // 4. Format into desired output presentation
+        let mut content = match options.format {
+            OutputFormat::Markdown | OutputFormat::Json => {
+                let md = self.markdown_converter.convert(
+                    &cleaned.html,
+                    options.strip_images,
+                    options.strip_links,
+                )?;
+                if options.frontmatter && options.format == OutputFormat::Markdown {
+                    prepend_frontmatter(&md, title.as_deref(), base_url, &metadata)
+                } else {
+                    md
+                }
+            }
+            OutputFormat::Text => html_to_plain_text(&cleaned.html),
+            OutputFormat::Raw | OutputFormat::Html => cleaned.html,
+        };
+
+        // Append structured link and image assets to Markdown/Text output if requested
+        if options.extract_links {
+            if let Some(ref link_list) = links {
+                if !link_list.is_empty()
+                    && (options.format == OutputFormat::Markdown || options.format == OutputFormat::Text)
+                {
+                    content.push_str("\n\n### 页面链接清单 (Links)\n\n");
+                    for link in link_list {
+                        let text = if link.text.is_empty() { "链接" } else { &link.text };
+                        content.push_str(&format!("- [{}]({})\n", text.replace(['\r', '\n'], " ").trim(), link.url));
+                    }
+                }
+            }
+        }
+
+        if options.extract_images {
+            if let Some(ref image_list) = images {
+                if !image_list.is_empty()
+                    && (options.format == OutputFormat::Markdown || options.format == OutputFormat::Text)
+                {
+                    content.push_str("\n\n### 页面图片资产 (Images)\n\n");
+                    for image in image_list {
+                        let alt = if image.alt.is_empty() { "图片" } else { &image.alt };
+                        content.push_str(&format!("- ![{}]({})\n", alt.replace(['\r', '\n'], " ").trim(), image.src));
+                    }
+                }
+            }
+        }
+
+        // 5. Token counting and truncation
+        let initial_token_count = count_tokens(&content, options.tokenizer);
+        let mut truncated = false;
+
+        if let Some(limit) = options.max_tokens {
+            if initial_token_count > limit {
+                debug!(current = initial_token_count, limit = limit, "Truncating content to token limit");
+                let (truncated_content, was_truncated) = truncate_to_tokens(&content, limit, options.tokenizer);
+                content = truncated_content;
+                truncated = was_truncated;
+            }
+        }
+
+        let final_token_count = if truncated {
+            count_tokens(&content, options.tokenizer)
+        } else {
+            initial_token_count
+        };
+
+        Ok(PageDocument {
+            url: base_url.unwrap_or("").to_string(),
+            final_url: base_url.unwrap_or("").to_string(),
+            status: 200,
+            title,
+            byline: cleaned.byline.or_else(|| metadata.author.clone()),
+            content,
+            metadata,
+            json_ld,
+            token_count: final_token_count,
+            tokenizer: options.tokenizer.as_str().to_string(),
+            truncated,
+            subtitles: None,
+            danmaku: None,
+            comments: None,
+            conclusion: None,
+            links,
+            images,
+            tables,
+        })
+    }
+}
+
+/// Prepends YAML frontmatter to Markdown content for structured LLM reading.
+fn prepend_frontmatter(
+    content: &str,
+    title: Option<&str>,
+    url: Option<&str>,
+    metadata: &PageMetadata,
+) -> String {
+    let mut fm = String::from("---\n");
+
+    if let Some(t) = title {
+        fm.push_str(&format!("title: \"{}\"\n", t.replace('"', "\\\"")));
+    }
+    if let Some(u) = url {
+        fm.push_str(&format!("url: \"{u}\"\n"));
+    }
+    if let Some(ref pub_time) = metadata.published_time {
+        fm.push_str(&format!("published: \"{pub_time}\"\n"));
+    }
+    if let Some(ref author) = metadata.author {
+        fm.push_str(&format!("author: \"{}\"\n", author.replace('"', "\\\"")));
+    }
+    if let Some(ref desc) = metadata.description {
+        fm.push_str(&format!("description: \"{}\"\n", desc.replace('"', "\\\"")));
+    }
+    if let Some(ref cover) = metadata.cover_image {
+        fm.push_str(&format!("cover: \"{cover}\"\n"));
+    }
+    fm.push_str("---\n\n");
+    fm.push_str(content);
+
+    fm
+}
+
+/// Converts HTML string to clean, whitespace-collapsed plain text.
+fn html_to_plain_text(html: &str) -> String {
+    let doc = Html::parse_fragment(html);
+    let mut text_parts = Vec::new();
+
+    for text in doc.root_element().text() {
+        let trimmed = text.trim();
+        if !trimmed.is_empty() {
+            text_parts.push(trimmed);
+        }
+    }
+
+    text_parts.join(" ")
+}

@@ -1,0 +1,10 @@
+/target
+**/*.rs.bk
+*.swp
+*.log
+.DS_Store
+.env
+*.txt
+*.rlib
+.pageclaw_cache/
+cookies.txt
