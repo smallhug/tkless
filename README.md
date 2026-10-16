@@ -256,6 +256,12 @@ pageclaw search "Rust 教程" --fetch-content --cdp http://127.0.0.1:9222
 pageclaw "https://store.example.com/item/1" --schema '{"fields":{"title":"h1","price":".price-val","link":"a@href","tags":"[.tag]"}}' -f json
 # 支持 items_selector 列表循环模式，一次性抽取整页商品卡片或文章列表：
 pageclaw "https://news.example.com/" --schema '{"items_selector":".post-item","fields":{"title":"h2","url":"a@href","author":".author"}}' -f json
+
+# 28. 🔍 页面 DOM 结构骨架分析与 Schema 自动脚手架 (Scaffolding，超低 Token 探索未知页面)
+# 自动探测目标页面内的重复列表容器 (如商品、文章、卡片) 并输出就绪的 JSON Schema 模版：
+pageclaw "https://store.example.com/items" --scaffold
+# 也可以对 stdin 管道传入的 HTML 进行结构脚手架分析：
+cat ./page.html | pageclaw - --scaffold
 ```
 
 ---
@@ -301,6 +307,7 @@ AI Agent（如 **Claude Desktop**、**Cursor**、**Windsurf** 等）可以直接
 | **`web_search`** | **免 API Key 的通用全网搜索**（支持 Bing、Google 与 Auto 容灾），支持生态定向标签（微信公众号、知乎、GitHub、掘金）与 `--fetch-content` 搜索即抓取一体化调研（可叠加 CDP 渲染与 Schema 抽取） | `query` (必填), `scope` (all/wechat/zhihu/github/juejin), `engine` (bing/google/auto, 默认 bing), `fetch_content` (可选布尔值), `max_tokens_per_page` (可选整数), `cdp_endpoint`, `schema`, `limit` (默认 5), `format` (markdown/json) |
 | **`crawl_site`** | **整站文档递归爬取与知识库汇编**（从种子 URL 广度优先发现超链接），支持 CDP 无头渲染、Token 总预算上限截断与 Schema 抽取，自动生成带目录索引（TOC）的单文件集成 Markdown 知识库或结构化 JSON | `seed_url` (必填), `max_depth` (默认 2, 最大 5), `max_pages` (默认 20, 最大 100), `same_path_prefix` (可选布尔值), `max_tokens`, `cdp_endpoint`, `schema`, `format` (markdown/json) |
 | **`login_platform`** | **平台凭据扫码授权与登录辅助**，发起 B站/知乎 交互式登录提取会话 Cookie 并安全隔离写入凭据文件（带平台前缀，防多网站覆盖） | `platform` (bilibili/zhihu, 必填), `output_cookie_file` (默认 ./cookies.txt), `no_browser` (默认 true), `timeout_secs` (默认 180) |
+| **`scaffold_schema`** | **DOM 结构骨架探测与 Schema 自动生成**，分析 URL 或 raw HTML，自动识别重复卡片容器与字段选择器，输出就绪的提取模板（极大降低 Agent 前期试错 Token） | `url`, `html`, `cdp_endpoint` |
 | **`fetch_bilibili_feed`** | 毫秒级拉取 B站 首页推荐流、全站热榜或分区排行榜 GFM 表格 | `feed_type` (recommendations/popular/ranking), `partition`, `format` |
 | **`search_bilibili`** | 按关键词搜索 B站 视频，输出结构化 GFM 表格或 JSON，支持分页与排序 | `keyword` (必填), `page`, `order`, `format`, `use_cache` |
 | **`download_media`** | 下载 B站 视频高清封面图片或免登录渐进式 MP4 视频流至本地磁盘 | `url_or_bvid` (必填), `media_type` (video/cover), `quality`, `destination` |
@@ -338,6 +345,8 @@ OPTIONS:
         --frontmatter          在 Markdown 顶部添加 YAML 元数据 Frontmatter
         --json-ld              仅提取并输出页面内的 JSON-LD 结构化数据
         --selector <CSS>       CSS 选择器定向提取 (DOM 阶段剥离无关节点，如 'article.content, #readme')
+        --schema <JSON_OR_PATH> 结构化实体提取 Schema (支持内联 JSON 或 JSON 模式文件路径)
+        --scaffold             分析页面 DOM 结构骨架并生成建议的 Schema 模版 (节省 Agent 探索 Token)
         --extract-links        提取页面全量去重超链接清单 (在 -f json 中为 links 数组，在 md 中为尾部清单)
         --extract-images       提取页面全量图片资产清单 (在 -f json 中为 images 数组，在 md 中为尾部清单)
         --extract-tables       深度解析页面中的 table 为二维数组与字典对象 records

@@ -37,7 +37,10 @@ pub use model::{
     OutputFormat, PageDocument, PageMetadata, SearchEngineKind, SubtitleLine, TokenizerKind,
     VideoConclusion, VideoQuality,
 };
-pub use schema::{extract_entities, ExtractionSchema, FieldDef, FieldDetail};
+pub use schema::{
+    extract_entities, scaffold_dom_skeleton, ExtractionSchema, FieldDef, FieldDetail,
+    ScaffoldReport,
+};
 pub use search::{
     format_search_fetch_markdown, format_search_results_markdown, search_bing, search_google,
     web_search, web_search_and_fetch, web_search_with_engine, SearchFetchItem, SearchResultItem,
@@ -114,26 +117,18 @@ impl PageclawEngine {
         // Enforce SSRF validation upfront for all URLs before entering platform adapters or standard fetching
         self.fetcher.validate_ssrf(&parsed_url).await?;
 
-        // 0. Attempt CDP headless browser extraction if an endpoint is configured
-        if let Some(ref cdp_endpoint) = options.cdp_endpoint {
-            debug!(
-                endpoint = %cdp_endpoint,
-                url = url,
-                "使用 CDP 无头浏览器渲染抓取页面"
-            );
-            let cdp_opts = cdp::CdpOptions {
-                endpoint: cdp_endpoint.clone(),
-                wait_ms: options.cdp_wait_ms,
-                timeout_ms: None,
-                user_agent: self.fetcher.options().user_agent.clone(),
-                cookie: self.fetcher.resolve_cookie_for_url(&parsed_url),
-            };
-            let html = cdp::fetch_html_via_cdp(url, &cdp_opts).await?;
-            let mut doc = self.process_html(&html, Some(url), options)?;
-            doc.url = url.to_string();
-            doc.final_url = url.to_string();
-            doc.status = 200;
-            return Ok(doc);
+        // 0. If no_adapter is explicitly requested and CDP is specified, go directly to CDP
+        if options.no_adapter {
+            if let Some(ref cdp_endpoint) = options.cdp_endpoint {
+                debug!(
+                    endpoint = %cdp_endpoint,
+                    url = url,
+                    "使用 CDP 无头浏览器渲染抓取页面 (no_adapter)"
+                );
+                return self
+                    .fetch_via_cdp_and_process(url, &parsed_url, options, cdp_endpoint)
+                    .await;
+            }
         }
 
         // 1. Attempt platform adapter fast path if enabled
@@ -168,14 +163,35 @@ impl PageclawEngine {
                         warn!(
                             platform = adapter.name(),
                             error = %err,
-                            "Platform adapter extraction failed, falling back to standard HTML fetch"
+                            "Platform adapter extraction failed, attempting fallback"
                         );
+                        // Adaptive CDP fallback: If adapter failed (e.g. anti-scraping challenge) and CDP is available, fallback to CDP!
+                        if let Some(ref cdp_endpoint) = options.cdp_endpoint {
+                            debug!(endpoint = %cdp_endpoint, "平台适配器受阻，自适应回退至 CDP 渲染会话");
+                            if let Ok(doc) = self
+                                .fetch_via_cdp_and_process(url, &parsed_url, options, cdp_endpoint)
+                                .await
+                            {
+                                return Ok(doc);
+                            }
+                        }
                     }
                 }
             }
         }
 
-        // 2. Standard HTML fetch and Readability extraction fallback
+        // 2. Standard HTML fetch or direct CDP if configured and no adapter matched
+        if let Some(ref cdp_endpoint) = options.cdp_endpoint {
+            debug!(
+                endpoint = %cdp_endpoint,
+                url = url,
+                "使用 CDP 无头浏览器会话渲染页面"
+            );
+            return self
+                .fetch_via_cdp_and_process(url, &parsed_url, options, cdp_endpoint)
+                .await;
+        }
+
         let response = self.fetcher.fetch(url).await?;
 
         let mut doc = self.process_html(&response.html, Some(&response.final_url), options)?;
@@ -184,6 +200,29 @@ impl PageclawEngine {
         doc.status = response.status;
         doc.truncated = doc.truncated || response.truncated;
 
+        Ok(doc)
+    }
+
+    /// Helper to fetch rendered HTML via CDP and run it through the extraction pipeline.
+    async fn fetch_via_cdp_and_process(
+        &self,
+        url: &str,
+        parsed_url: &Url,
+        options: &ExtractionOptions,
+        cdp_endpoint: &str,
+    ) -> Result<PageDocument, PageclawError> {
+        let cdp_opts = cdp::CdpOptions {
+            endpoint: cdp_endpoint.to_string(),
+            wait_ms: options.cdp_wait_ms,
+            timeout_ms: None,
+            user_agent: self.fetcher.options().user_agent.clone(),
+            cookie: self.fetcher.resolve_cookie_for_url(parsed_url),
+        };
+        let html = cdp::fetch_html_via_cdp(url, &cdp_opts).await?;
+        let mut doc = self.process_html(&html, Some(url), options)?;
+        doc.url = url.to_string();
+        doc.final_url = url.to_string();
+        doc.status = 200;
         Ok(doc)
     }
 

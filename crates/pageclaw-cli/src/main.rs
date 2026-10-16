@@ -700,6 +700,36 @@ async fn run(args: CliArgs) -> Result<()> {
     }
 
     // -------------------------------------------------------------------------
+    // Execution Branch 1.8: DOM Structure Skeleton & Schema Scaffolding
+    // -------------------------------------------------------------------------
+    if args.scaffold {
+        let raw_html = if target == "-" {
+            let mut stdin_content = String::new();
+            io::stdin()
+                .read_to_string(&mut stdin_content)
+                .context("Failed to read HTML content from standard input")?;
+            stdin_content
+        } else if let Some(ref cdp_endpoint) = args.cdp {
+            let parsed_url = url::Url::parse(&target)?;
+            let cdp_opts = pageclaw_core::cdp::CdpOptions {
+                endpoint: cdp_endpoint.clone(),
+                wait_ms: args.cdp_wait_ms.or(Some(1000)),
+                timeout_ms: None,
+                user_agent: args.user_agent.clone(),
+                cookie: engine.fetcher().resolve_cookie_for_url(&parsed_url),
+            };
+            pageclaw_core::cdp::fetch_html_via_cdp(&target, &cdp_opts).await?
+        } else {
+            let resp = engine.fetcher().fetch(&target).await?;
+            resp.html
+        };
+
+        let report = pageclaw_core::schema::scaffold_dom_skeleton(&raw_html);
+        output::write_payload(&report.summary_markdown, args.output_file.as_deref())?;
+        return Ok(());
+    }
+
+    // -------------------------------------------------------------------------
     // Standard Document Extraction / Fetch Pipeline
     // -------------------------------------------------------------------------
     let doc = if target == "-" {
