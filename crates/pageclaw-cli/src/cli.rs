@@ -221,6 +221,14 @@ pub struct CliArgs {
     #[arg(long = "no-adapter", help_heading = "通用提取选项 (General Options)")]
     pub no_adapter: bool,
 
+    /// 结构化实体提取 Schema (支持内联 JSON 或 JSON 模式文件路径，直接抽取所需字段并削减 Token)
+    #[arg(
+        long = "schema",
+        value_name = "JSON_OR_PATH",
+        help_heading = "通用提取选项 (General Options)"
+    )]
+    pub schema: Option<String>,
+
     // =========================================================================
     // 哔哩哔哩专属选项 (Bilibili Options)
     // =========================================================================
@@ -451,6 +459,22 @@ pub struct CliArgs {
     )]
     pub allow_private_addresses: bool,
 
+    /// Chrome DevTools Protocol (CDP) 远程调试端点 (如 http://127.0.0.1:9222 或 ws://...)，用于 JS 动态渲染或防爬挑战绕过
+    #[arg(
+        long = "cdp",
+        value_name = "ENDPOINT",
+        help_heading = "网络与身份认证 (Network & Auth)"
+    )]
+    pub cdp: Option<String>,
+
+    /// CDP 页面加载后额外等待 DOM 动态渲染完成的时间 (毫秒) [默认: 1000]
+    #[arg(
+        long = "cdp-wait",
+        value_name = "MS",
+        help_heading = "网络与身份认证 (Network & Auth)"
+    )]
+    pub cdp_wait_ms: Option<u64>,
+
     /// Do not fail with non-zero exit code on HTTP 4xx or 5xx error responses (returns body with exit 0)
     #[arg(
         long = "allow-http-errors",
@@ -637,6 +661,14 @@ pub struct SearchSubArgs {
         help = "Maximum tokens extracted per webpage during search & fetch [default: 1500]"
     )]
     pub max_tokens_per_page: Option<usize>,
+
+    /// Chrome DevTools Protocol (CDP) 远程调试端点 (如 http://127.0.0.1:9222)
+    #[arg(long = "cdp", value_name = "ENDPOINT")]
+    pub cdp: Option<String>,
+
+    /// CDP 页面加载后额外等待 DOM 动态渲染完成的时间 (毫秒)
+    #[arg(long = "cdp-wait", value_name = "MS")]
+    pub cdp_wait_ms: Option<u64>,
 }
 
 #[derive(clap::Args, Debug, Clone)]
@@ -669,6 +701,18 @@ pub struct BatchArgs {
     /// Extract and structure hyperlinks
     #[arg(long = "extract-links")]
     pub extract_links: bool,
+
+    /// 结构化实体提取 Schema (支持内联 JSON 或 JSON 模式文件路径)
+    #[arg(long = "schema", value_name = "JSON_OR_PATH")]
+    pub schema: Option<String>,
+
+    /// Chrome DevTools Protocol (CDP) 远程调试端点 (如 http://127.0.0.1:9222)
+    #[arg(long = "cdp", value_name = "ENDPOINT")]
+    pub cdp: Option<String>,
+
+    /// CDP 页面加载后额外等待 DOM 动态渲染完成的时间 (毫秒)
+    #[arg(long = "cdp-wait", value_name = "MS")]
+    pub cdp_wait_ms: Option<u64>,
 
     /// Extract and structure tables
     #[arg(long = "extract-tables")]
@@ -768,4 +812,12 @@ pub struct CrawlArgs {
     /// Write assembled crawl report to file instead of stdout
     #[arg(short = 'o', long = "output", value_name = "FILE")]
     pub output: Option<PathBuf>,
+
+    /// Chrome DevTools Protocol (CDP) 远程调试端点 (如 http://127.0.0.1:9222)
+    #[arg(long = "cdp", value_name = "ENDPOINT")]
+    pub cdp: Option<String>,
+
+    /// CDP 页面加载后额外等待 DOM 动态渲染完成的时间 (毫秒)
+    #[arg(long = "cdp-wait", value_name = "MS")]
+    pub cdp_wait_ms: Option<u64>,
 }

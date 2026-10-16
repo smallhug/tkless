@@ -46,6 +46,12 @@ pub enum PageclawError {
 
     #[error("Connection timed out: {0}")]
     ConnectionTimeout(String),
+
+    #[error("CDP browser error: {0}")]
+    CdpError(String),
+
+    #[error("Schema extraction error: {0}")]
+    SchemaError(String),
 }
 
 impl PageclawError {
@@ -65,6 +71,8 @@ impl PageclawError {
             PageclawError::Io(_)
             | PageclawError::AdapterError { .. }
             | PageclawError::CacheError(_)
+            | PageclawError::CdpError(_)
+            | PageclawError::SchemaError(_)
             | PageclawError::McpError { .. } => 1,
         }
     }

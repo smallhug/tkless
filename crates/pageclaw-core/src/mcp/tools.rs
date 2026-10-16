@@ -149,7 +149,19 @@ pub fn get_available_tools() -> Vec<McpTool> {
                     },
                     "cookie_file": {
                         "type": "string",
-                        "description": "Path to cookie file (supports Netscape and standard header formats)"
+                        "description": "Path to cookie file (supports platform prefix format like bilibili: ... or [platform] INI sections)"
+                    },
+                    "cdp_endpoint": {
+                        "type": "string",
+                        "description": "Chrome DevTools Protocol (CDP) endpoint (e.g. 'http://127.0.0.1:9222') for JS-rendered dynamic SPAs or anti-bot challenge bypass"
+                    },
+                    "cdp_wait_ms": {
+                        "type": "integer",
+                        "description": "Additional wait time in milliseconds for CDP DOM hydration (default: 1000)"
+                    },
+                    "schema": {
+                        "type": "string",
+                        "description": "Extraction schema (JSON string or file path) defining fields/selectors to extract structured JSON entities directly"
                     }
                 },
                 "required": ["url"]

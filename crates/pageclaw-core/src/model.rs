@@ -184,6 +184,12 @@ pub struct ExtractionOptions {
     pub comments_limit: Option<usize>,
     /// Whether to fetch official AI video conclusion and outline summary.
     pub conclusion: bool,
+    /// Optional Chrome DevTools Protocol endpoint (e.g. 'http://127.0.0.1:9222' or 'ws://...') for JS-rendered extraction.
+    pub cdp_endpoint: Option<String>,
+    /// Optional wait time in milliseconds for CDP DOM hydration.
+    pub cdp_wait_ms: Option<u64>,
+    /// Optional schema definition (JSON string or file path) for structured entity extraction.
+    pub schema: Option<String>,
 }
 
 impl Default for ExtractionOptions {
@@ -210,6 +216,9 @@ impl Default for ExtractionOptions {
             comments: false,
             comments_limit: None,
             conclusion: false,
+            cdp_endpoint: None,
+            cdp_wait_ms: None,
+            schema: None,
         }
     }
 }
@@ -390,4 +399,7 @@ pub struct PageDocument {
     /// Extracted structured tables.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tables: Option<Vec<ExtractedTable>>,
+    /// Extracted structured entity according to schema definition.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub entity: Option<serde_json::Value>,
 }

@@ -264,6 +264,9 @@ async fn run(args: CliArgs) -> Result<()> {
         comments: args.bili_cm || args.bili_cm_limit.is_some(),
         comments_limit: args.bili_cm_limit,
         conclusion: args.bili_sum,
+        cdp_endpoint: args.cdp.clone(),
+        cdp_wait_ms: args.cdp_wait_ms,
+        schema: args.schema.clone(),
     };
 
     // -------------------------------------------------------------------------
@@ -332,12 +335,18 @@ async fn run(args: CliArgs) -> Result<()> {
         };
 
         if search_args.fetch_content {
+            let mut search_opts = extraction_options.clone();
+            if search_args.cdp.is_some() {
+                search_opts.cdp_endpoint = search_args.cdp.clone();
+                search_opts.cdp_wait_ms = search_args.cdp_wait_ms;
+            }
+
             let items = pageclaw_core::web_search_and_fetch(
                 &engine,
                 &effective_query,
                 search_args.limit,
                 search_args.engine.into(),
-                &extraction_options,
+                &search_opts,
                 search_args.max_tokens_per_page,
             )
             .await
@@ -438,6 +447,9 @@ async fn run(args: CliArgs) -> Result<()> {
             comments: false,
             comments_limit: None,
             conclusion: false,
+            cdp_endpoint: batch_args.cdp.clone().or_else(|| args.cdp.clone()),
+            cdp_wait_ms: batch_args.cdp_wait_ms.or(args.cdp_wait_ms),
+            schema: batch_args.schema.clone().or_else(|| args.schema.clone()),
         });
 
         let semaphore =
@@ -512,11 +524,17 @@ async fn run(args: CliArgs) -> Result<()> {
             exclude_patterns: pageclaw_core::CrawlOptions::default().exclude_patterns,
         };
 
+        let mut crawl_extraction_options = extraction_options.clone();
+        if crawl_args.cdp.is_some() {
+            crawl_extraction_options.cdp_endpoint = crawl_args.cdp.clone();
+            crawl_extraction_options.cdp_wait_ms = crawl_args.cdp_wait_ms;
+        }
+
         let report = pageclaw_core::crawl_site(
             &engine,
             &crawl_args.url,
             &crawl_options,
-            &extraction_options,
+            &crawl_extraction_options,
         )
         .await
         .context("Failed to crawl site")?;

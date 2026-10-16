@@ -277,6 +277,18 @@ impl McpServer {
             .get("cookie_file")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
+        let cdp_endpoint = args
+            .get("cdp_endpoint")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        let cdp_wait_ms = args.get("cdp_wait_ms").and_then(|v| v.as_u64());
+        let schema = args.get("schema").map(|v| {
+            if let Some(s) = v.as_str() {
+                s.to_string()
+            } else {
+                v.to_string()
+            }
+        });
 
         let options = ExtractionOptions {
             mode,
@@ -300,6 +312,9 @@ impl McpServer {
             comments,
             comments_limit,
             conclusion,
+            cdp_endpoint,
+            cdp_wait_ms,
+            schema,
         };
 
         // Cache check

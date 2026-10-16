@@ -479,6 +479,7 @@ impl ZhihuAdapter {
             links: None,
             images: None,
             tables: None,
+            entity: None,
         })
     }
 
@@ -537,6 +538,7 @@ impl ZhihuAdapter {
             links: None,
             images: None,
             tables: None,
+            entity: None,
         })
     }
 
@@ -629,6 +631,7 @@ impl ZhihuAdapter {
             links: None,
             images: None,
             tables: None,
+            entity: None,
         })
     }
 }
