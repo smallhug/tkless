@@ -33,7 +33,7 @@ pub trait PlatformAdapter: Send + Sync {
     /// Fetches and formats the platform content into a PageDocument.
     fn extract<'a>(
         &'a self,
-        client: &'a reqwest::Client,
+        fetcher: &'a crate::fetcher::Fetcher,
         url: &'a Url,
         options: &'a ExtractionOptions,
     ) -> BoxFuture<'a, Result<PageDocument, PageclawError>>;
@@ -99,7 +99,7 @@ mod tests {
         }
         fn extract<'a>(
             &'a self,
-            _client: &'a reqwest::Client,
+            _fetcher: &'a crate::fetcher::Fetcher,
             _url: &'a Url,
             _options: &'a ExtractionOptions,
         ) -> BoxFuture<'a, Result<PageDocument, PageclawError>> {

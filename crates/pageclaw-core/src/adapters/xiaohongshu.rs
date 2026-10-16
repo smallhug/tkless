@@ -31,14 +31,14 @@ impl XiaohongshuAdapter {
 
     async fn do_extract(
         &self,
-        client: &reqwest::Client,
+        fetcher: &crate::fetcher::Fetcher,
         url: &Url,
         options: &ExtractionOptions,
     ) -> Result<PageDocument, PageclawError> {
         debug!(url = %url, "Executing Xiaohongshu adapter extraction");
 
-        let resp = client
-            .get(url.as_str())
+        let resp = fetcher
+            .get(url)
             .header(
                 "User-Agent",
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",
@@ -215,11 +215,11 @@ impl PlatformAdapter for XiaohongshuAdapter {
 
     fn extract<'a>(
         &'a self,
-        client: &'a reqwest::Client,
+        fetcher: &'a crate::fetcher::Fetcher,
         url: &'a Url,
         options: &'a ExtractionOptions,
     ) -> BoxFuture<'a, Result<PageDocument, PageclawError>> {
-        Box::pin(self.do_extract(client, url, options))
+        Box::pin(self.do_extract(fetcher, url, options))
     }
 }
 

@@ -178,7 +178,7 @@ impl BilibiliAdapter {
 
     async fn do_extract(
         &self,
-        client: &reqwest::Client,
+        fetcher: &crate::fetcher::Fetcher,
         url: &Url,
         options: &ExtractionOptions,
     ) -> Result<PageDocument, PageclawError> {
@@ -190,21 +190,21 @@ impl BilibiliAdapter {
         debug!(route = ?route, "Executing Bilibili adapter extraction");
 
         match route {
-            BilibiliRoute::Video(bvid) => self.extract_video(client, &bvid, url, options).await,
+            BilibiliRoute::Video(bvid) => self.extract_video(fetcher, &bvid, url, options).await,
             BilibiliRoute::Ranking { rid, category_name } => {
-                self.extract_ranking(client, rid, &category_name, url, options)
+                self.extract_ranking(fetcher, rid, &category_name, url, options)
                     .await
             }
-            BilibiliRoute::Popular => self.extract_popular(client, url, options).await,
+            BilibiliRoute::Popular => self.extract_popular(fetcher, url, options).await,
             BilibiliRoute::Recommendations => {
-                self.extract_recommendations(client, url, options).await
+                self.extract_recommendations(fetcher, url, options).await
             }
             BilibiliRoute::Search {
                 keyword,
                 page,
                 order,
             } => {
-                self.extract_search(client, &keyword, page, order.as_deref(), url, options)
+                self.extract_search(fetcher, &keyword, page, order.as_deref(), url, options)
                     .await
             }
         }
@@ -212,13 +212,13 @@ impl BilibiliAdapter {
 
     /// Fetches structured video metadata from Bilibili API.
     pub async fn fetch_video_details(
-        client: &reqwest::Client,
+        fetcher: &crate::fetcher::Fetcher,
         bvid: &str,
     ) -> Result<VideoViewData, PageclawError> {
         let api_url = format!("https://api.bilibili.com/x/web-interface/view?bvid={bvid}");
 
-        let resp: BiliResponse<VideoViewData> = client
-            .get(&api_url)
+        let resp: BiliResponse<VideoViewData> = fetcher
+            .get_str(&api_url)
             .header("Referer", "https://www.bilibili.com/")
             .send()
             .await?
@@ -240,7 +240,7 @@ impl BilibiliAdapter {
 
     /// Fetches official or AI CC subtitle lines for a given video CID and BVID.
     pub async fn fetch_subtitles(
-        client: &reqwest::Client,
+        fetcher: &crate::fetcher::Fetcher,
         bvid: &str,
         cid: u64,
         view_data: &VideoViewData,
@@ -255,8 +255,8 @@ impl BilibiliAdapter {
         // 2. Fallback to /x/player/v2 if view API returned empty subtitles
         if subtitle_list.is_empty() {
             let player_api = format!("https://api.bilibili.com/x/player/v2?cid={cid}&bvid={bvid}");
-            if let Ok(resp) = client
-                .get(&player_api)
+            if let Ok(resp) = fetcher
+                .get_str(&player_api)
                 .header("Referer", "https://www.bilibili.com/")
                 .send()
                 .await
@@ -289,8 +289,8 @@ impl BilibiliAdapter {
         let sub_url = normalize_cover_url(&target_sub.subtitle_url);
 
         // 4. Download and parse subtitle JSON
-        let sub_resp: SubtitleFileResponse = client
-            .get(&sub_url)
+        let sub_resp: SubtitleFileResponse = fetcher
+            .get_str(&sub_url)
             .header("Referer", "https://www.bilibili.com/")
             .send()
             .await?
@@ -312,14 +312,14 @@ impl BilibiliAdapter {
 
     /// Fetches timestamped video danmaku entries for a given video CID with optional limit.
     pub async fn fetch_danmaku(
-        client: &reqwest::Client,
+        fetcher: &crate::fetcher::Fetcher,
         cid: u64,
         limit: Option<usize>,
     ) -> Result<Vec<DanmakuEntry>, PageclawError> {
         let api_url = format!("https://comment.bilibili.com/{cid}.xml");
 
-        let resp = client
-            .get(&api_url)
+        let resp = fetcher
+            .get_str(&api_url)
             .header("Referer", "https://www.bilibili.com/")
             .send()
             .await?;
@@ -337,7 +337,7 @@ impl BilibiliAdapter {
 
     /// Fetches top liked comments for a given video AID with optional limit and pagination.
     pub async fn fetch_comments(
-        client: &reqwest::Client,
+        fetcher: &crate::fetcher::Fetcher,
         aid: u64,
         limit: Option<usize>,
     ) -> Result<Vec<CommentEntry>, PageclawError> {
@@ -352,8 +352,8 @@ impl BilibiliAdapter {
                 "https://api.bilibili.com/x/v2/reply?type=1&oid={aid}&sort=2&pn={page}&ps={ps}"
             );
 
-            let resp: BiliResponse<ReplyData> = client
-                .get(&api_url)
+            let resp: BiliResponse<ReplyData> = fetcher
+                .get_str(&api_url)
                 .header("Referer", "https://www.bilibili.com/")
                 .send()
                 .await?
@@ -408,12 +408,12 @@ impl BilibiliAdapter {
 
     /// Fetches official AI-generated video conclusion and outline summary.
     pub async fn fetch_conclusion(
-        client: &reqwest::Client,
+        fetcher: &crate::fetcher::Fetcher,
         bvid: &str,
         cid: u64,
         up_mid: u64,
     ) -> Result<Option<VideoConclusion>, PageclawError> {
-        let mixin_key = match get_wbi_mixin_key(client).await {
+        let mixin_key = match get_wbi_mixin_key(fetcher.client()).await {
             Ok(k) => k,
             Err(e) => {
                 debug!(error = %e, "Failed to obtain WBI mixin key for conclusion, skipping");
@@ -437,8 +437,8 @@ impl BilibiliAdapter {
         let api_url =
             format!("https://api.bilibili.com/x/web-interface/view/conclusion/get?{signed_query}");
 
-        let resp: ConclusionApiResponse = client
-            .get(&api_url)
+        let resp: ConclusionApiResponse = fetcher
+            .get_str(&api_url)
             .header("Referer", "https://www.bilibili.com/")
             .send()
             .await?
@@ -485,7 +485,7 @@ impl BilibiliAdapter {
 
     /// Fetches the progressive MP4 stream URL for a given video CID and quality.
     pub async fn fetch_play_url(
-        client: &reqwest::Client,
+        fetcher: &crate::fetcher::Fetcher,
         bvid: &str,
         cid: u64,
         quality: VideoQuality,
@@ -495,8 +495,8 @@ impl BilibiliAdapter {
             "https://api.bilibili.com/x/player/playurl?bvid={bvid}&cid={cid}&qn={qn}&fnval=0&fnver=0"
         );
 
-        let resp: BiliResponse<PlayUrlData> = client
-            .get(&api_url)
+        let resp: BiliResponse<PlayUrlData> = fetcher
+            .get_str(&api_url)
             .header("Referer", "https://www.bilibili.com/")
             .send()
             .await?
@@ -518,22 +518,27 @@ impl BilibiliAdapter {
 
     /// Downloads the video cover image to the destination path.
     pub async fn download_cover(
-        client: &reqwest::Client,
+        fetcher: &crate::fetcher::Fetcher,
         bvid: &str,
         dest_path: Option<&Path>,
         reporter: Option<&dyn DownloadProgressReporter>,
     ) -> Result<PathBuf, PageclawError> {
-        let details = Self::fetch_video_details(client, bvid).await?;
+        let details = Self::fetch_video_details(fetcher, bvid).await?;
         let cover_url = normalize_cover_url(&details.pic);
         let default_name = format!("{bvid}_cover.jpg");
         let target_path = resolve_download_path(dest_path, &default_name);
 
+        let cookie_str = Url::parse(&cover_url)
+            .ok()
+            .and_then(|u| fetcher.resolve_cookie_for_url(&u));
+
         download_file(
-            client,
+            fetcher.client(),
             DownloadOptions {
                 url: &cover_url,
                 destination: &target_path,
                 referer: Some("https://www.bilibili.com/"),
+                cookie: cookie_str.as_deref(),
                 reporter,
             },
         )
@@ -544,14 +549,14 @@ impl BilibiliAdapter {
 
     /// Downloads the progressive MP4 video stream to the destination path.
     pub async fn download_video(
-        client: &reqwest::Client,
+        fetcher: &crate::fetcher::Fetcher,
         bvid: &str,
         page_num: usize,
         quality: VideoQuality,
         dest_path: Option<&Path>,
         reporter: Option<&dyn DownloadProgressReporter>,
     ) -> Result<PathBuf, PageclawError> {
-        let details = Self::fetch_video_details(client, bvid).await?;
+        let details = Self::fetch_video_details(fetcher, bvid).await?;
 
         // Resolve target CID based on page_num (1-indexed)
         let cid = if page_num > 0 && page_num <= details.pages.len() {
@@ -567,7 +572,7 @@ impl BilibiliAdapter {
             });
         };
 
-        let play_data = Self::fetch_play_url(client, bvid, cid, quality).await?;
+        let play_data = Self::fetch_play_url(fetcher, bvid, cid, quality).await?;
         let durl_item = play_data
             .durl
             .first()
@@ -589,8 +594,6 @@ impl BilibiliAdapter {
         candidate_urls.push(durl_item.url.clone());
         candidate_urls.extend(durl_item.backup_url.clone());
 
-        // Prioritize official stable CDNs (e.g. *.bilivideo.com, *.bilibili.com)
-        // while deprioritizing unstable local PCDN nodes (e.g. .mcdn., :4483, mountaintoys)
         candidate_urls.sort_by_key(|u| {
             if u.contains("mountaintoys") || u.contains("mcdn") || u.contains(":4483") {
                 1
@@ -604,12 +607,17 @@ impl BilibiliAdapter {
 
         for stream_url in &candidate_urls {
             debug!(url = %stream_url, "Attempting video stream download from candidate mirror");
+            let cookie_str = Url::parse(stream_url)
+                .ok()
+                .and_then(|u| fetcher.resolve_cookie_for_url(&u));
+
             match download_file(
-                client,
+                fetcher.client(),
                 DownloadOptions {
                     url: stream_url,
                     destination: &target_path,
                     referer: Some("https://www.bilibili.com/"),
+                    cookie: cookie_str.as_deref(),
                     reporter,
                 },
             )
@@ -642,12 +650,12 @@ impl BilibiliAdapter {
 
     async fn extract_video(
         &self,
-        client: &reqwest::Client,
+        fetcher: &crate::fetcher::Fetcher,
         bvid: &str,
         url: &Url,
         options: &ExtractionOptions,
     ) -> Result<PageDocument, PageclawError> {
-        let data = Self::fetch_video_details(client, bvid).await?;
+        let data = Self::fetch_video_details(fetcher, bvid).await?;
 
         let title = data.title.clone();
         let author = data.owner.name.clone();
@@ -742,7 +750,7 @@ impl BilibiliAdapter {
         // Subtitles extraction
         let mut subtitles = None;
         if options.subtitles {
-            match Self::fetch_subtitles(client, bvid, data.cid, &data).await {
+            match Self::fetch_subtitles(fetcher, bvid, data.cid, &data).await {
                 Ok(lines) => {
                     if !lines.is_empty() {
                         content.push_str("### 视频字幕 (Subtitles)\n\n");
@@ -771,7 +779,7 @@ impl BilibiliAdapter {
         // Danmaku extraction
         let mut danmaku = None;
         if options.danmaku {
-            match Self::fetch_danmaku(client, data.cid, options.danmaku_limit).await {
+            match Self::fetch_danmaku(fetcher, data.cid, options.danmaku_limit).await {
                 Ok(entries) => {
                     if !entries.is_empty() {
                         content.push_str("### 视频时间轴弹幕 (Danmaku)\n\n");
@@ -789,7 +797,7 @@ impl BilibiliAdapter {
         // Comments extraction
         let mut comments = None;
         if options.comments {
-            match Self::fetch_comments(client, data.aid, options.comments_limit).await {
+            match Self::fetch_comments(fetcher, data.aid, options.comments_limit).await {
                 Ok(cmts) => {
                     if !cmts.is_empty() {
                         content.push_str("### 视频热门评论 (Comments)\n\n");
@@ -807,7 +815,7 @@ impl BilibiliAdapter {
         // Official AI Video Conclusion extraction
         let mut conclusion = None;
         if options.conclusion {
-            match Self::fetch_conclusion(client, bvid, data.cid, data.owner.mid).await {
+            match Self::fetch_conclusion(fetcher, bvid, data.cid, data.owner.mid).await {
                 Ok(Some(conc)) => {
                     content.push_str("### 视频 AI 总结与大纲 (AI Summary & Outline)\n\n");
                     if !conc.summary.trim().is_empty() {
@@ -880,7 +888,7 @@ impl BilibiliAdapter {
 
     async fn extract_ranking(
         &self,
-        client: &reqwest::Client,
+        fetcher: &crate::fetcher::Fetcher,
         rid: u32,
         category_name: &str,
         url: &Url,
@@ -889,8 +897,8 @@ impl BilibiliAdapter {
         let api_url =
             format!("https://api.bilibili.com/x/web-interface/ranking/v2?rid={rid}&type=all");
 
-        let resp: BiliResponse<RankingData> = client
-            .get(&api_url)
+        let resp: BiliResponse<RankingData> = fetcher
+            .get_str(&api_url)
             .header("Referer", "https://www.bilibili.com/")
             .send()
             .await?
@@ -903,7 +911,7 @@ impl BilibiliAdapter {
                 "Ranking API returned risk code or error ({}), falling back to popular video stream",
                 resp.message
             );
-            return self.extract_popular(client, url, options).await;
+            return self.extract_popular(fetcher, url, options).await;
         }
 
         let data = resp.data.ok_or_else(|| PageclawError::AdapterError {
@@ -930,14 +938,14 @@ impl BilibiliAdapter {
 
     async fn extract_popular(
         &self,
-        client: &reqwest::Client,
+        fetcher: &crate::fetcher::Fetcher,
         url: &Url,
         options: &ExtractionOptions,
     ) -> Result<PageDocument, PageclawError> {
         let api_url = "https://api.bilibili.com/x/web-interface/popular?pn=1&ps=20";
 
-        let resp: BiliResponse<PopularData> = client
-            .get(api_url)
+        let resp: BiliResponse<PopularData> = fetcher
+            .get_str(api_url)
             .header("Referer", "https://www.bilibili.com/")
             .send()
             .await?
@@ -975,14 +983,14 @@ impl BilibiliAdapter {
 
     async fn extract_recommendations(
         &self,
-        client: &reqwest::Client,
+        fetcher: &crate::fetcher::Fetcher,
         url: &Url,
         options: &ExtractionOptions,
     ) -> Result<PageDocument, PageclawError> {
         let api_url = "https://api.bilibili.com/x/web-interface/index/top/feed/rcmd?ps=15";
 
-        let resp: BiliResponse<RcmdData> = client
-            .get(api_url)
+        let resp: BiliResponse<RcmdData> = fetcher
+            .get_str(api_url)
             .header("Referer", "https://www.bilibili.com/")
             .send()
             .await?
@@ -1020,7 +1028,7 @@ impl BilibiliAdapter {
 
     async fn extract_search(
         &self,
-        client: &reqwest::Client,
+        fetcher: &crate::fetcher::Fetcher,
         keyword: &str,
         page: u32,
         order: Option<&str>,
@@ -1041,8 +1049,8 @@ impl BilibiliAdapter {
             }
         }
 
-        let resp: BiliResponse<SearchData> = client
-            .get(api_url.as_str())
+        let resp: BiliResponse<SearchData> = fetcher
+            .get(&api_url)
             .header("Referer", "https://search.bilibili.com/")
             .header("Cookie", "buvid3=infoc;")
             .send()
@@ -1242,11 +1250,11 @@ impl PlatformAdapter for BilibiliAdapter {
 
     fn extract<'a>(
         &'a self,
-        client: &'a reqwest::Client,
+        fetcher: &'a crate::fetcher::Fetcher,
         url: &'a Url,
         options: &'a ExtractionOptions,
     ) -> BoxFuture<'a, Result<PageDocument, PageclawError>> {
-        Box::pin(self.do_extract(client, url, options))
+        Box::pin(self.do_extract(fetcher, url, options))
     }
 }
 

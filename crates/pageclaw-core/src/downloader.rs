@@ -1,4 +1,5 @@
 use crate::error::PageclawError;
+use reqwest::header::{HeaderValue, COOKIE};
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::Path;
@@ -22,6 +23,7 @@ pub struct DownloadOptions<'a> {
     pub url: &'a str,
     pub destination: &'a Path,
     pub referer: Option<&'a str>,
+    pub cookie: Option<&'a str>,
     pub reporter: Option<&'a dyn DownloadProgressReporter>,
 }
 
@@ -32,11 +34,16 @@ pub async fn download_file(
 ) -> Result<u64, PageclawError> {
     debug!(url = options.url, dest = %options.destination.display(), "Starting file download");
 
-    let mut request = client
-        .get(options.url)
-        .timeout(Duration::from_secs(1800)); // Allow up to 30 minutes for large media file transfers
+    let mut request = client.get(options.url).timeout(Duration::from_secs(1800)); // Allow up to 30 minutes for large media file transfers
     if let Some(ref_url) = options.referer {
         request = request.header("Referer", ref_url);
+    }
+    if let Some(cookie_str) = options.cookie {
+        if !cookie_str.trim().is_empty() {
+            if let Ok(hval) = HeaderValue::from_str(cookie_str.trim()) {
+                request = request.header(COOKIE, hval);
+            }
+        }
     }
 
     let mut response = request.send().await?;

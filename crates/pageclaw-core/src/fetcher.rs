@@ -71,6 +71,34 @@ impl Fetcher {
         &self.client
     }
 
+    /// Access the underlying fetch options.
+    pub fn options(&self) -> &FetchOptions {
+        &self.options
+    }
+
+    /// Builds a GET request for target URL with domain-scoped cookies automatically attached.
+    /// Strictly protects against cross-host credential leaks.
+    pub fn get(&self, url: &Url) -> reqwest::RequestBuilder {
+        let mut builder = self.client.get(url.clone());
+        if let Some(cookie_str) = self.resolve_cookie_for_url(url) {
+            if !cookie_str.trim().is_empty() {
+                if let Ok(hval) = HeaderValue::from_str(cookie_str.trim()) {
+                    builder = builder.header(COOKIE, hval);
+                }
+            }
+        }
+        builder
+    }
+
+    /// Builds a GET request for a URL string with domain-scoped cookies automatically attached.
+    pub fn get_str(&self, url_str: &str) -> reqwest::RequestBuilder {
+        if let Ok(url) = Url::parse(url_str) {
+            self.get(&url)
+        } else {
+            self.client.get(url_str)
+        }
+    }
+
     /// Resolves the cookie header string scoped strictly to the target URL's domain.
     /// Prevents cross-host credential leakage by only returning credentials matching the platform host.
     pub fn resolve_cookie_for_url(&self, url: &Url) -> Option<String> {
@@ -100,8 +128,18 @@ impl Fetcher {
                     None
                 }
             } else {
-                // If it's an unprefixed cookie, only allow if visiting matching target or initial target
-                Some(cli_cookie.clone())
+                // Security Hardening: If it's an unprefixed cookie, STRICTLY only allow if visiting the authorized initial host!
+                // Never leak to arbitrary third-party hosts during searches, crawls, or cross-origin redirects.
+                if let Some(ref auth_host) = self.options.initial_target_host {
+                    let host = url.host_str().unwrap_or("").to_lowercase();
+                    if is_subdomain_or_exact(&host, auth_host) {
+                        Some(cli_cookie.clone())
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
             }
         } else {
             None
@@ -130,16 +168,7 @@ impl Fetcher {
 
             let mut attempt = 0;
             let resp = loop {
-                let mut req_builder = self.client.get(current_url.clone());
-                if let Some(cookie_str) = self.resolve_cookie_for_url(&current_url) {
-                    if !cookie_str.trim().is_empty() {
-                        if let Ok(hval) = HeaderValue::from_str(cookie_str.trim()) {
-                            req_builder = req_builder.header(COOKIE, hval);
-                        }
-                    }
-                }
-
-                let send_fut = req_builder.send();
+                let send_fut = self.get(&current_url).send();
                 match tokio::time::timeout(connect_timeout, send_fut).await {
                     Ok(Ok(r)) => {
                         let status = r.status();
@@ -1089,5 +1118,43 @@ mod tests {
         assert_eq!(fetcher.resolve_cookie_for_url(&third_party_url), None);
 
         let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_unprefixed_cli_cookie_scoped_to_initial_host() {
+        // 1. Unprefixed CLI cookie with authorized initial_target_host
+        let options = FetchOptions {
+            cookie: Some("SESSDATA=bili_val; bili_jct=csrf_val".to_string()),
+            initial_target_host: Some("bilibili.com".to_string()),
+            ..Default::default()
+        };
+        let fetcher = Fetcher::new(options).unwrap();
+
+        // Matching initial host or subdomain receives the cookie
+        let bili_url = Url::parse("https://api.bilibili.com/x/web-interface/view").unwrap();
+        assert_eq!(
+            fetcher.resolve_cookie_for_url(&bili_url),
+            Some("SESSDATA=bili_val; bili_jct=csrf_val".to_string())
+        );
+
+        // Third-party search result item or cross-origin redirect MUST STRIP the cookie!
+        let third_party = Url::parse("https://rust-lang.org/").unwrap();
+        assert_eq!(fetcher.resolve_cookie_for_url(&third_party), None);
+
+        let attacker = Url::parse("https://attacker.example/steal").unwrap();
+        assert_eq!(fetcher.resolve_cookie_for_url(&attacker), None);
+
+        // 2. Unprefixed CLI cookie WITHOUT initial_target_host (e.g. search --fetch-content command)
+        let search_options = FetchOptions {
+            cookie: Some("SESSDATA=bili_val".to_string()),
+            initial_target_host: None,
+            ..Default::default()
+        };
+        let search_fetcher = Fetcher::new(search_options).unwrap();
+
+        // Any arbitrary host MUST NOT receive the unprefixed cookie!
+        assert_eq!(search_fetcher.resolve_cookie_for_url(&bili_url), None);
+        assert_eq!(search_fetcher.resolve_cookie_for_url(&third_party), None);
+        assert_eq!(search_fetcher.resolve_cookie_for_url(&attacker), None);
     }
 }
