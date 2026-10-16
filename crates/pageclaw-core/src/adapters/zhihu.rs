@@ -105,7 +105,7 @@ impl ZhihuAdapter {
 
     async fn do_extract(
         &self,
-        client: &reqwest::Client,
+        fetcher: &crate::fetcher::Fetcher,
         url: &Url,
         options: &ExtractionOptions,
     ) -> Result<PageDocument, PageclawError> {
@@ -118,18 +118,18 @@ impl ZhihuAdapter {
 
         match route {
             ZhihuRoute::Article { article_id } => {
-                self.extract_article(client, &article_id, url, options)
+                self.extract_article(fetcher, &article_id, url, options)
                     .await
             }
             ZhihuRoute::Answer {
                 question_id,
                 answer_id,
             } => {
-                self.extract_single_answer(client, &question_id, &answer_id, url, options)
+                self.extract_single_answer(fetcher, &question_id, &answer_id, url, options)
                     .await
             }
             ZhihuRoute::Question { question_id } => {
-                self.extract_question_top(client, &question_id, url, options)
+                self.extract_question_top(fetcher, &question_id, url, options)
                     .await
             }
         }
@@ -138,13 +138,13 @@ impl ZhihuAdapter {
     /// Extracts a Zhihu Zhuanlan column article.
     async fn extract_article(
         &self,
-        client: &reqwest::Client,
+        fetcher: &crate::fetcher::Fetcher,
         article_id: &str,
         url: &Url,
         options: &ExtractionOptions,
     ) -> Result<PageDocument, PageclawError> {
         let target_url = format!("https://zhuanlan.zhihu.com/p/{article_id}");
-        let html = fetch_zhihu_html(client, &target_url).await?;
+        let html = fetch_zhihu_html(fetcher, &target_url).await?;
 
         let doc = Html::parse_document(&html);
 
@@ -222,7 +222,7 @@ impl ZhihuAdapter {
     /// Extracts a specific question answer.
     async fn extract_single_answer(
         &self,
-        client: &reqwest::Client,
+        fetcher: &crate::fetcher::Fetcher,
         question_id: &str,
         answer_id: &str,
         url: &Url,
@@ -232,8 +232,8 @@ impl ZhihuAdapter {
             "https://www.zhihu.com/api/v4/answers/{answer_id}?include=content%2Cvoteup_count%2Cauthor%2Cquestion"
         );
 
-        let resp = client
-            .get(&api_url)
+        let resp = fetcher
+            .get_str(&api_url)
             .header(
                 "User-Agent",
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
@@ -270,7 +270,7 @@ impl ZhihuAdapter {
 
         // Fallback: Fetch question page HTML
         let target_url = format!("https://www.zhihu.com/question/{question_id}/answer/{answer_id}");
-        let html = fetch_zhihu_html(client, &target_url).await?;
+        let html = fetch_zhihu_html(fetcher, &target_url).await?;
         let doc = Html::parse_document(&html);
 
         if let Some(initial_json) = extract_initial_data(&doc) {
@@ -321,7 +321,7 @@ impl ZhihuAdapter {
     /// Extracts the top N answers for a question.
     async fn extract_question_top(
         &self,
-        client: &reqwest::Client,
+        fetcher: &crate::fetcher::Fetcher,
         question_id: &str,
         url: &Url,
         options: &ExtractionOptions,
@@ -331,8 +331,8 @@ impl ZhihuAdapter {
             "https://www.zhihu.com/api/v4/questions/{question_id}/answers?include=content%2Cvoteup_count%2Cauthor&offset=0&limit={limit}&sort_by=default"
         );
 
-        let resp = client
-            .get(&api_url)
+        let resp = fetcher
+            .get_str(&api_url)
             .header(
                 "User-Agent",
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
@@ -361,7 +361,7 @@ impl ZhihuAdapter {
 
         // Fallback: Fetch question page and parse #js-initialData
         let target_url = format!("https://www.zhihu.com/question/{question_id}");
-        let html = fetch_zhihu_html(client, &target_url).await?;
+        let html = fetch_zhihu_html(fetcher, &target_url).await?;
         let doc = Html::parse_document(&html);
 
         if let Some(initial_json) = extract_initial_data(&doc) {
@@ -645,11 +645,11 @@ impl PlatformAdapter for ZhihuAdapter {
 
     fn extract<'a>(
         &'a self,
-        client: &'a reqwest::Client,
+        fetcher: &'a crate::fetcher::Fetcher,
         url: &'a Url,
         options: &'a ExtractionOptions,
     ) -> BoxFuture<'a, Result<PageDocument, PageclawError>> {
-        Box::pin(self.do_extract(client, url, options))
+        Box::pin(self.do_extract(fetcher, url, options))
     }
 }
 
@@ -684,11 +684,11 @@ pub fn preprocess_zhihu_html(raw_html: &str) -> String {
 }
 
 async fn fetch_zhihu_html(
-    client: &reqwest::Client,
+    fetcher: &crate::fetcher::Fetcher,
     target_url: &str,
 ) -> Result<String, PageclawError> {
-    let resp = client
-        .get(target_url)
+    let resp = fetcher
+        .get_str(target_url)
         .header(
             "User-Agent",
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",

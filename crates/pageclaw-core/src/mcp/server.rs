@@ -13,6 +13,7 @@ use std::path::Path;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tracing::{debug, error, info, warn};
+use url::Url;
 
 /// In-memory and stdio Model Context Protocol (MCP) server for PageClaw.
 pub struct McpServer {
@@ -314,6 +315,10 @@ impl McpServer {
             }
         }
 
+        let initial_target_host = Url::parse(url.as_str())
+            .ok()
+            .and_then(|u| u.host_str().map(|h| h.to_lowercase()));
+
         let fetch_options = FetchOptions {
             user_agent: None,
             timeout_secs: timeout,
@@ -324,6 +329,7 @@ impl McpServer {
             headers: Vec::new(),
             cookie,
             cookie_file,
+            initial_target_host,
             allow_private_addresses,
             allow_http_errors,
         };
@@ -517,7 +523,7 @@ impl McpServer {
         match media_type {
             "cover" => {
                 match BilibiliAdapter::download_cover(
-                    self.engine.client(),
+                    self.engine.fetcher(),
                     &bvid,
                     destination,
                     None,
@@ -533,7 +539,7 @@ impl McpServer {
             }
             "video" => {
                 match BilibiliAdapter::download_video(
-                    self.engine.client(),
+                    self.engine.fetcher(),
                     &bvid,
                     page,
                     quality,

@@ -221,6 +221,10 @@ async fn run(args: CliArgs) -> Result<()> {
         }
     }
 
+    let initial_target_host = target_url_ref
+        .and_then(|t| url::Url::parse(t).ok())
+        .and_then(|u| u.host_str().map(|h| h.to_lowercase()));
+
     // Build network fetch options
     let fetch_options = FetchOptions {
         user_agent: args.user_agent.clone(),
@@ -232,6 +236,7 @@ async fn run(args: CliArgs) -> Result<()> {
         headers: custom_headers,
         cookie: args.cookie.clone(),
         cookie_file: cookie_file_path,
+        initial_target_host,
         allow_private_addresses: args.allow_private_addresses,
         allow_http_errors: args.allow_http_errors,
     };
@@ -592,7 +597,7 @@ async fn run(args: CliArgs) -> Result<()> {
 
         let reporter = ConsoleProgressReporter::new("Video", args.quiet);
         let saved_path = BilibiliAdapter::download_video(
-            engine.client(),
+            engine.fetcher(),
             &bvid,
             page_num,
             args.bili_quality.into(),
@@ -623,7 +628,7 @@ async fn run(args: CliArgs) -> Result<()> {
 
         let reporter = ConsoleProgressReporter::new("Cover", args.quiet);
         let saved_path =
-            BilibiliAdapter::download_cover(engine.client(), &bvid, user_dest, Some(&reporter))
+            BilibiliAdapter::download_cover(engine.fetcher(), &bvid, user_dest, Some(&reporter))
                 .await
                 .context("Failed to download video cover image")?;
 

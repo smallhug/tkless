@@ -93,6 +93,11 @@ impl PageclawEngine {
         self.fetcher.client()
     }
 
+    /// Access the underlying Fetcher engine.
+    pub fn fetcher(&self) -> &Fetcher {
+        &self.fetcher
+    }
+
     /// Fetches a remote URL and transforms it according to extraction options.
     /// Intercepts platform-specific URLs when a matching adapter exists unless disabled.
     pub async fn process_url(
@@ -113,10 +118,7 @@ impl PageclawEngine {
                     url = url,
                     "Intercepting with platform adapter"
                 );
-                match adapter
-                    .extract(self.fetcher.client(), &parsed_url, options)
-                    .await
-                {
+                match adapter.extract(&self.fetcher, &parsed_url, options).await {
                     Ok(mut doc) => {
                         // Enforce token counting and budget truncation
                         let initial_token_count = count_tokens(&doc.content, options.tokenizer);
