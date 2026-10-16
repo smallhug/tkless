@@ -203,6 +203,10 @@ pub struct ExtractionOptions {
     pub download_images: bool,
     /// Destination directory for downloaded offline image assets (default: "./assets").
     pub assets_dir: Option<String>,
+    /// Whether to output only the extracted tables, skipping the main body content.
+    pub tables_only: bool,
+    /// Presentation format for table export: markdown (default), csv, tsv, json.
+    pub table_format: TableExportFormat,
 }
 
 impl Default for ExtractionOptions {
@@ -237,6 +241,8 @@ impl Default for ExtractionOptions {
             chunk_overlap: None,
             download_images: false,
             assets_dir: None,
+            tables_only: false,
+            table_format: TableExportFormat::default(),
         }
     }
 }
@@ -336,6 +342,32 @@ pub struct ExtractedImage {
     pub src: String,
 }
 
+/// Export format for extracted structured tables.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TableExportFormat {
+    /// GitHub Flavored Markdown table format (default).
+    #[default]
+    Markdown,
+    /// Comma-Separated Values (RFC 4180).
+    Csv,
+    /// Tab-Separated Values.
+    Tsv,
+    /// Structured JSON records.
+    Json,
+}
+
+impl TableExportFormat {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            TableExportFormat::Markdown => "markdown",
+            TableExportFormat::Csv => "csv",
+            TableExportFormat::Tsv => "tsv",
+            TableExportFormat::Json => "json",
+        }
+    }
+}
+
 /// Structured representation of an HTML table.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ExtractedTable {
@@ -345,6 +377,167 @@ pub struct ExtractedTable {
     pub rows: Vec<Vec<String>>,
     /// Table row records as key-value dictionaries.
     pub records: Vec<HashMap<String, String>>,
+}
+
+impl ExtractedTable {
+    /// Formats the table into RFC 4180 compliant CSV text.
+    pub fn to_csv(&self) -> String {
+        let mut out = String::new();
+        if !self.headers.is_empty() {
+            out.push_str(
+                &self
+                    .headers
+                    .iter()
+                    .map(|h| csv_escape(h))
+                    .collect::<Vec<_>>()
+                    .join(","),
+            );
+            out.push('\n');
+        }
+        for row in &self.rows {
+            out.push_str(
+                &row.iter()
+                    .map(|cell| csv_escape(cell))
+                    .collect::<Vec<_>>()
+                    .join(","),
+            );
+            out.push('\n');
+        }
+        out
+    }
+
+    /// Formats the table into TSV text.
+    pub fn to_tsv(&self) -> String {
+        let mut out = String::new();
+        if !self.headers.is_empty() {
+            out.push_str(
+                &self
+                    .headers
+                    .iter()
+                    .map(|h| h.replace('\t', " ").replace(['\r', '\n'], " "))
+                    .collect::<Vec<_>>()
+                    .join("\t"),
+            );
+            out.push('\n');
+        }
+        for row in &self.rows {
+            out.push_str(
+                &row.iter()
+                    .map(|cell| cell.replace('\t', " ").replace(['\r', '\n'], " "))
+                    .collect::<Vec<_>>()
+                    .join("\t"),
+            );
+            out.push('\n');
+        }
+        out
+    }
+
+    /// Formats the table into a clean GitHub Flavored Markdown table.
+    pub fn to_markdown(&self) -> String {
+        let mut out = String::new();
+        let col_count = self
+            .headers
+            .len()
+            .max(self.rows.iter().map(|r| r.len()).max().unwrap_or(0));
+        if col_count == 0 {
+            return out;
+        }
+
+        let headers: Vec<String> = if self.headers.is_empty() {
+            (1..=col_count).map(|i| format!("Col {i}")).collect()
+        } else {
+            self.headers.iter().map(|h| sanitize_md_cell(h)).collect()
+        };
+
+        out.push_str("| ");
+        out.push_str(&headers.join(" | "));
+        out.push_str(" |\n| ");
+        out.push_str(&vec!["---"; col_count].join(" | "));
+        out.push_str(" |\n");
+
+        for row in &self.rows {
+            let mut cells = Vec::new();
+            for i in 0..col_count {
+                let text = row.get(i).map(|s| sanitize_md_cell(s)).unwrap_or_default();
+                cells.push(text);
+            }
+            out.push_str("| ");
+            out.push_str(&cells.join(" | "));
+            out.push_str(" |\n");
+        }
+        out
+    }
+
+    /// Formats multiple extracted tables into the requested export format.
+    pub fn format_tables(tables: &[ExtractedTable], format: TableExportFormat) -> String {
+        if tables.is_empty() {
+            return match format {
+                TableExportFormat::Json => "[]".to_string(),
+                _ => "*(页面未检测到有效数据表格)*".to_string(),
+            };
+        }
+
+        match format {
+            TableExportFormat::Json => serde_json::to_string_pretty(tables).unwrap_or_default(),
+            TableExportFormat::Csv => tables
+                .iter()
+                .enumerate()
+                .map(|(idx, t)| {
+                    if tables.len() > 1 {
+                        format!("# Table {}\n{}", idx + 1, t.to_csv())
+                    } else {
+                        t.to_csv()
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("\n"),
+            TableExportFormat::Tsv => tables
+                .iter()
+                .enumerate()
+                .map(|(idx, t)| {
+                    if tables.len() > 1 {
+                        format!("# Table {}\n{}", idx + 1, t.to_tsv())
+                    } else {
+                        t.to_tsv()
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("\n"),
+            TableExportFormat::Markdown => tables
+                .iter()
+                .enumerate()
+                .map(|(idx, t)| {
+                    if tables.len() > 1 {
+                        format!(
+                            "### 表格 {} (Table {})\n\n{}",
+                            idx + 1,
+                            idx + 1,
+                            t.to_markdown()
+                        )
+                    } else {
+                        t.to_markdown()
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("\n\n"),
+        }
+    }
+}
+
+fn csv_escape(s: &str) -> String {
+    let clean = s.replace('\r', "").replace('\n', " ");
+    if clean.contains(',') || clean.contains('"') {
+        format!("\"{}\"", clean.replace('"', "\"\""))
+    } else {
+        clean
+    }
+}
+
+fn sanitize_md_cell(s: &str) -> String {
+    s.replace('|', "\\|")
+        .replace(['\r', '\n'], " ")
+        .trim()
+        .to_string()
 }
 
 /// Official or AI-generated video conclusion and outline summary.

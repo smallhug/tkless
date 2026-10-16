@@ -273,6 +273,8 @@ async fn run(args: CliArgs) -> Result<()> {
         chunk_overlap: args.chunk_overlap,
         download_images: args.download_images,
         assets_dir: args.assets_dir.clone(),
+        tables_only: args.tables_only,
+        table_format: args.table_format.into(),
     };
 
     // -------------------------------------------------------------------------
@@ -470,6 +472,8 @@ async fn run(args: CliArgs) -> Result<()> {
             chunk_overlap: args.chunk_overlap,
             download_images: false,
             assets_dir: None,
+            tables_only: false,
+            table_format: pageclaw_core::model::TableExportFormat::default(),
         });
 
         let semaphore =

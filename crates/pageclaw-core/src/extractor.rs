@@ -153,7 +153,12 @@ pub fn extract_links(doc: &Html, base_url_str: Option<&str>) -> Vec<ExtractedLin
         };
 
         if seen_urls.insert(resolved_url.clone()) {
-            let text = element.text().collect::<Vec<_>>().join(" ").trim().to_string();
+            let text = element
+                .text()
+                .collect::<Vec<_>>()
+                .join(" ")
+                .trim()
+                .to_string();
             results.push(ExtractedLink {
                 text,
                 url: resolved_url,
@@ -264,7 +269,9 @@ pub fn extract_tables(doc: &Html) -> Vec<ExtractedTable> {
                     for tr in all_trs.iter().skip(1) {
                         let row: Vec<String> = tr
                             .select(&TD_SELECTOR)
-                            .map(|cell| cell.text().collect::<Vec<_>>().join(" ").trim().to_string())
+                            .map(|cell| {
+                                cell.text().collect::<Vec<_>>().join(" ").trim().to_string()
+                            })
                             .collect();
                         if !row.is_empty() {
                             rows.push(row);
@@ -356,10 +363,19 @@ mod tests {
         assert_eq!(meta.description.as_deref(), Some("A page about Rust"));
         assert_eq!(meta.keywords, vec!["rust", "cli", "agent"]);
         assert_eq!(meta.author.as_deref(), Some("PageClaw"));
-        assert_eq!(meta.canonical_url.as_deref(), Some("https://example.com/canonical"));
+        assert_eq!(
+            meta.canonical_url.as_deref(),
+            Some("https://example.com/canonical")
+        );
         assert_eq!(meta.published_time.as_deref(), Some("2026-03-01T12:00:00Z"));
-        assert_eq!(meta.open_graph.get("og:title").map(|s| s.as_str()), Some("Rust CLI"));
-        assert_eq!(meta.twitter_card.get("twitter:card").map(|s| s.as_str()), Some("summary_large_image"));
+        assert_eq!(
+            meta.open_graph.get("og:title").map(|s| s.as_str()),
+            Some("Rust CLI")
+        );
+        assert_eq!(
+            meta.twitter_card.get("twitter:card").map(|s| s.as_str()),
+            Some("summary_large_image")
+        );
     }
 
     #[test]
@@ -473,5 +489,25 @@ mod tests {
         assert_eq!(t.records.len(), 2);
         assert_eq!(t.records[0].get("Name").map(|s| s.as_str()), Some("Alice"));
         assert_eq!(t.records[0].get("Score").map(|s| s.as_str()), Some("95"));
+
+        // Verify CSV export
+        let csv = t.to_csv();
+        assert!(csv.starts_with("Name,Role,Score\n"));
+        assert!(csv.contains("Alice,Engineer,95\n"));
+
+        // Verify TSV export
+        let tsv = t.to_tsv();
+        assert!(tsv.starts_with("Name\tRole\tScore\n"));
+        assert!(tsv.contains("Alice\tEngineer\t95\n"));
+
+        // Verify Markdown export
+        let md = t.to_markdown();
+        assert!(md.contains("| Name | Role | Score |"));
+        assert!(md.contains("| Alice | Engineer | 95 |"));
+
+        // Verify format_tables helper
+        let formatted =
+            ExtractedTable::format_tables(&tables, crate::model::TableExportFormat::Csv);
+        assert!(formatted.contains("Alice,Engineer,95"));
     }
 }

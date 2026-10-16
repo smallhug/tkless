@@ -469,3 +469,54 @@ fn test_integration_semantic_markdown_chunking() {
         "Code fence must remain intact"
     );
 }
+
+#[test]
+fn test_integration_tables_only_csv_export() {
+    let engine = PageclawEngine::new().expect("Failed to initialize engine");
+
+    let page_html = r#"
+        <!DOCTYPE html>
+        <html>
+        <head><title>Quarterly Financial Results</title></head>
+        <body>
+            <header><nav>Navigation links...</nav></header>
+            <main>
+                <h1>Quarterly Financial Overview</h1>
+                <p>Lengthy preamble about market conditions and forward-looking statements...</p>
+                <table>
+                    <thead>
+                        <tr><th>Quarter</th><th>Revenue (USD)</th><th>Growth</th></tr>
+                    </thead>
+                    <tbody>
+                        <tr><td>Q1 2026</td><td>$1,500,000</td><td>+25%</td></tr>
+                        <tr><td>Q2 2026</td><td>$1,950,000</td><td>+30%</td></tr>
+                    </tbody>
+                </table>
+                <p>Additional footnotes and disclaimers...</p>
+            </main>
+            <footer>Copyright 2026</footer>
+        </body>
+        </html>
+    "#;
+
+    let options = ExtractionOptions {
+        tables_only: true,
+        table_format: pageclaw_core::model::TableExportFormat::Csv,
+        ..Default::default()
+    };
+
+    let doc = engine
+        .process_html(
+            page_html,
+            Some("https://finance.example.com/earnings"),
+            &options,
+        )
+        .expect("Failed to process HTML with tables_only");
+
+    assert!(doc.content.starts_with("Quarter,Revenue (USD),Growth\n"));
+    assert!(doc.content.contains("Q1 2026,\"$1,500,000\",+25%\n"));
+    assert!(doc.content.contains("Q2 2026,\"$1,950,000\",+30%\n"));
+    assert!(!doc.content.contains("Lengthy preamble"));
+    assert!(!doc.content.contains("Navigation links"));
+    assert!(!doc.content.contains("Additional footnotes"));
+}

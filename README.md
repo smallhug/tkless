@@ -283,6 +283,13 @@ pageclaw crawl "https://example.com/docs" --dedup -o ./docs_dedup.md
 # 32. 🖼️ 离线图片资产自动下载与 Markdown 相对路径回写 (--download-images)
 # 下载 Markdown 中的全部远程图片到本地资产目录并自动将链接回写为本地相对路径：
 pageclaw "https://example.com/guide" --download-images --assets-dir ./assets
+
+# 33. 📊 独立表格数据精准抽取与多格式导出 (--tables-only, --table-format csv|tsv|markdown|json)
+# 跳过全部正文与噪音，仅精准抽取网页中的所有数据表格，直接导出为 CSV 格式：
+pageclaw "https://finance.example.com/earnings" --tables-only --table-format csv
+# 导出为 TSV 制表符分隔文本或结构化 JSON 字典记录数组：
+pageclaw "https://en.wikipedia.org/wiki/List_of_countries_by_GDP" -T --table-format tsv
+pageclaw "https://example.com/spec-comparison" -T --table-format json
 ```
 
 ---
@@ -322,9 +329,9 @@ AI Agent（如 **Claude Desktop**、**Cursor**、**Windsurf** 等）可以直接
 
 | MCP 工具名 | 功能说明 | 核心入参 |
 |---|---|---|
-| **`fetch_webpage`** | 全网网页/B站视频智能抓取与清洗，输出 Markdown 或结构化 JSON，支持 Token 预算截断与缓存，全功能支持 CSS 选择器定向提取、链接/图片/表格结构化资产解析、CDP 浏览器渲染与 Schema 结构化实体提取、语义感知分块 (Chunking)、离线图片资产下载与链接回写、代理配置，以及 B站 字幕/弹幕/评论/官方AI大纲提纲提取与 Cookie 鉴权 | `url` (必填), `format`, `mode`, `selector`, `schema`, `chunk`, `chunk_size`, `chunk_overlap`, `download_images`, `assets_dir`, `cdp_endpoint`, `cdp_wait_ms`, `proxy`, `extract_links`, `extract_images`, `extract_tables`, `subtitles`, `danmaku`, `comments`, `conclusion`, `cookie`, `cookie_file`, `max_tokens`, `use_cache` |
+| **`fetch_webpage`** | 全网网页/B站视频智能抓取与清洗，输出 Markdown 或结构化 JSON，支持 Token 预算截断与缓存，全功能支持 CSS 选择器定向提取、链接/图片/表格结构化资产解析、CDP 浏览器渲染与 Schema 结构化实体提取、语义感知分块 (Chunking)、离线图片资产下载与链接回写、独立表格抽取与多格式导出 (CSV/TSV/JSON)、代理配置，以及 B站 字幕/弹幕/评论/官方AI大纲提纲提取与 Cookie 鉴权 | `url` (必填), `format`, `mode`, `selector`, `schema`, `chunk`, `chunk_size`, `chunk_overlap`, `download_images`, `assets_dir`, `tables_only`, `table_format`, `cdp_endpoint`, `cdp_wait_ms`, `proxy`, `extract_links`, `extract_images`, `extract_tables`, `subtitles`, `danmaku`, `comments`, `conclusion`, `cookie`, `cookie_file`, `max_tokens`, `use_cache` |
 | **`batch_fetch_webpages`** | **并发抓取多网页流水线**，使用异步协程并发池并发处理一组 URL 列表，一次性聚合返回清洗后的 Markdown 或 JSON 文档数组 | `urls` (必填字符串数组), `concurrency` (默认 5, 最大 20), `format` (markdown/json), `max_tokens_per_page`, `selector`, `schema`, `cdp_endpoint`, `cdp_wait_ms`, `proxy` |
-| **`clean_html`** | **本地直接清洗已有 HTML 字符串**，剥离广告/脚本/导航噪音，转化为纯净 Markdown、纯文本或执行 Schema/CSS 选择器结构化抽取与语义分块 | `html` (必填), `base_url`, `format` (markdown/json/text/html), `mode` (article/full/raw), `selector`, `schema`, `chunk`, `chunk_size`, `chunk_overlap`, `max_tokens`, `strip_images`, `strip_links`, `frontmatter` |
+| **`clean_html`** | **本地直接清洗已有 HTML 字符串**，剥离广告/脚本/导航噪音，转化为纯净 Markdown、纯文本或执行 Schema/CSS 选择器结构化抽取、独立表格抽取 (CSV/TSV/JSON) 与语义分块 | `html` (必填), `base_url`, `format` (markdown/json/text/html), `mode` (article/full/raw), `selector`, `schema`, `chunk`, `chunk_size`, `chunk_overlap`, `tables_only`, `table_format`, `max_tokens`, `strip_images`, `strip_links`, `frontmatter` |
 | **`web_search`** | **免 API Key 的通用全网搜索**（支持 Bing、Google 与 Auto 容灾），支持生态定向标签（微信公众号、知乎、GitHub、掘金）与 `--fetch-content` 搜索即抓取一体化调研（可叠加 CDP 渲染、Schema 抽取与代理） | `query` (必填), `scope` (all/wechat/zhihu/github/juejin), `engine` (bing/google/auto, 默认 bing), `fetch_content` (可选布尔值), `max_tokens_per_page` (可选整数), `cdp_endpoint`, `schema`, `proxy`, `limit` (默认 5), `format` (markdown/json) |
 | **`crawl_site`** | **整站文档递归爬取与知识库汇编**（从种子 URL 广度优先发现超链接或通过 sitemap.xml 解析规范地址），支持 CDP 无头渲染、Token 总预算上限截断、SimHash 内容指纹去重（`dedup`）与 Schema 抽取，自动生成带目录索引（TOC）的单文件集成 Markdown 知识库或结构化 JSON | `seed_url` (必填), `max_depth` (默认 2, 最大 5), `max_pages` (默认 20, 最大 100), `same_path_prefix` (可选布尔值), `sitemap` (可选布尔值), `dedup` (可选布尔值), `proxy`, `max_tokens`, `cdp_endpoint`, `schema`, `format` (markdown/json) |
 | **`login_platform`** | **平台凭据扫码授权与登录辅助**，发起 B站/知乎 交互式登录提取会话 Cookie 并安全隔离写入凭据文件（带平台前缀，防多网站覆盖） | `platform` (bilibili/zhihu, 必填), `output_cookie_file` (默认 ./cookies.txt), `no_browser` (默认 true), `timeout_secs` (默认 180) |
@@ -374,6 +381,8 @@ OPTIONS:
         --extract-links        提取页面全量去重超链接清单 (在 -f json 中为 links 数组，在 md 中为尾部清单)
         --extract-images       提取页面全量图片资产清单 (在 -f json 中为 images 数组，在 md 中为尾部清单)
         --extract-tables       深度解析页面中的 table 为二维数组与字典对象 records
+    -T, --tables-only          仅提取并输出页面中的全部数据表格，跳过正文与噪音 (别名: --table-only)
+        --table-format <FMT>   表格导出呈现格式: markdown (默认), csv, tsv, json
         --bili-sub             提取 B站 视频官方/AI 生成的 CC 字幕轨
         --bili-sum             提取 B站 官方 AI 视频总结核心摘要与章节大纲
         --bili-dm              提取 B站 视频时间轴高能弹幕 (按出现时间升序排序为 GFM 表格)

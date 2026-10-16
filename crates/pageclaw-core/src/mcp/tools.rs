@@ -191,6 +191,17 @@ pub fn get_available_tools() -> Vec<McpTool> {
                         "type": "string",
                         "default": "./assets",
                         "description": "Destination directory for downloaded image assets (default: ./assets)"
+                    },
+                    "tables_only": {
+                        "type": "boolean",
+                        "default": false,
+                        "description": "Whether to extract and output only the tables, discarding the body text"
+                    },
+                    "table_format": {
+                        "type": "string",
+                        "enum": ["markdown", "csv", "tsv", "json"],
+                        "default": "markdown",
+                        "description": "Presentation format for table export: 'markdown' (default), 'csv', 'tsv', or 'json'"
                     }
                 },
                 "required": ["url"]
@@ -551,6 +562,17 @@ pub fn get_available_tools() -> Vec<McpTool> {
                         "type": "integer",
                         "default": 50,
                         "description": "Token overlap between consecutive chunks (default: 50)"
+                    },
+                    "tables_only": {
+                        "type": "boolean",
+                        "default": false,
+                        "description": "Whether to extract and output only the tables, discarding the body text"
+                    },
+                    "table_format": {
+                        "type": "string",
+                        "enum": ["markdown", "csv", "tsv", "json"],
+                        "default": "markdown",
+                        "description": "Presentation format for table export: 'markdown' (default), 'csv', 'tsv', or 'json'"
                     }
                 },
                 "required": ["html"]
