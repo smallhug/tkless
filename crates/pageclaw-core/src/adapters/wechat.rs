@@ -196,6 +196,7 @@ impl WechatAdapter {
             tables: None,
             entity: None,
             chunks: None,
+            content_hash: None,
         })
     }
 }

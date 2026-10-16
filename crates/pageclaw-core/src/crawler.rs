@@ -29,6 +29,8 @@ pub struct CrawlOptions {
     pub exclude_patterns: Vec<String>,
     /// Whether to force sitemap XML parsing or automatically treat XML endpoints as sitemaps.
     pub sitemap: bool,
+    /// Automatically skip near-duplicate pages based on 64-bit SimHash Hamming distance.
+    pub dedup: bool,
 }
 
 impl Default for CrawlOptions {
@@ -44,6 +46,7 @@ impl Default for CrawlOptions {
                 r#"/(login|signin|signup|logout|auth|register)"#.to_string(),
             ],
             sitemap: false,
+            dedup: false,
         }
     }
 }
@@ -143,6 +146,7 @@ pub async fn crawl_site(
     }
 
     let mut crawled_pages: Vec<CrawledPage> = Vec::new();
+    let mut seen_simhashes: Vec<u64> = Vec::new();
     let semaphore = Arc::new(Semaphore::new(crawl_options.concurrency.max(1)));
 
     while let Some((current_url, depth)) = queue.pop_front() {
@@ -167,6 +171,19 @@ pub async fn crawl_site(
 
         match fetch_res {
             Ok(doc) => {
+                // If deduplication is enabled, check for near-duplicates via SimHash
+                if crawl_options.dedup {
+                    let page_hash = crate::dedup::simhash(&doc.content);
+                    if seen_simhashes
+                        .iter()
+                        .any(|&prev| crate::dedup::is_near_duplicate(prev, page_hash, 3))
+                    {
+                        debug!(url = %url_str, "跳过内容高度近似的重复页面 (SimHash near-duplicate)");
+                        continue;
+                    }
+                    seen_simhashes.push(page_hash);
+                }
+
                 let page_title = doc.title.clone().unwrap_or_else(|| url_str.clone());
 
                 // Discover child links if within depth limit

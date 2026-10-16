@@ -230,6 +230,7 @@ impl GithubAdapter {
             tables: None,
             entity: None,
             chunks: None,
+            content_hash: None,
         })
     }
 
@@ -335,6 +336,7 @@ impl GithubAdapter {
             tables: None,
             entity: None,
             chunks: None,
+            content_hash: None,
         })
     }
 }

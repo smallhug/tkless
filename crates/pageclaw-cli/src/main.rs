@@ -239,6 +239,7 @@ async fn run(args: CliArgs) -> Result<()> {
         initial_target_host,
         allow_private_addresses: args.allow_private_addresses,
         allow_http_errors: args.allow_http_errors,
+        proxy: args.proxy.clone(),
     };
 
     // Build extraction options
@@ -302,7 +303,11 @@ async fn run(args: CliArgs) -> Result<()> {
     // Execution Branch 1.5: Zero-API-Key Web Search
     // -------------------------------------------------------------------------
     if let Some(SubCommand::Search(ref search_args)) = args.command {
-        let engine = PageclawEngine::with_options(fetch_options)
+        let mut search_fetch_options = fetch_options.clone();
+        if search_args.proxy.is_some() {
+            search_fetch_options.proxy = search_args.proxy.clone();
+        }
+        let engine = PageclawEngine::with_options(search_fetch_options)
             .context("Failed to initialize PageClaw engine")?;
 
         let effective_query = if search_args.wechat {
@@ -423,8 +428,13 @@ async fn run(args: CliArgs) -> Result<()> {
             bail!("No valid URLs found in '{}'", batch_args.file);
         }
 
+        let mut batch_fetch_options = fetch_options.clone();
+        if batch_args.proxy.is_some() {
+            batch_fetch_options.proxy = batch_args.proxy.clone();
+        }
+
         let engine = std::sync::Arc::new(
-            PageclawEngine::with_options(fetch_options)
+            PageclawEngine::with_options(batch_fetch_options)
                 .context("Failed to initialize PageClaw engine")?,
         );
 
@@ -518,7 +528,11 @@ async fn run(args: CliArgs) -> Result<()> {
     // Execution Branch 1.7: Deep Site Crawl & Knowledge Base Assembly
     // -------------------------------------------------------------------------
     if let Some(SubCommand::Crawl(ref crawl_args)) = args.command {
-        let engine = PageclawEngine::with_options(fetch_options)
+        let mut crawl_fetch_options = fetch_options.clone();
+        if crawl_args.proxy.is_some() {
+            crawl_fetch_options.proxy = crawl_args.proxy.clone();
+        }
+        let engine = PageclawEngine::with_options(crawl_fetch_options)
             .context("Failed to initialize PageClaw engine")?;
 
         let crawl_options = pageclaw_core::CrawlOptions {
@@ -529,6 +543,7 @@ async fn run(args: CliArgs) -> Result<()> {
             same_path_prefix: crawl_args.same_path_prefix,
             exclude_patterns: pageclaw_core::CrawlOptions::default().exclude_patterns,
             sitemap: crawl_args.sitemap,
+            dedup: crawl_args.dedup,
         };
 
         let mut crawl_extraction_options = extraction_options.clone();

@@ -507,6 +507,15 @@ pub struct CliArgs {
     )]
     pub allow_http_errors: bool,
 
+    /// HTTP/HTTPS 代理服务器地址 (例如 http://127.0.0.1:7890)
+    #[arg(
+        short = 'p',
+        long = "proxy",
+        value_name = "PROXY_URL",
+        help_heading = "网络与身份认证 (Network & Auth)"
+    )]
+    pub proxy: Option<String>,
+
     /// Base URL to resolve relative links when reading HTML from stdin
     #[arg(
         long = "base-url",
@@ -693,6 +702,10 @@ pub struct SearchSubArgs {
     /// CDP 页面加载后额外等待 DOM 动态渲染完成的时间 (毫秒)
     #[arg(long = "cdp-wait", value_name = "MS")]
     pub cdp_wait_ms: Option<u64>,
+
+    /// HTTP/HTTPS 代理服务器地址 (例如 http://127.0.0.1:7890)
+    #[arg(short = 'p', long = "proxy", value_name = "PROXY_URL")]
+    pub proxy: Option<String>,
 }
 
 #[derive(clap::Args, Debug, Clone)]
@@ -753,6 +766,10 @@ pub struct BatchArgs {
     /// Write batch results to file instead of stdout
     #[arg(short = 'o', long = "output", value_name = "FILE")]
     pub output: Option<PathBuf>,
+
+    /// HTTP/HTTPS 代理服务器地址 (例如 http://127.0.0.1:7890)
+    #[arg(short = 'p', long = "proxy", value_name = "PROXY_URL")]
+    pub proxy: Option<String>,
 }
 
 #[derive(clap::Args, Debug, Clone)]
@@ -851,4 +868,15 @@ pub struct CrawlArgs {
         help = "Parse seed URL as XML sitemap to extract and crawl canonical URLs directly"
     )]
     pub sitemap: bool,
+
+    /// HTTP/HTTPS 代理服务器地址 (例如 http://127.0.0.1:7890)
+    #[arg(short = 'p', long = "proxy", value_name = "PROXY_URL")]
+    pub proxy: Option<String>,
+
+    /// 启用基于 64位 SimHash 网页指纹的内容去重 (自动跳过内容近似度高的重复镜像页面)
+    #[arg(
+        long = "dedup",
+        help = "Automatically skip near-duplicate crawled pages based on 64-bit SimHash"
+    )]
+    pub dedup: bool,
 }

@@ -281,6 +281,10 @@ impl McpServer {
             .get("cookie_file")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
+        let proxy = args
+            .get("proxy")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
         let cdp_endpoint = args
             .get("cdp_endpoint")
             .and_then(|v| v.as_str())
@@ -363,6 +367,7 @@ impl McpServer {
             initial_target_host,
             allow_private_addresses,
             allow_http_errors,
+            proxy,
         };
 
         let engine = match PageclawEngine::with_options(fetch_options) {
@@ -657,6 +662,25 @@ impl McpServer {
             .get("max_tokens_per_page")
             .and_then(|v| v.as_u64())
             .map(|v| v as usize);
+        let proxy = args
+            .get("proxy")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+
+        let custom_engine;
+        let engine_ref = if let Some(ref p) = proxy {
+            let mut fetch_opts = self.engine.fetcher().options().clone();
+            fetch_opts.proxy = Some(p.clone());
+            match PageclawEngine::with_options(fetch_opts) {
+                Ok(eng) => {
+                    custom_engine = eng;
+                    &custom_engine
+                }
+                Err(_) => &self.engine,
+            }
+        } else {
+            &self.engine
+        };
 
         if fetch_content {
             let cdp_endpoint = args
@@ -680,7 +704,7 @@ impl McpServer {
             };
 
             match crate::search::web_search_and_fetch(
-                &self.engine,
+                engine_ref,
                 &effective_query,
                 limit,
                 engine,
@@ -706,7 +730,7 @@ impl McpServer {
             }
         } else {
             match crate::search::web_search_with_engine(
-                self.engine.client(),
+                engine_ref.client(),
                 &effective_query,
                 limit,
                 engine,
@@ -757,6 +781,7 @@ impl McpServer {
             .get("sitemap")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
+        let dedup = args.get("dedup").and_then(|v| v.as_bool()).unwrap_or(false);
 
         let format = match args.get("format").and_then(|v| v.as_str()) {
             Some("json") => OutputFormat::Json,
@@ -773,6 +798,10 @@ impl McpServer {
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
         let cdp_wait_ms = args.get("cdp_wait_ms").and_then(|v| v.as_u64());
+        let proxy = args
+            .get("proxy")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
         let schema = args.get("schema").map(|v| {
             if let Some(s) = v.as_str() {
                 s.to_string()
@@ -789,6 +818,7 @@ impl McpServer {
             same_path_prefix,
             exclude_patterns: crate::crawler::CrawlOptions::default().exclude_patterns,
             sitemap,
+            dedup,
         };
 
         let extraction_options = ExtractionOptions {
@@ -798,13 +828,23 @@ impl McpServer {
             ..Default::default()
         };
 
-        match crate::crawler::crawl_site(
-            &self.engine,
-            seed_url,
-            &crawl_options,
-            &extraction_options,
-        )
-        .await
+        let custom_engine;
+        let engine_ref = if let Some(ref p) = proxy {
+            let mut fetch_opts = self.engine.fetcher().options().clone();
+            fetch_opts.proxy = Some(p.clone());
+            match PageclawEngine::with_options(fetch_opts) {
+                Ok(eng) => {
+                    custom_engine = eng;
+                    &custom_engine
+                }
+                Err(_) => &self.engine,
+            }
+        } else {
+            &self.engine
+        };
+
+        match crate::crawler::crawl_site(engine_ref, seed_url, &crawl_options, &extraction_options)
+            .await
         {
             Ok(report) => match format {
                 OutputFormat::Json => match serde_json::to_string_pretty(&report) {
@@ -884,6 +924,25 @@ impl McpServer {
             .map(|s| s.to_string());
 
         let cdp_wait_ms = args.get("cdp_wait_ms").and_then(|v| v.as_u64());
+        let proxy = args
+            .get("proxy")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+
+        let custom_engine;
+        let engine_ref = if let Some(ref p) = proxy {
+            let mut fetch_opts = self.engine.fetcher().options().clone();
+            fetch_opts.proxy = Some(p.clone());
+            match PageclawEngine::with_options(fetch_opts) {
+                Ok(eng) => {
+                    custom_engine = eng;
+                    std::sync::Arc::new(custom_engine)
+                }
+                Err(_) => self.engine.clone(),
+            }
+        } else {
+            self.engine.clone()
+        };
 
         let base_options = ExtractionOptions {
             format,
@@ -900,7 +959,7 @@ impl McpServer {
 
         for (idx, url) in urls.into_iter().enumerate() {
             let sem = semaphore.clone();
-            let eng = self.engine.clone();
+            let eng = engine_ref.clone();
             let opts = base_options.clone();
 
             join_set.spawn(async move {

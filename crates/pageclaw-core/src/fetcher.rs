@@ -56,12 +56,18 @@ impl Fetcher {
         // credential leakage to third-party hosts during searches, crawls, or cross-origin redirects.
         // Instead, cookies are strictly injected per-request based on the target URL's domain scope.
 
-        let client = reqwest::Client::builder()
+        let mut client_builder = reqwest::Client::builder()
             .default_headers(headers)
             .timeout(Duration::from_secs(options.timeout_secs))
             .connect_timeout(Duration::from_secs(options.connect_timeout_secs))
-            .redirect(reqwest::redirect::Policy::none())
-            .build()?;
+            .redirect(reqwest::redirect::Policy::none());
+
+        if let Some(ref proxy_url) = options.proxy {
+            let proxy = reqwest::Proxy::all(proxy_url)?;
+            client_builder = client_builder.proxy(proxy);
+        }
+
+        let client = client_builder.build()?;
 
         Ok(Self { client, options })
     }
