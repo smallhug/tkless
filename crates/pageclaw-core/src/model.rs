@@ -199,6 +199,10 @@ pub struct ExtractionOptions {
     pub chunk_size: Option<usize>,
     /// Token overlap between consecutive chunks (default: 50).
     pub chunk_overlap: Option<usize>,
+    /// Whether to download referenced remote images locally and rewrite Markdown image links.
+    pub download_images: bool,
+    /// Destination directory for downloaded offline image assets (default: "./assets").
+    pub assets_dir: Option<String>,
 }
 
 impl Default for ExtractionOptions {
@@ -231,6 +235,8 @@ impl Default for ExtractionOptions {
             chunk: false,
             chunk_size: None,
             chunk_overlap: None,
+            download_images: false,
+            assets_dir: None,
         }
     }
 }

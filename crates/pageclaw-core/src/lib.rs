@@ -1,5 +1,7 @@
 //! pageclaw-core: High-performance, token-efficient web content extraction engine for AI agents.
 
+#![recursion_limit = "256"]
+
 pub mod adapters;
 pub mod auth;
 pub mod cache;
@@ -33,6 +35,10 @@ pub use crawler::{
     crawl_site, format_crawl_report_markdown, CrawlOptions, CrawledPage, SiteCrawlReport,
 };
 pub use dedup::{hamming_distance, is_near_duplicate, simhash, similarity_ratio};
+pub use downloader::{
+    download_and_rewrite_markdown_images, download_file, format_bytes, DownloadOptions,
+    DownloadProgressReporter,
+};
 pub use error::PageclawError;
 pub use mcp::McpServer;
 pub use model::{
@@ -169,6 +175,21 @@ impl PageclawEngine {
                                 options.tokenizer,
                             ));
                         }
+                        if options.download_images && !doc.content.is_empty() {
+                            let assets_path = std::path::Path::new(
+                                options.assets_dir.as_deref().unwrap_or("./assets"),
+                            );
+                            if let Ok(rewritten) = downloader::download_and_rewrite_markdown_images(
+                                &self.fetcher,
+                                &doc.content,
+                                assets_path,
+                                Some(url),
+                            )
+                            .await
+                            {
+                                doc.content = rewritten;
+                            }
+                        }
                         return Ok(doc);
                     }
                     Err(err) => {
@@ -211,6 +232,21 @@ impl PageclawEngine {
         doc.final_url = response.final_url;
         doc.status = response.status;
         doc.truncated = doc.truncated || response.truncated;
+
+        if options.download_images && !doc.content.is_empty() {
+            let assets_path =
+                std::path::Path::new(options.assets_dir.as_deref().unwrap_or("./assets"));
+            if let Ok(rewritten) = downloader::download_and_rewrite_markdown_images(
+                &self.fetcher,
+                &doc.content,
+                assets_path,
+                Some(url),
+            )
+            .await
+            {
+                doc.content = rewritten;
+            }
+        }
 
         Ok(doc)
     }

@@ -306,6 +306,14 @@ impl McpServer {
             .get("chunk_overlap")
             .and_then(|v| v.as_u64())
             .map(|v| v as usize);
+        let download_images = args
+            .get("download_images")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let assets_dir = args
+            .get("assets_dir")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
 
         let options = ExtractionOptions {
             mode,
@@ -335,6 +343,8 @@ impl McpServer {
             chunk,
             chunk_size,
             chunk_overlap,
+            download_images,
+            assets_dir,
         };
 
         // Cache check

@@ -253,6 +253,21 @@ pub struct CliArgs {
     )]
     pub chunk_overlap: Option<usize>,
 
+    /// 下载 Markdown 中的全部远程图片到本地资产目录并自动回写本地相对链接
+    #[arg(
+        long = "download-images",
+        help_heading = "通用提取选项 (General Options)"
+    )]
+    pub download_images: bool,
+
+    /// 本地图片资产保存目录 [默认: ./assets]
+    #[arg(
+        long = "assets-dir",
+        value_name = "DIR",
+        help_heading = "通用提取选项 (General Options)"
+    )]
+    pub assets_dir: Option<String>,
+
     // =========================================================================
     // 哔哩哔哩专属选项 (Bilibili Options)
     // =========================================================================

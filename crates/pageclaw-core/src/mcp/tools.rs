@@ -181,6 +181,16 @@ pub fn get_available_tools() -> Vec<McpTool> {
                     "proxy": {
                         "type": "string",
                         "description": "Optional HTTP/HTTPS proxy URL (e.g. 'http://127.0.0.1:7890')"
+                    },
+                    "download_images": {
+                        "type": "boolean",
+                        "default": false,
+                        "description": "Whether to download remote images to local assets directory and rewrite Markdown links to local relative paths"
+                    },
+                    "assets_dir": {
+                        "type": "string",
+                        "default": "./assets",
+                        "description": "Destination directory for downloaded image assets (default: ./assets)"
                     }
                 },
                 "required": ["url"]
