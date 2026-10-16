@@ -1,0 +1,53 @@
+use anyhow::{Context, Result};
+use pageclaw_core::model::{OutputFormat, PageDocument};
+use std::fs::File;
+use std::io::{self, Write};
+use std::path::Path;
+
+/// Renders the extracted document according to the requested format and flags,
+/// writing the payload to stdout or a designated output file.
+pub fn render_output(
+    doc: &PageDocument,
+    format: OutputFormat,
+    json_ld_only: bool,
+    output_path: Option<&Path>,
+) -> Result<()> {
+    let payload = if json_ld_only {
+        serde_json::to_string_pretty(&doc.json_ld)
+            .context("Failed to serialize JSON-LD structured data")?
+    } else {
+        match format {
+            OutputFormat::Json => serde_json::to_string_pretty(doc)
+                .context("Failed to serialize document to JSON")?,
+            OutputFormat::Markdown | OutputFormat::Text | OutputFormat::Raw | OutputFormat::Html => {
+                doc.content.clone()
+            }
+        }
+    };
+
+    write_payload(&payload, output_path)
+}
+
+/// Renders cover image URL directly to stdout or output file.
+pub fn render_cover(cover_url: &str, output_path: Option<&Path>) -> Result<()> {
+    write_payload(cover_url, output_path)
+}
+
+/// Writes arbitrary payload text to stdout or a designated output file.
+pub fn write_payload(payload: &str, output_path: Option<&Path>) -> Result<()> {
+    if let Some(path) = output_path {
+        let mut file = File::create(path)
+            .with_context(|| format!("Failed to create output file: {}", path.display()))?;
+        file.write_all(payload.as_bytes())
+            .with_context(|| format!("Failed to write output to file: {}", path.display()))?;
+        file.write_all(b"\n")?;
+    } else {
+        let stdout = io::stdout();
+        let mut handle = stdout.lock();
+        handle.write_all(payload.as_bytes())?;
+        handle.write_all(b"\n")?;
+        handle.flush()?;
+    }
+
+    Ok(())
+}

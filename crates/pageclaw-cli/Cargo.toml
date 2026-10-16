@@ -1,0 +1,25 @@
+[package]
+name = "pageclaw-cli"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Fast CLI tool for token-efficient web content extraction"
+
+[[bin]]
+name = "pageclaw"
+path = "src/main.rs"
+
+[dependencies]
+pageclaw-core.workspace = true
+clap.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+url.workspace = true
+anyhow.workspace = true
+
+[target.'cfg(windows)'.build-dependencies]
+winres.workspace = true

@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="128" height="128" viewBox="0 0 128 128">
+  <defs>
+    <linearGradient id="linear-gradient-1" x1="24" y1="22" x2="83.877" y2="56.712" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ff5e62"/>
+      <stop offset="1" stop-color="#ff9966"/>
+    </linearGradient>
+    <linearGradient id="linear-gradient-2" x1="104" y1="37" x2="44.123" y2="71.712" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ff9966"/>
+      <stop offset="1" stop-color="#ff5e62"/>
+    </linearGradient>
+    <linearGradient id="Magenta_to_Orange" x1="58.996" y1="64" x2="69.004" y2="64" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ff12f7"/>
+      <stop offset="1" stop-color="#ed7b00"/>
+    </linearGradient>
+  </defs>
+  <title>logo.svg</title>
+  <g id="Layer_1" data-name="Layer 1">
+    <path d="M64 22 C42 22 24 40 24 64 C24 74 28 84 35 91 C38 82 45 74 54 68 C50 62 48 54 52 46 C56 38 64 34 64 22 Z" fill="url(#linear-gradient-1)"/>
+    <path d="M64 106 C86 106 104 88 104 64 C104 54 100 44 93 37 C90 46 83 54 74 60 C78 66 80 74 76 82 C72 90 64 94 64 106 Z" fill="url(#linear-gradient-2)"/>
+    <path d="M66.121 57.636 L70.364 61.879 C71.536 63.05 71.536 64.95 70.364 66.121 L66.121 70.364 C64.95 71.536 63.05 71.536 61.879 70.364 L57.636 66.121 C56.464 64.95 56.464 63.05 57.636 61.879 L61.879 57.636 C63.05 56.464 64.95 56.464 66.121 57.636 Z" fill="#ffffff" display="none"/>
+    <path d="M69.004 64 C69.004 66.765 66.764 69.006 64 69.006 C61.236 69.006 58.996 66.765 58.996 64 C58.996 61.235 61.236 58.994 64 58.994 C66.764 58.994 69.004 61.235 69.004 64 Z" fill="url(#Magenta_to_Orange)"/>
+  </g>
+</svg>

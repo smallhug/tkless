@@ -1,0 +1,408 @@
+<p align="center">
+  <img src="assets/logo.svg" width="128" height="128" alt="PageClaw Logo">
+</p>
+
+<h1 align="center">PageClaw (爪页)</h1>
+
+<p align="center">
+  <strong>High-Performance, Token-Efficient Web Content Extraction Engine & CLI for AI Agents.</strong><br>
+  专为 AI Agent（Claude Code、Cursor、AutoGPT）与 LLM 管道量身定制的毫秒级网页提取与结构化降噪工具。
+</p>
+
+---
+
+## 🌟 核心特性 (Key Features)
+
+- **⚡ 毫秒级极速冷启动**：纯 Rust 编写，静态单二进制无依赖分发，启动延迟仅数毫秒，内存占用低（< 15MB）。
+- **📉 激进降噪与 Token 预算控制**：
+  - 基于 Mozilla Readability 启发式算法，自动过滤导航栏、页眉页脚、弹窗、广告与追踪脚本，平均为 LLM 节省 **70%~90% 的上下文 Token**。
+  - 支持 `--max-tokens <N>` 智能截断：感知段落与句子边界，并在截断时**自动补全并闭合 Markdown 代码块（```` ``` ````）**。
+- **🔌 Agent 管道友好 (Strict Stream Separation)**：
+  - `stdout`：严格纯净，仅输出清洗后的目标数据（Markdown、JSON、Text）。
+  - `stderr`：输出耗时指标、HTTP 状态、Token 统计与调试日志。
+- **💎 零成本先验结构化提取**：
+  - 原生提取 `<script type="application/ld+json">`（Schema.org）、OpenGraph 与 Twitter Card 元数据，无需消耗任何 LLM Token 即可获取高置信度结构化数据。
+- **🌐 智能网络获取**：
+  - 基于 `reqwest` + `rustls`，原生支持 HTTP/2、连接池与多重压缩算法（Gzip / Brotli）。
+  - 流式读取防内存溢出（OOM Guard），自动探测网页编码（UTF-8、GBK、Shift-JIS、Windows-1252 等）。
+- **🏗️ 模块化多包架构**：采用 Cargo Workspace 组织，核心逻辑作为 `pageclaw-core` 库与 CLI 解耦，并预留了 MCP（Model Context Protocol）协议扩展点。
+
+---
+
+## 🏛️ 项目架构 (Workspace Layout)
+
+```text
+pageclaw/
+├── Cargo.toml                          # Workspace 根配置与依赖版本锁定
+├── README.md                           # 项目说明文档
+└── crates/
+    ├── pageclaw-core/                  # 核心提取与清洗引擎库 (可独立引入)
+    │   ├── src/
+    │   │   ├── lib.rs                  # PageclawEngine 外观模式接口
+    │   │   ├── model.rs                # 领域模型 (PageDocument, Metadata, Options)
+    │   │   ├── error.rs                # 结构化错误类型 (PageclawError via thiserror)
+    │   │   ├── fetcher.rs              # 异步流式 HTTP 获取与编码自适应
+    │   │   ├── cleaner.rs              # DOM 降噪与 Readability 正文提取 (scraper)
+    │   │   ├── markdown.rs             # HTML 转高纯净 GFM Markdown (htmd)
+    │   │   ├── extractor.rs            # 元数据与 JSON-LD 结构化提取
+    │   │   └── token.rs                # Token 预算估算与代码块安全截断 (tiktoken)
+    │   └── tests/
+    │       └── integration_test.rs     # 自动化管道与集成测试
+    │
+    ├── pageclaw-cli/                   # 终端 CLI 二进制
+    │   └── src/
+    │       ├── main.rs                 # 异步 Runtime、退出码与 Stdio 流隔离
+    │       ├── cli.rs                  # Clap 命令行定义
+    │       └── output.rs               # Stdout 输出渲染 (Markdown/JSON/Text)
+    │
+    └── pageclaw-mcp/                   # (路线图) Model Context Protocol Server
+```
+
+---
+
+## 🚀 快速上手 (Quick Start)
+
+### 1. 编译与安装
+
+```bash
+# 调试构建
+cargo build --workspace
+
+# 生产级极速优化构建 (启用 LTO 与体积优化)
+cargo build --release
+
+# 安装到本地系统路径
+cargo install --path crates/pageclaw-cli
+```
+
+### 2. 常用命令行示例 (CLI Examples)
+
+#### 基础网页抓取为 Markdown
+```bash
+pageclaw https://httpbin.org/html
+```
+
+#### 带 YAML 元数据前缀 (Title, URL, Published, Author)
+```bash
+pageclaw https://example.com/blog/article --frontmatter
+```
+
+#### 控制 Agent 上下文 Token 预算 (防止撑爆上下文)
+```bash
+pageclaw https://example.com/long-page --max-tokens 2000
+```
+
+#### 仅提取页面内置的 JSON-LD 结构化数据 (电商/新闻/知识库推荐)
+```bash
+pageclaw https://example.com/product/123 --json-ld
+```
+
+#### 完整结构化 JSON 输出 (供 Agent Function Calling 消费)
+```bash
+pageclaw https://example.com/article -f json | jq .metadata
+```
+
+#### 标准输入 (Stdin) 管道模式 (与其他抓取或渲染工具联动)
+```bash
+# 将本地 HTML 或其他工具抓取的 HTML 通过管道喂入
+cat noisy_page.html | pageclaw - --format markdown
+
+# Windows PowerShell 管道示例
+Get-Content ./index.html -Raw | pageclaw - -f markdown
+```
+
+#### 进一步极限压缩 Token：剔除所有图片与链接 URL
+```bash
+pageclaw https://example.com/docs --no-images --no-links
+```
+
+#### ⚡ 主流平台原生适配器 (Platform Adapters)
+针对现代复杂 SPA 网站（如 B站），自动拦截并调用原生接口，**在 150ms 左右直接输出 GFM Markdown 表格或结构化 JSON**，避免启动无头浏览器的巨额资源开销：
+
+```bash
+# 1. 抓取 B 站首页个性化推荐流 (150ms 极速获取视频推荐表格)
+pageclaw https://www.bilibili.com/ --feed
+
+# 2. 抓取 B 站全站热门排行榜 Top 视频
+pageclaw https://www.bilibili.com/v/popular/rank/all
+
+# 3. 抓取 B 站某一频道排行榜 (如科技区、动画区、生活区)
+pageclaw https://www.bilibili.com/v/popular/rank/tech
+pageclaw https://www.bilibili.com/v/popular/rank/anime
+
+# 4. 抓取 B 站具体视频详情页 (包含标题、作者、数据统计、简介及 Schema.org 结构化数据)
+pageclaw https://www.bilibili.com/video/BV1xx411c7mD
+# 也支持直接传入短 BV 号:
+pageclaw BV1xx411c7mD
+
+# 5. 提取 B 站高清视频封面图片 URL (输出纯净 URL 到 stdout)
+pageclaw BV1xx411c7mD --cover
+
+# 6. 下载 B 站视频封面到本地文件 (默认保存为 {bvid}_cover.jpg)
+pageclaw BV1xx411c7mD --download-cover
+# 或指定保存路径:
+pageclaw BV1xx411c7mD --download-cover ./covers/my_cover.jpg
+
+# 7. 下载 B 站渐进式 MP4 视频流 (零 ffmpeg 依赖，单文件直接播放)
+pageclaw BV1xx411c7mD --download-video
+# 指定保存名称与清晰度 (720p / 480p / 360p):
+pageclaw BV1xx411c7mD --download-video my_video.mp4 --quality 720p
+
+# 8. 禁用平台适配器，强制回退为标准纯静态 HTML 爬取
+pageclaw https://www.bilibili.com/video/BV1xx411c7mD --no-adapter
+
+# 9. 启用响应二级缓存 (二次访问毫秒级即时响应)
+pageclaw https://httpbin.org/html --cache
+
+# 10. 启动原生 Model Context Protocol (MCP) 服务器 (stdio 传输)
+pageclaw mcp
+
+# 11. B 站全网视频关键词搜索 (自动清洗高亮标签，输出结构化 Markdown 表格)
+pageclaw --search "Rust编程语言"
+
+# 12. 搜索翻页与排序 (按最多播放 click、最新发布 pubdate、最多弹幕 dm、最多收藏 stow)
+pageclaw --search "Rust" --page 2 --order click
+
+# 13. 直接传入 B 站网页端搜索链接
+pageclaw "https://search.bilibili.com/all?keyword=Rust"
+
+# 14. 🎯 方向三：CSS 选择器定向提取 (DOM 阶段直接剪除 95%+ 无关内容，Token 消耗压缩至几百)
+pageclaw https://httpbin.org/html --selector "h1"
+pageclaw https://example.com/article --selector "article.content, #readme, table"
+
+# 15. 🎯 方向三：全量超链接与图片资产清单提取 (支持 JSON 与 Markdown 两种形态)
+pageclaw https://example.com/page --extract-links -f json
+pageclaw https://example.com/page --extract-images -f json
+
+# 16. 🎯 方向三：表格深度结构化解析 (自动提取 2D 数组与按表头索引的记录字典)
+pageclaw https://example.com/data --extract-tables -f json
+
+# 17. 🎬 方向二：B 站官方/AI 字幕轨提取 (毫秒级提取标准时间轴 [01:25 - 01:30] 内容)
+pageclaw BV1xx411c7mD --subtitles
+
+# 18. 🎬 方向二：B 站时间轴高能弹幕抓取 (按时间升序排版 GFM 表格，支持 --danmaku-limit 控制数量)
+pageclaw BV1xx411c7mD --danmaku
+pageclaw BV1xx411c7mD --danmaku-limit 50
+
+# 19. 🎬 方向二：B 站视频热门精选高赞评论抓取 (支持 --comments-limit 控制数量，默认 20 条，支持跨页翻倍)
+pageclaw BV1xx411c7mD --comments
+pageclaw BV1xx411c7mD --comments-limit 10
+
+# 20. 🧠 官方 AI 总结提纲提取 (直接获取官方大模型核心摘要与带时间戳的章节提纲，省去重度总结 Token)
+pageclaw BV1xx411c7mD --bili-sum
+
+# 21. 🎬 方向二：双格式 Cookie 凭证载入 (支持 Netscape 浏览器插件格式与标准 Header 格式)
+pageclaw BV1xx411c7mD --cookie-file ./cookies.txt
+
+# 22. 🔑 一行命令唤起本地浏览器扫码登录并自动提取保存 Cookie 凭据 (支持 bilibili, zhihu)
+pageclaw login bilibili
+pageclaw login zhihu
+# 或指定凭据保存路径与禁止自动拉起浏览器（纯终端字符画二维码，单行文字提示）：
+pageclaw login bilibili -o ./my_bilibili_cookies.txt --no-browser
+
+# 23. 🌐 免 Key 通用网页搜索 (集成 DuckDuckGo HTML，直供 AI Agent 全流程搜索闭环)
+pageclaw search "Rust 异步编程最佳实践" --limit 5
+pageclaw search "Tokio 教程" -f json
+
+# 24. ⚡ 批量并发抓取与多 URL 流水线 (通过多协程并发池并发处理，支持从文件或管道批量输入)
+pageclaw batch ./urls.txt --concurrency 5 -o ./batch_results.md
+cat ./urls.txt | pageclaw batch - --concurrency 10 -f json
+```
+
+---
+
+## 🤖 Model Context Protocol (MCP) 原生服务模式
+
+PageClaw 实现了符合 **Anthropic MCP 2024-11-05 协议规范** 的原生 stdio JSON-RPC 2.0 服务端。
+AI Agent（如 **Claude Desktop**、**Cursor**、**Windsurf** 等）可以直接将 PageClaw 挂载为原生系统工具，获得开箱即用的网页抓取与媒体下载能力。
+
+### 1. 接入配置指南 (Configuration)
+
+#### 在 Claude Desktop 中使用 (`claude_desktop_config.json`)
+```json
+{
+  "mcpServers": {
+    "pageclaw": {
+      "command": "pageclaw",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+#### 在 Cursor 中使用 (`.cursor/mcp.json`)
+```json
+{
+  "mcpServers": {
+    "pageclaw": {
+      "command": "pageclaw",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+### 2. 暴露给大模型的原生 MCP Tools 清单
+
+| MCP 工具名 | 功能说明 | 核心入参 |
+|---|---|---|
+| **`fetch_webpage`** | 全网网页/B站视频智能抓取与清洗，输出 Markdown 或结构化 JSON，支持 Token 预算截断与缓存，全功能支持 CSS 选择器定向提取、链接/图片/表格结构化资产解析，以及 B站 字幕/弹幕/评论/官方AI大纲提纲提取与 Cookie 鉴权 | `url` (必填), `format`, `mode`, `selector`, `extract_links`, `extract_images`, `extract_tables`, `subtitles`, `danmaku`, `comments`, `conclusion`, `cookie`, `cookie_file`, `max_tokens`, `use_cache` |
+| **`web_search`** | **免 API Key 的通用全网搜索**，输出清晰带链接的检索结果与摘要描述，供 Agent 完成调研决策闭环 | `query` (必填), `limit` (默认 5), `format` (markdown/json) |
+| **`fetch_bilibili_feed`** | 毫秒级拉取 B站 首页推荐流、全站热榜或分区排行榜 GFM 表格 | `feed_type` (recommendations/popular/ranking), `partition`, `format` |
+| **`search_bilibili`** | 按关键词搜索 B站 视频，输出结构化 GFM 表格或 JSON，支持分页与排序 | `keyword` (必填), `page`, `order`, `format`, `use_cache` |
+| **`download_media`** | 下载 B站 视频高清封面图片或免登录渐进式 MP4 视频流至本地磁盘 | `url_or_bvid` (必填), `media_type` (video/cover), `quality`, `destination` |
+
+---
+
+## 📋 命令行参数详解 (CLI Reference)
+
+```text
+USAGE:
+    pageclaw [OPTIONS] [TARGET] [COMMAND]
+
+COMMANDS:
+    mcp                        启动原生 Model Context Protocol (MCP) stdio 服务端
+    login <PLATFORM>           唤起本地浏览器登录提取 Cookie 凭据并保存至文件 (支持 bilibili, zhihu)
+    search <QUERY>             免 API Key 的全网通用搜索，直接输出 Markdown 编号列表或 JSON (支持 -l, -f, -o)
+    batch <FILE>               并发抓取与批量 URL 提取流水线 (支持 -c, -f, -t, --selector, -o)
+
+ARGS:
+    <TARGET>                   目标 URL、短 BV 号或 '-' (从标准输入读取 HTML)
+
+OPTIONS:
+        --search <KEYWORD>     按关键词搜索 B站 视频
+        --page <PAGE>          搜索结果页码或多 P 视频分 P 编号 (1-indexed)
+        --order <ORDER>        搜索排序规则: totalrank (默认), click (播放), pubdate (最新), dm (弹幕), stow (收藏)
+        --mcp                  以原生 MCP 服务器模式运行
+        --cache                启用响应二级缓存 (L1 内存 + L2 磁盘，二次请求 < 10ms)
+        --no-cache             显式禁用响应缓存
+        --cache-ttl <SECS>     缓存有效时长 (秒) [默认: 900 (15 分钟)]
+        --cache-dir <DIR>      自定义磁盘缓存存储目录
+    -f, --format <FORMAT>      输出格式: markdown (默认), json, text, html, raw
+    -m, --mode <MODE>          提取模式: article (默认 Readability 正文), full (全量清洗), raw
+    -t, --max-tokens <N>       限制最大输出 Token 数量 (段落边界自适应截断)
+        --frontmatter          在 Markdown 顶部添加 YAML 元数据 Frontmatter
+        --json-ld              仅提取并输出页面内的 JSON-LD 结构化数据
+        --selector <CSS>       CSS 选择器定向提取 (DOM 阶段剥离无关节点，如 'article.content, #readme')
+        --extract-links        提取页面全量去重超链接清单 (在 -f json 中为 links 数组，在 md 中为尾部清单)
+        --extract-images       提取页面全量图片资产清单 (在 -f json 中为 images 数组，在 md 中为尾部清单)
+        --extract-tables       深度解析页面中的 table 为二维数组与字典对象 records
+        --bili-sub             提取 B站 视频官方/AI 生成的 CC 字幕轨
+        --bili-sum             提取 B站 官方 AI 视频总结核心摘要与章节大纲
+        --bili-dm              提取 B站 视频时间轴高能弹幕 (按出现时间升序排序为 GFM 表格)
+        --bili-dm-limit <N>    限制提取的时间轴弹幕最大条数 (如 --bili-dm-limit 50)
+        --bili-cm              提取 B站 视频高赞精选热评 (包含用户名、点赞数、评论内容与发布时间)
+        --bili-cm-limit <N>    限制提取的高赞热评最大条数 [默认: 20] (支持自动跨页获取，如 --bili-cm-limit 50)
+        --bili-feed            拉取 B站 首页推荐视频流表格
+        --bili-search <KEY>    按关键词搜索 B站 视频
+        --bili-cover           仅输出 B站 视频高清封面图片 URL
+        --bili-dl [<PATH>]     下载 B站 渐进式 MP4 视频流
+        --bili-quality <QN>    B站 视频清晰度选择: 720p (默认), 480p, 360p
+        --cookie <COOKIE>      指定 Cookie 字符串凭据
+        --cookie-file <PATH>   指定 Cookie 凭证文件路径 (支持 Netscape 格式与标准 Header 格式)
+        --no-images            移除所有图片以节省 Token
+        --no-links             移除超链接 URL，仅保留锚点文本
+        --no-metadata          跳过文档元数据 (OG/Twitter/Meta) 提取
+        --no-adapter           禁用平台适配器，强制走原生 HTML 抓取
+        --feed                 拉取平台推荐视频流 (如 B站首页推荐)
+        --cover                仅输出视频高清封面图片 URL
+        --download-cover [P]   下载视频封面图片到本地 (默认: {bvid}_cover.jpg)
+        --download-video [P]   下载渐进式 MP4 视频流 (别名: --download，默认: {title}.mp4)
+        --quality <QUALITY>    视频清晰度选择: 720p (默认), 480p, 360p
+        --allow-private-addresses 允许访问内网私有 IP、localhost 与本地链路地址 (放行 SSRF)
+        --allow-http-errors    在 HTTP 4xx 或 5xx 时不以非零退出码报错，直接返回响应体 (别名: --no-fail)
+        --base-url <URL>       从 stdin 读取 HTML 时用于补全相对链接的基础 URL
+        --retries <N>          网络故障或 5xx 错误时的指数退避重试次数 [默认: 0]
+        --connect-timeout <S>  网络连接握手超时时间 (秒) [默认: 10]
+        --on-too-large <MODE>  响应超出 max-size 时的处理行为: error (默认), truncate (优雅截断继续)
+        --tokenizer <MODEL>    Token 计算模型口径: o200k (默认), cl100k, heuristic
+    -u, --user-agent <UA>      自定义 User-Agent 请求头
+    -H, --header <KEY:VALUE>   添加自定义 HTTP 请求头 (可多次指定)
+        --timeout <SECS>       网络请求超时时间 (秒) [默认: 15]
+        --max-size <MB>        单次下载最大限制 (MB) [默认: 10]
+    -o, --output <FILE>        将处理结果保存至文件而非 stdout
+    -v, --verbose              详细日志输出到 stderr (-v: INFO, -vv: DEBUG)
+    -q, --quiet                静默模式，关闭 stderr 上的全部日志输出
+    -h, --help                 查看帮助信息
+    -V, --version              查看版本信息
+    -V, --version              查看版本信息
+```
+
+---
+
+## 🚦 进程退出码规范 (Exit Codes)
+
+为了便于在 AI Agent 编排流水线与 Shell 脚本中准确捕获异常原因，PageClaw 实现了标准化的语义退出码体系：
+
+| 退出码 | 含义 | 说明 |
+|---|---|---|
+| `0` | 成功 (Success) | 抓取、清洗或多媒体下载完成，或使用 `--allow-http-errors` 提取非 2xx 页面 |
+| `2` | 命令行参数错误 | 传入非法参数、URL 语法有误 |
+| `3` | 网络连接/超时/服务端错误 | 网络不通、DNS 无法解析、连接被拒绝、握手超时或 HTTP 5xx 错误 |
+| `4` | 内容解析或客户端 HTTP 错误 | 字符集解码异常、HTML 严重破损或 HTTP 4xx 错误 (如 404/403) |
+| `5` | 响应体超出限制 | 下载内容大小超出 `--max-size` |
+| `6` | SSRF 安全拦截 | 目标 URL 指向回环、私网或云元数据地址被拦截 |
+| `1` | 通用错误 | 文件 I/O 错误或其他未分类故障 |
+
+---
+
+## 📦 作为 Rust 库使用 (Library Usage)
+
+在您的 Rust 项目 `Cargo.toml` 中引入 `pageclaw-core`：
+
+```toml
+[dependencies]
+pageclaw-core = { path = "path/to/crates/pageclaw-core" }
+tokio = { version = "1", features = ["full"] }
+```
+
+调用代码示例：
+
+```rust
+use pageclaw_core::{PageclawEngine, ExtractionOptions, OutputFormat, ExtractionMode};
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let engine = PageclawEngine::new()?;
+
+    let options = ExtractionOptions {
+        mode: ExtractionMode::Article,
+        format: OutputFormat::Markdown,
+        max_tokens: Some(3000),
+        frontmatter: true,
+        ..Default::default()
+    };
+
+    let doc = engine.process_url("https://httpbin.org/html", &options).await?;
+
+    println!("Title: {:?}", doc.title);
+    println!("Tokens: {}", doc.token_count);
+    println!("Clean Markdown:\n{}", doc.content);
+
+    Ok(())
+}
+```
+
+---
+
+## 🧪 自动化测试 (Testing)
+
+```bash
+# 运行全部单元测试与集成测试
+cargo test --workspace
+
+# 代码质量检查与严格静态分析
+cargo clippy --workspace --all-targets -- -D warnings
+```
+
+---
+
+## 🗺️ 后续路线图 (Roadmap)
+
+- [x] 基于 Readability 的核心正文提取与 DOM 噪点过滤
+- [x] GFM 格式 Markdown 高保真转换 (保留表格、代码高亮)
+- [x] 零 Token 成本的 JSON-LD 与 OpenGraph 元数据抽取
+- [x] BPE Token 计数与语法感知安全截断
+- [x] 严格的 Stdout / Stderr 隔离与管道支持
+- [ ] **Tier 2: 动态渲染扩展 (`pageclaw-mcp` / `chromiumoxide`)**：当目标页面为复杂 SPA 时，可选无缝唤起本地无头 Chrome 完成客户端 JS 渲染。
+- [ ] **Model Context Protocol (MCP) 原生集成**：实现基于 `stdio` 的原生 MCP Server，作为 Claude Code 或 Cursor 的专用 Agent 工具直接加载。

@@ -1,0 +1,278 @@
+use pageclaw_core::model::{ExtractionMode, ExtractionOptions, OutputFormat};
+use pageclaw_core::PageclawEngine;
+
+#[test]
+fn test_integration_pipeline_html_to_markdown() {
+    let engine = PageclawEngine::new().expect("Failed to initialize engine");
+
+    let sample_html = r#"
+        <!DOCTYPE html>
+        <html lang="en">
+        <head>
+            <meta charset="utf-8">
+            <title>Rust Web Extraction for Agents</title>
+            <meta name="description" content="A demonstration of PageClaw cleaning and extraction.">
+            <meta name="author" content="PageClaw Team">
+            <meta property="og:title" content="PageClaw Guide">
+            <script type="application/ld+json">
+            {
+                "@context": "https://schema.org",
+                "@type": "Article",
+                "headline": "Rust Web Extraction for Agents"
+            }
+            </script>
+        </head>
+        <body>
+            <header>
+                <nav><a href="/">Home</a> | <a href="/docs">Docs</a></nav>
+            </header>
+            <main>
+                <article>
+                    <h1>Rust Web Extraction for Agents</h1>
+                    <p>PageClaw prunes boilerplates and produces clean Markdown.</p>
+                    <p>Here is an essential table:</p>
+                    <table>
+                        <thead>
+                            <tr><th>Language</th><th>Cold Start</th></tr>
+                        </thead>
+                        <tbody>
+                            <tr><td>Rust</td><td>&lt; 20ms</td></tr>
+                            <tr><td>Python</td><td>&gt; 800ms</td></tr>
+                        </tbody>
+                    </table>
+                </article>
+                <aside class="advertisement">
+                    <p>Buy our sponsored product!</p>
+                </aside>
+            </main>
+            <footer>
+                <p>Copyright 2026</p>
+            </footer>
+        </body>
+        </html>
+    "#;
+
+    let options = ExtractionOptions {
+        mode: ExtractionMode::Article,
+        format: OutputFormat::Markdown,
+        max_tokens: None,
+        tokenizer: pageclaw_core::model::TokenizerKind::default(),
+        include_metadata: true,
+        include_json_ld: true,
+        strip_images: false,
+        strip_links: false,
+        frontmatter: true,
+        no_adapter: false,
+        feed: false,
+        ..Default::default()
+    };
+
+    let doc = engine
+        .process_html(sample_html, Some("https://example.com/blog/rust-agent"), &options)
+        .expect("Processing failed");
+
+    // 1. Verify title and metadata
+    assert_eq!(doc.title.as_deref(), Some("Rust Web Extraction for Agents"));
+    assert_eq!(doc.metadata.author.as_deref(), Some("PageClaw Team"));
+    assert_eq!(doc.metadata.description.as_deref(), Some("A demonstration of PageClaw cleaning and extraction."));
+    assert_eq!(doc.metadata.open_graph.get("og:title").map(|s| s.as_str()), Some("PageClaw Guide"));
+
+    // 2. Verify JSON-LD extraction
+    assert_eq!(doc.json_ld.len(), 1);
+    assert_eq!(doc.json_ld[0]["headline"], "Rust Web Extraction for Agents");
+
+    // 3. Verify clean Markdown output (frontmatter, content, table)
+    assert!(doc.content.starts_with("---\n"));
+    assert!(doc.content.contains("title: \"Rust Web Extraction for Agents\""));
+    assert!(doc.content.contains("PageClaw prunes boilerplates and produces clean Markdown."));
+    assert!(doc.content.contains("| Language | Cold Start |"));
+
+    // 4. Verify noise was eliminated
+    assert!(!doc.content.contains("Buy our sponsored product!"));
+    assert!(!doc.content.contains("Copyright 2026"));
+
+    // 5. Verify token estimation
+    assert!(doc.token_count > 0);
+    assert!(!doc.truncated);
+}
+
+#[test]
+fn test_integration_token_budget_truncation() {
+    let engine = PageclawEngine::new().expect("Failed to initialize engine");
+
+    let long_html = r#"
+        <article>
+            <h1>Introduction</h1>
+            <p>Section 1: AI agents need low-overhead tools to process the web efficiently without wasting valuable context.</p>
+            <p>Section 2: Rust provides unmatched speed, memory safety, and native asynchronous concurrency.</p>
+            <p>Section 3: By controlling token budgets, we protect large language models from overflowing their context window.</p>
+        </article>
+    "#;
+
+    let options = ExtractionOptions {
+        mode: ExtractionMode::Article,
+        format: OutputFormat::Markdown,
+        max_tokens: Some(25),
+        tokenizer: pageclaw_core::model::TokenizerKind::default(),
+        include_metadata: false,
+        include_json_ld: false,
+        strip_images: false,
+        strip_links: false,
+        frontmatter: false,
+        no_adapter: false,
+        feed: false,
+        ..Default::default()
+    };
+
+    let doc = engine
+        .process_html(long_html, None, &options)
+        .expect("Processing failed");
+
+    assert!(doc.truncated);
+    assert!(doc.content.contains("[Content truncated by PageClaw: token limit reached]"));
+}
+
+#[test]
+fn test_integration_selector_targeted_extraction() {
+    let engine = PageclawEngine::new().expect("Failed to initialize engine");
+
+    let page_html = r#"
+        <!DOCTYPE html>
+        <html>
+        <head><title>Full Page With Lots of Content</title></head>
+        <body>
+            <header><nav><a href="/">Home</a><a href="/about">About</a></nav></header>
+            <div class="sidebar">
+                <p>Trending articles, advertisements, sidebar junk...</p>
+                <div class="ads">Ad 1</div>
+            </div>
+            <main>
+                <article class="post-body">
+                    <h1>Target Header</h1>
+                    <p>This is the core target paragraph needed by the AI Agent.</p>
+                </article>
+                <section class="comments-section">
+                    <p>User comments...</p>
+                </section>
+            </main>
+            <footer>Footer boilerplate...</footer>
+        </body>
+        </html>
+    "#;
+
+    let full_options = ExtractionOptions {
+        mode: ExtractionMode::Full,
+        format: OutputFormat::Markdown,
+        ..Default::default()
+    };
+    let full_doc = engine.process_html(page_html, None, &full_options).unwrap();
+
+    let selector_options = ExtractionOptions {
+        selector: Some("article.post-body".to_string()),
+        format: OutputFormat::Markdown,
+        ..Default::default()
+    };
+    let selector_doc = engine.process_html(page_html, None, &selector_options).unwrap();
+
+    // Verify selector isolated target element
+    assert!(selector_doc.content.contains("# Target Header"));
+    assert!(selector_doc.content.contains("This is the core target paragraph"));
+    assert!(!selector_doc.content.contains("Trending articles"));
+    assert!(!selector_doc.content.contains("Footer boilerplate"));
+    assert!(!selector_doc.content.contains("User comments"));
+
+    // Verify token compression
+    assert!(selector_doc.token_count < full_doc.token_count);
+}
+
+#[test]
+fn test_integration_extract_assets_and_tables_json() {
+    let engine = PageclawEngine::new().expect("Failed to initialize engine");
+
+    let page_html = r#"
+        <html>
+        <body>
+            <a href="/page1">First Link</a>
+            <a href="https://example.com/page2">Second Link</a>
+            <img src="/assets/logo.png" alt="Company Logo">
+            <img src="https://cdn.example.com/banner.jpg" alt="Hero Banner">
+            <table>
+                <thead>
+                    <tr><th>City</th><th>Population</th></tr>
+                </thead>
+                <tbody>
+                    <tr><td>Tokyo</td><td>14000000</td></tr>
+                    <tr><td>London</td><td>8900000</td></tr>
+                </tbody>
+            </table>
+        </body>
+        </html>
+    "#;
+
+    let options = ExtractionOptions {
+        extract_links: true,
+        extract_images: true,
+        extract_tables: true,
+        format: OutputFormat::Json,
+        ..Default::default()
+    };
+
+    let doc = engine
+        .process_html(page_html, Some("https://example.com/base/"), &options)
+        .unwrap();
+
+    // Links
+    let links = doc.links.as_ref().expect("Links must be populated");
+    assert_eq!(links.len(), 2);
+    assert_eq!(links[0].url, "https://example.com/page1");
+    assert_eq!(links[1].url, "https://example.com/page2");
+
+    // Images
+    let images = doc.images.as_ref().expect("Images must be populated");
+    assert_eq!(images.len(), 2);
+    assert_eq!(images[0].src, "https://example.com/assets/logo.png");
+    assert_eq!(images[0].alt, "Company Logo");
+    assert_eq!(images[1].src, "https://cdn.example.com/banner.jpg");
+
+    // Tables
+    let tables = doc.tables.as_ref().expect("Tables must be populated");
+    assert_eq!(tables.len(), 1);
+    assert_eq!(tables[0].headers, vec!["City", "Population"]);
+    assert_eq!(tables[0].rows.len(), 2);
+    assert_eq!(tables[0].records[0].get("City").map(|s| s.as_str()), Some("Tokyo"));
+
+    // Verify JSON serialization includes structured assets
+    let json_val = serde_json::to_value(&doc).unwrap();
+    assert!(json_val.get("links").is_some());
+    assert!(json_val.get("images").is_some());
+    assert!(json_val.get("tables").is_some());
+}
+
+#[test]
+fn test_integration_extract_assets_markdown() {
+    let engine = PageclawEngine::new().expect("Failed to initialize engine");
+
+    let page_html = r#"
+        <html>
+        <body>
+            <p>Hello World</p>
+            <a href="https://example.com/docs">Documentation</a>
+            <img src="https://example.com/pic.png" alt="Sample Picture">
+        </body>
+        </html>
+    "#;
+
+    let options = ExtractionOptions {
+        extract_links: true,
+        extract_images: true,
+        format: OutputFormat::Markdown,
+        ..Default::default()
+    };
+
+    let doc = engine.process_html(page_html, None, &options).unwrap();
+
+    assert!(doc.content.contains("### 页面链接清单 (Links)"));
+    assert!(doc.content.contains("- [Documentation](https://example.com/docs)"));
+    assert!(doc.content.contains("### 页面图片资产 (Images)"));
+    assert!(doc.content.contains("- ![Sample Picture](https://example.com/pic.png)"));
+}
