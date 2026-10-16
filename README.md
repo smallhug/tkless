@@ -153,8 +153,9 @@ pageclaw BV1xx411c7mD --download-video my_video.mp4 --quality 720p
 # 8. 禁用平台适配器，强制回退为标准纯静态 HTML 爬取
 pageclaw https://www.bilibili.com/video/BV1xx411c7mD --no-adapter
 
-# 9. 启用响应二级缓存 (二次访问毫秒级即时响应)
-pageclaw https://httpbin.org/html --cache
+# 9. 启用响应二级缓存与 HTTP 304 零流量再验证 (L1 内存 + L2 磁盘，自动携带 ETag/Last-Modified 协议头)
+# 二次请求命中有效缓存 < 1ms 即时响应；缓存过期时自动发起条件验证，服务器返回 304 Not Modified 时以 0 字节负载即时续期：
+pageclaw https://httpbin.org/html --cache --cache-ttl 900
 
 # 10. 抓取 GitHub 仓库纯净 README 文档 (丢弃 90%+ 导航、Star、Commit DOM 噪音)
 pageclaw https://github.com/tokio-rs/tokio

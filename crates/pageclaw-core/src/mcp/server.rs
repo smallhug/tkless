@@ -363,19 +363,6 @@ impl McpServer {
             table_format,
         };
 
-        // Cache check
-        let cache_key = if use_cache {
-            Some(self.cache.generate_key(url, &options))
-        } else {
-            None
-        };
-
-        if let Some(ref key) = cache_key {
-            if let Some(cached_doc) = self.cache.get(key) {
-                return format_doc_result(&cached_doc, format);
-            }
-        }
-
         let initial_target_host = Url::parse(url.as_str())
             .ok()
             .and_then(|u| u.host_str().map(|h| h.to_lowercase()));
@@ -402,15 +389,26 @@ impl McpServer {
             Err(e) => return McpToolCallResult::error(format!("Failed to initialize engine: {e}")),
         };
 
-        match engine.process_url(url, &options).await {
-            Ok(doc) => {
-                if let Some(ref key) = cache_key {
-                    let _ = self.cache.set(key, &doc, None);
+        let doc = if use_cache {
+            match engine
+                .process_url_with_cache(url, &options, &self.cache)
+                .await
+            {
+                Ok(d) => d,
+                Err(e) => {
+                    return McpToolCallResult::error(format!("Failed to fetch URL '{url}': {e}"))
                 }
-                format_doc_result(&doc, format)
             }
-            Err(e) => McpToolCallResult::error(format!("Failed to fetch URL '{url}': {e}")),
-        }
+        } else {
+            match engine.process_url(url, &options).await {
+                Ok(d) => d,
+                Err(e) => {
+                    return McpToolCallResult::error(format!("Failed to fetch URL '{url}': {e}"))
+                }
+            }
+        };
+
+        format_doc_result(&doc, format)
     }
 
     async fn call_fetch_bilibili_feed(&self, args: &Value) -> McpToolCallResult {

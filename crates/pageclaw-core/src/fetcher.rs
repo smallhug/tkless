@@ -17,6 +17,9 @@ pub struct FetchedResponse {
     pub status: u16,
     pub html: String,
     pub truncated: bool,
+    pub etag: Option<String>,
+    pub last_modified: Option<String>,
+    pub not_modified: bool,
 }
 
 #[derive(Clone)]
@@ -184,6 +187,17 @@ impl Fetcher {
     /// Fetch a webpage by URL with retry backoff, full-chain SSRF validation across redirects,
     /// and decode its content into a clean string.
     pub async fn fetch(&self, target_url: &str) -> Result<FetchedResponse, PageclawError> {
+        self.fetch_with_revalidation(target_url, None, None).await
+    }
+
+    /// Fetches a webpage with conditional HTTP revalidation headers (ETag / If-None-Match, Last-Modified / If-Modified-Since).
+    /// If the remote server responds with 304 Not Modified, returns zero-byte body payload with `not_modified = true`.
+    pub async fn fetch_with_revalidation(
+        &self,
+        target_url: &str,
+        etag: Option<&str>,
+        last_modified: Option<&str>,
+    ) -> Result<FetchedResponse, PageclawError> {
         let mut current_url = Url::parse(target_url)?;
         let mut redirect_count = 0;
         const MAX_REDIRECTS: usize = 10;
@@ -196,7 +210,19 @@ impl Fetcher {
 
             let mut attempt = 0;
             let resp = loop {
-                let send_fut = self.get(&current_url).send();
+                let mut req_builder = self.get(&current_url);
+                // Attach conditional revalidation headers on the first request hop
+                if redirect_count == 0 {
+                    if let Some(et) = etag {
+                        req_builder = req_builder.header(reqwest::header::IF_NONE_MATCH, et.trim());
+                    }
+                    if let Some(lm) = last_modified {
+                        req_builder =
+                            req_builder.header(reqwest::header::IF_MODIFIED_SINCE, lm.trim());
+                    }
+                }
+
+                let send_fut = req_builder.send();
                 match tokio::time::timeout(connect_timeout, send_fut).await {
                     Ok(Ok(r)) => {
                         let status = r.status();
@@ -259,6 +285,34 @@ impl Fetcher {
                 }
             };
 
+            // Check if server returned 304 Not Modified
+            if resp.status() == reqwest::StatusCode::NOT_MODIFIED {
+                debug!(url = %current_url, "Server returned HTTP 304 Not Modified");
+                let new_etag = resp
+                    .headers()
+                    .get(reqwest::header::ETAG)
+                    .and_then(|v| v.to_str().ok())
+                    .map(|s| s.to_string())
+                    .or_else(|| etag.map(|s| s.to_string()));
+                let new_lm = resp
+                    .headers()
+                    .get(reqwest::header::LAST_MODIFIED)
+                    .and_then(|v| v.to_str().ok())
+                    .map(|s| s.to_string())
+                    .or_else(|| last_modified.map(|s| s.to_string()));
+
+                return Ok(FetchedResponse {
+                    requested_url: target_url.to_string(),
+                    final_url: current_url.to_string(),
+                    status: 304,
+                    html: String::new(),
+                    truncated: false,
+                    etag: new_etag,
+                    last_modified: new_lm,
+                    not_modified: true,
+                });
+            }
+
             // Check if this response is an HTTP redirect (301, 302, 303, 307, 308)
             let status = resp.status();
             if status.is_redirection() {
@@ -311,6 +365,18 @@ impl Fetcher {
             .and_then(|v| v.to_str().ok())
             .map(|s| s.to_string());
 
+        let etag_header = response
+            .headers()
+            .get(reqwest::header::ETAG)
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string());
+
+        let lm_header = response
+            .headers()
+            .get(reqwest::header::LAST_MODIFIED)
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string());
+
         // Stream body with strict or truncating size check
         let mut raw_bytes = Vec::new();
         let mut truncated = false;
@@ -348,6 +414,9 @@ impl Fetcher {
             status: status_u16,
             html,
             truncated,
+            etag: etag_header,
+            last_modified: lm_header,
+            not_modified: false,
         })
     }
 
