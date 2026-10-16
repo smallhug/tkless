@@ -243,6 +243,19 @@ cat ./urls.txt | pageclaw batch - --concurrency 10 -f json
 pageclaw crawl "https://tokio.rs/tokio/tutorial" --max-depth 2 --max-pages 20 -o ./tokio_docs.md
 # 仅爬取相同路径前缀的子文档（例如仅抓取 /docs/ 路径下的页面）：
 pageclaw crawl "https://example.com/docs" --same-path-prefix -f json -o ./docs_kb.json
+
+# 26. 🌐 Chrome DevTools Protocol (CDP) 无头浏览器渲染 Sidecar (针对重度 SPA 与反爬挑战绕过)
+# 连接本地运行的 Chrome/Edge 远程调试端口 (如 google-chrome --remote-debugging-port=9222)
+# 自动在浏览器中执行 JavaScript、等待 DOM 水合渲染，并安全提取完整的 outerHTML：
+pageclaw "https://zhuanlan.zhihu.com/p/123456" --cdp http://127.0.0.1:9222 --cdp-wait 1000
+# 与搜索即抓取、整站爬虫协同使用：
+pageclaw search "Rust 教程" --fetch-content --cdp http://127.0.0.1:9222
+
+# 27. 🎯 结构化实体提取 Schema (Schema-Driven Entity Extraction，极简声明式字段抽取与 Token 极致压缩)
+# 通过内联 JSON 或模式文件，直接从 DOM 抽取指定字段与属性，直出纯净结构化 JSON 或 Markdown 附录：
+pageclaw "https://store.example.com/item/1" --schema '{"fields":{"title":"h1","price":".price-val","link":"a@href","tags":"[.tag]"}}' -f json
+# 支持 items_selector 列表循环模式，一次性抽取整页商品卡片或文章列表：
+pageclaw "https://news.example.com/" --schema '{"items_selector":".post-item","fields":{"title":"h2","url":"a@href","author":".author"}}' -f json
 ```
 
 ---
@@ -282,7 +295,7 @@ AI Agent（如 **Claude Desktop**、**Cursor**、**Windsurf** 等）可以直接
 
 | MCP 工具名 | 功能说明 | 核心入参 |
 |---|---|---|
-| **`fetch_webpage`** | 全网网页/B站视频智能抓取与清洗，输出 Markdown 或结构化 JSON，支持 Token 预算截断与缓存，全功能支持 CSS 选择器定向提取、链接/图片/表格结构化资产解析，以及 B站 字幕/弹幕/评论/官方AI大纲提纲提取与 Cookie 鉴权 | `url` (必填), `format`, `mode`, `selector`, `extract_links`, `extract_images`, `extract_tables`, `subtitles`, `danmaku`, `comments`, `conclusion`, `cookie`, `cookie_file`, `max_tokens`, `use_cache` |
+| **`fetch_webpage`** | 全网网页/B站视频智能抓取与清洗，输出 Markdown 或结构化 JSON，支持 Token 预算截断与缓存，全功能支持 CSS 选择器定向提取、链接/图片/表格结构化资产解析、CDP 浏览器渲染与 Schema 结构化实体提取，以及 B站 字幕/弹幕/评论/官方AI大纲提纲提取与 Cookie 鉴权 | `url` (必填), `format`, `mode`, `selector`, `schema`, `cdp_endpoint`, `cdp_wait_ms`, `extract_links`, `extract_images`, `extract_tables`, `subtitles`, `danmaku`, `comments`, `conclusion`, `cookie`, `cookie_file`, `max_tokens`, `use_cache` |
 | **`web_search`** | **免 API Key 的通用全网搜索**（支持 Bing、Google 与 Auto 容灾，支持 `--fetch-content` 搜索即抓取一体化调研），输出清晰带链接的检索结果与正文内容 | `query` (必填), `engine` (bing/google/auto, 默认 bing), `fetch_content` (可选布尔值), `max_tokens_per_page` (可选整数), `limit` (默认 5), `format` (markdown/json) |
 | **`crawl_site`** | **整站文档递归爬取与知识库汇编**（从种子 URL 广度优先发现超链接），自动生成带目录索引（TOC）的单文件集成 Markdown 知识库或结构化 JSON | `seed_url` (必填), `max_depth` (默认 2, 最大 5), `max_pages` (默认 20, 最大 100), `same_path_prefix` (可选布尔值), `format` (markdown/json) |
 | **`fetch_bilibili_feed`** | 毫秒级拉取 B站 首页推荐流、全站热榜或分区排行榜 GFM 表格 | `feed_type` (recommendations/popular/ranking), `partition`, `format` |
