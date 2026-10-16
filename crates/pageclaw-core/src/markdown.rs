@@ -19,6 +19,12 @@ impl Default for MarkdownConverter {
     }
 }
 
+impl Clone for MarkdownConverter {
+    fn clone(&self) -> Self {
+        Self::new()
+    }
+}
+
 impl MarkdownConverter {
     pub fn new() -> Self {
         Self {

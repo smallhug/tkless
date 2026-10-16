@@ -1,5 +1,6 @@
 use crate::error::PageclawError;
-use crate::model::SearchEngineKind;
+use crate::model::{ExtractionOptions, SearchEngineKind};
+use crate::PageclawEngine;
 use scraper::{Html, Selector};
 use serde::{Deserialize, Serialize};
 use std::sync::LazyLock;
@@ -31,6 +32,113 @@ pub struct SearchResultItem {
     pub url: String,
     pub snippet: String,
     pub engine: String,
+}
+
+/// Detailed search result containing concurrently fetched and cleaned page content.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SearchFetchItem {
+    pub rank: usize,
+    pub title: String,
+    pub url: String,
+    pub snippet: String,
+    pub engine: String,
+    pub content: Option<String>,
+    pub token_count: usize,
+    pub status: u16,
+    pub error: Option<String>,
+}
+
+/// Executes an all-in-one search & fetch pipeline:
+/// 1. Searches Bing / Google / Auto for the query to get top URLs
+/// 2. Concurrently fetches and extracts clean Markdown content for each page via PageclawEngine
+/// 3. Enforces per-page token budgets to prevent LLM context explosion
+pub async fn web_search_and_fetch(
+    engine: &PageclawEngine,
+    query: &str,
+    limit: usize,
+    search_engine: SearchEngineKind,
+    base_options: &ExtractionOptions,
+    max_tokens_per_page: Option<usize>,
+) -> Result<Vec<SearchFetchItem>, PageclawError> {
+    let clean_query = query.trim();
+    if clean_query.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // 1. Search phase
+    let search_results =
+        web_search_with_engine(engine.client(), clean_query, limit, search_engine).await?;
+    if search_results.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    debug!(
+        query = clean_query,
+        count = search_results.len(),
+        "Concurrently fetching search result contents"
+    );
+
+    // 2. Parallel fetch phase
+    let per_page_tokens = max_tokens_per_page.unwrap_or(1500);
+    let mut page_options = base_options.clone();
+    page_options.max_tokens = Some(per_page_tokens);
+
+    let mut join_set = tokio::task::JoinSet::new();
+
+    for (idx, item) in search_results.into_iter().enumerate() {
+        let rank = idx + 1;
+        let item_url = item.url.clone();
+        let item_title = item.title.clone();
+        let item_snippet = item.snippet.clone();
+        let item_engine = item.engine.clone();
+        let opts = page_options.clone();
+        let eng = engine.clone();
+
+        join_set.spawn(async move {
+            match eng.process_url(&item_url, &opts).await {
+                Ok(doc) => SearchFetchItem {
+                    rank,
+                    title: if item_title.is_empty() {
+                        doc.title.unwrap_or_else(|| "网页内容".into())
+                    } else {
+                        item_title
+                    },
+                    url: item_url,
+                    snippet: item_snippet,
+                    engine: item_engine,
+                    content: Some(doc.content),
+                    token_count: doc.token_count,
+                    status: doc.status,
+                    error: None,
+                },
+                Err(err) => {
+                    warn!(url = %item_url, error = %err, "Failed to fetch search result item content");
+                    SearchFetchItem {
+                        rank,
+                        title: item_title,
+                        url: item_url,
+                        snippet: item_snippet,
+                        engine: item_engine,
+                        content: None,
+                        token_count: 0,
+                        status: 0,
+                        error: Some(err.to_string()),
+                    }
+                }
+            }
+        });
+    }
+
+    let mut fetched_items = Vec::new();
+    while let Some(res) = join_set.join_next().await {
+        if let Ok(item) = res {
+            fetched_items.push(item);
+        }
+    }
+
+    // Sort by original search rank to preserve ranking order
+    fetched_items.sort_by_key(|item| item.rank);
+    Ok(fetched_items)
 }
 
 /// Executes a web search using the specified engine (Bing, Google, or Auto failover).
@@ -342,6 +450,50 @@ pub fn format_search_results_markdown(query: &str, results: &[SearchResultItem])
     out
 }
 
+/// Formats combined search & fetch results into an integrated research report for LLMs.
+pub fn format_search_fetch_markdown(query: &str, items: &[SearchFetchItem]) -> String {
+    let mut out = String::new();
+    let engine_name = items.first().map(|r| r.engine.as_str()).unwrap_or("search");
+
+    let total_fetched = items.iter().filter(|i| i.content.is_some()).count();
+    let total_tokens: usize = items.iter().map(|i| i.token_count).sum();
+
+    out.push_str(&format!(
+        "# 搜索与正文集成调研 ({engine_name}): \"{query}\"\n\n> 检索到 {} 条结果 | 成功提取 {} 篇正文 | 累计估算 Tokens: {}\n\n---\n\n",
+        items.len(),
+        total_fetched,
+        total_tokens
+    ));
+
+    if items.is_empty() {
+        out.push_str("未检索到相关网页结果。\n");
+        return out;
+    }
+
+    for item in items {
+        out.push_str(&format!(
+            "## {}. [{}]({})\n\n",
+            item.rank, item.title, item.url
+        ));
+
+        if !item.snippet.is_empty() {
+            out.push_str(&format!("> **摘要**: {}\n\n", item.snippet));
+        }
+
+        if let Some(ref content) = item.content {
+            out.push_str(&format!("### 正文速览 (Tokens: {}):\n\n", item.token_count));
+            out.push_str(content.trim());
+            out.push_str("\n\n---\n\n");
+        } else if let Some(ref err) = item.error {
+            out.push_str(&format!("> *[正文拉取异常: {err}]*\n\n---\n\n"));
+        } else {
+            out.push_str("> *[未获取到正文内容]*\n\n---\n\n");
+        }
+    }
+
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -405,6 +557,41 @@ mod tests {
 
         let direct_url = "https://example.com/rust";
         assert_eq!(unwrap_bing_url(direct_url), "https://example.com/rust");
+    }
+
+    #[test]
+    fn test_format_search_fetch_markdown() {
+        let items = vec![
+            SearchFetchItem {
+                rank: 1,
+                title: "Rust Guide".to_string(),
+                url: "https://www.rust-lang.org/".to_string(),
+                snippet: "A language empowering everyone".to_string(),
+                engine: "bing".to_string(),
+                content: Some("# Rust\nFast and reliable.".to_string()),
+                token_count: 50,
+                status: 200,
+                error: None,
+            },
+            SearchFetchItem {
+                rank: 2,
+                title: "Failed Page".to_string(),
+                url: "https://example.com/404".to_string(),
+                snippet: "Missing".to_string(),
+                engine: "bing".to_string(),
+                content: None,
+                token_count: 0,
+                status: 404,
+                error: Some("HTTP error 404".to_string()),
+            },
+        ];
+
+        let md = format_search_fetch_markdown("Rust", &items);
+        assert!(md.contains("# 搜索与正文集成调研 (bing): \"Rust\""));
+        assert!(md.contains("成功提取 1 篇正文"));
+        assert!(md.contains("## 1. [Rust Guide](https://www.rust-lang.org/)"));
+        assert!(md.contains("Fast and reliable."));
+        assert!(md.contains("HTTP error 404"));
     }
 
     #[test]

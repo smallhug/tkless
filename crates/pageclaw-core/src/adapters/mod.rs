@@ -10,6 +10,7 @@ use crate::error::PageclawError;
 use crate::model::{ExtractionOptions, PageDocument};
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::Arc;
 use url::Url;
 
 /// Type alias for dyn-compatible asynchronous return futures in PlatformAdapter.
@@ -33,8 +34,9 @@ pub trait PlatformAdapter: Send + Sync {
 }
 
 /// Registry managing active platform adapters.
+#[derive(Clone)]
 pub struct AdapterRegistry {
-    adapters: Vec<Box<dyn PlatformAdapter>>,
+    adapters: Vec<Arc<dyn PlatformAdapter>>,
 }
 
 impl Default for AdapterRegistry {
@@ -54,20 +56,23 @@ impl AdapterRegistry {
     /// Creates a registry initialized with all built-in platform adapters.
     pub fn with_builtins() -> Self {
         let mut registry = Self::new();
-        registry.register(Box::new(BilibiliAdapter::new()));
-        registry.register(Box::new(WechatAdapter::new()));
-        registry.register(Box::new(ZhihuAdapter::new()));
+        registry.register(Arc::new(BilibiliAdapter::new()));
+        registry.register(Arc::new(WechatAdapter::new()));
+        registry.register(Arc::new(ZhihuAdapter::new()));
         registry
     }
 
     /// Registers a custom platform adapter.
-    pub fn register(&mut self, adapter: Box<dyn PlatformAdapter>) {
+    pub fn register(&mut self, adapter: Arc<dyn PlatformAdapter>) {
         self.adapters.push(adapter);
     }
 
     /// Finds the first matching adapter for a URL.
     pub fn find_adapter(&self, url: &Url) -> Option<&dyn PlatformAdapter> {
-        self.adapters.iter().find(|a| a.matches(url)).map(|b| b.as_ref())
+        self.adapters
+            .iter()
+            .find(|a| a.matches(url))
+            .map(|b| b.as_ref())
     }
 }
 
@@ -96,7 +101,7 @@ mod tests {
     #[test]
     fn test_registry_matching() {
         let mut reg = AdapterRegistry::new();
-        reg.register(Box::new(DummyAdapter));
+        reg.register(Arc::new(DummyAdapter));
 
         let matching_url = Url::parse("https://dummy.test/page").unwrap();
         let other_url = Url::parse("https://example.com/").unwrap();
