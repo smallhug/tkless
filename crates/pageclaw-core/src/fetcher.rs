@@ -128,11 +128,23 @@ impl Fetcher {
                     None
                 }
             } else {
-                // Security Hardening: If it's an unprefixed cookie, STRICTLY only allow if visiting the authorized initial host!
-                // Never leak to arbitrary third-party hosts during searches, crawls, or cross-origin redirects.
+                // Security Hardening: If it's an unprefixed cookie, authorize based on platform scope or apex domain.
+                // Ensures all legitimate API subdomains of the same platform (e.g. api.bilibili.com for www.bilibili.com)
+                // receive the credentials, while strictly stripping cookies on cross-origin redirects and third-party search hits.
                 if let Some(ref auth_host) = self.options.initial_target_host {
-                    let host = url.host_str().unwrap_or("").to_lowercase();
-                    if is_subdomain_or_exact(&host, auth_host) {
+                    let req_host = url.host_str().unwrap_or("").to_lowercase();
+                    let current_platform = detect_platform_from_host(&req_host);
+                    let initial_platform = detect_platform_from_host(auth_host);
+
+                    let is_authorized = match (current_platform, initial_platform) {
+                        (Some(cp), Some(ip)) if cp == ip => true,
+                        _ => {
+                            let apex_auth = extract_apex_domain(auth_host);
+                            is_subdomain_or_exact(&req_host, apex_auth)
+                        }
+                    };
+
+                    if is_authorized {
                         Some(cli_cookie.clone())
                     } else {
                         None
@@ -498,28 +510,77 @@ pub fn is_subdomain_or_exact(host: &str, apex_domain: &str) -> bool {
     false
 }
 
+/// Extracts the registrable apex domain from a host (e.g. `www.bilibili.com` -> `bilibili.com`).
+pub fn extract_apex_domain(host: &str) -> &str {
+    let clean = host.trim().trim_matches('.');
+    let parts: Vec<&str> = clean.split('.').collect();
+    if parts.len() <= 2 {
+        return clean;
+    }
+
+    // Handle common double TLDs like .co.uk, .com.cn, .net.cn, .org.cn
+    let last = parts[parts.len() - 1];
+    let second_last = parts[parts.len() - 2];
+    if (second_last == "com"
+        || second_last == "co"
+        || second_last == "net"
+        || second_last == "org"
+        || second_last == "edu")
+        && (last == "cn" || last == "uk" || last == "jp" || last == "au")
+        && parts.len() >= 3
+    {
+        let offset = parts[..parts.len() - 3]
+            .iter()
+            .map(|p| p.len() + 1)
+            .sum::<usize>();
+        return &clean[offset..];
+    }
+
+    let offset = parts[..parts.len() - 2]
+        .iter()
+        .map(|p| p.len() + 1)
+        .sum::<usize>();
+    &clean[offset..]
+}
+
+/// Detects platform identifier from a host string (e.g. `api.bilibili.com` -> `bilibili`).
+pub fn detect_platform_from_host(host: &str) -> Option<&'static str> {
+    let host_lower = host.trim().to_lowercase();
+
+    if is_subdomain_or_exact(&host_lower, "bilibili.com")
+        || is_subdomain_or_exact(&host_lower, "b23.tv")
+        || is_subdomain_or_exact(&host_lower, "bilivideo.com")
+    {
+        Some("bilibili")
+    } else if is_subdomain_or_exact(&host_lower, "zhihu.com") {
+        Some("zhihu")
+    } else if is_subdomain_or_exact(&host_lower, "qq.com")
+        || is_subdomain_or_exact(&host_lower, "weixin.qq.com")
+    {
+        Some("wechat")
+    } else if is_subdomain_or_exact(&host_lower, "weibo.com")
+        || is_subdomain_or_exact(&host_lower, "weibo.cn")
+    {
+        Some("weibo")
+    } else if is_subdomain_or_exact(&host_lower, "xiaohongshu.com")
+        || is_subdomain_or_exact(&host_lower, "xhslink.com")
+    {
+        Some("xiaohongshu")
+    } else if is_subdomain_or_exact(&host_lower, "juejin.cn") {
+        Some("juejin")
+    } else if is_subdomain_or_exact(&host_lower, "github.com") {
+        Some("github")
+    } else {
+        None
+    }
+}
+
 /// Detects platform identifier from a URL string (e.g. "bilibili", "zhihu", "wechat").
 /// Uses strict domain boundary matching to prevent cross-site cookie leaks to spoofed domains.
 pub fn detect_platform_from_url(url_str: &str) -> Option<&'static str> {
     let parsed = Url::parse(url_str).ok()?;
-    let host = parsed.host_str()?.to_lowercase();
-
-    if is_subdomain_or_exact(&host, "bilibili.com") || is_subdomain_or_exact(&host, "b23.tv") {
-        Some("bilibili")
-    } else if is_subdomain_or_exact(&host, "zhihu.com") {
-        Some("zhihu")
-    } else if is_subdomain_or_exact(&host, "qq.com")
-        || is_subdomain_or_exact(&host, "weixin.qq.com")
-    {
-        Some("wechat")
-    } else if is_subdomain_or_exact(&host, "weibo.com") || is_subdomain_or_exact(&host, "weibo.cn")
-    {
-        Some("weibo")
-    } else if is_subdomain_or_exact(&host, "xiaohongshu.com") {
-        Some("xiaohongshu")
-    } else {
-        None
-    }
+    let host = parsed.host_str()?;
+    detect_platform_from_host(host)
 }
 
 /// Loads cookie credentials from file tailored for the specified target URL or platform.
@@ -1121,19 +1182,45 @@ mod tests {
     }
 
     #[test]
+    fn test_extract_apex_domain() {
+        assert_eq!(extract_apex_domain("www.bilibili.com"), "bilibili.com");
+        assert_eq!(extract_apex_domain("api.bilibili.com"), "bilibili.com");
+        assert_eq!(extract_apex_domain("zhuanlan.zhihu.com"), "zhihu.com");
+        assert_eq!(extract_apex_domain("bilibili.com"), "bilibili.com");
+        assert_eq!(extract_apex_domain("docs.rs"), "docs.rs");
+        assert_eq!(extract_apex_domain("sub.example.com.cn"), "example.com.cn");
+    }
+
+    #[test]
     fn test_unprefixed_cli_cookie_scoped_to_initial_host() {
-        // 1. Unprefixed CLI cookie with authorized initial_target_host
+        // 1. Real-world CLI scenario: user enters "https://www.bilibili.com/video/BV...",
+        // resulting in exact initial_target_host = Some("www.bilibili.com").
+        // Must authorize both the page and sibling API/CDN subdomains of the same platform!
         let options = FetchOptions {
             cookie: Some("SESSDATA=bili_val; bili_jct=csrf_val".to_string()),
-            initial_target_host: Some("bilibili.com".to_string()),
+            initial_target_host: Some("www.bilibili.com".to_string()),
             ..Default::default()
         };
         let fetcher = Fetcher::new(options).unwrap();
 
-        // Matching initial host or subdomain receives the cookie
-        let bili_url = Url::parse("https://api.bilibili.com/x/web-interface/view").unwrap();
+        // Exact host receives the cookie
+        let www_bili_url = Url::parse("https://www.bilibili.com/video/BV1xx").unwrap();
         assert_eq!(
-            fetcher.resolve_cookie_for_url(&bili_url),
+            fetcher.resolve_cookie_for_url(&www_bili_url),
+            Some("SESSDATA=bili_val; bili_jct=csrf_val".to_string())
+        );
+
+        // Platform API subdomain (api.bilibili.com) MUST ALSO receive the cookie!
+        let api_bili_url = Url::parse("https://api.bilibili.com/x/web-interface/view").unwrap();
+        assert_eq!(
+            fetcher.resolve_cookie_for_url(&api_bili_url),
+            Some("SESSDATA=bili_val; bili_jct=csrf_val".to_string())
+        );
+
+        // Platform video stream CDN (bilivideo.com) receives the cookie
+        let cdn_bili_url = Url::parse("https://upos-sz-mirror08c.bilivideo.com/video.mp4").unwrap();
+        assert_eq!(
+            fetcher.resolve_cookie_for_url(&cdn_bili_url),
             Some("SESSDATA=bili_val; bili_jct=csrf_val".to_string())
         );
 
@@ -1144,7 +1231,23 @@ mod tests {
         let attacker = Url::parse("https://attacker.example/steal").unwrap();
         assert_eq!(fetcher.resolve_cookie_for_url(&attacker), None);
 
-        // 2. Unprefixed CLI cookie WITHOUT initial_target_host (e.g. search --fetch-content command)
+        // 2. Real-world Zhihu CLI scenario: initial target is "zhuanlan.zhihu.com"
+        // Must authorize "www.zhihu.com/api/v4/..." but strip on external sites!
+        let zhihu_options = FetchOptions {
+            cookie: Some("d_c0=zh_sec".to_string()),
+            initial_target_host: Some("zhuanlan.zhihu.com".to_string()),
+            ..Default::default()
+        };
+        let zhihu_fetcher = Fetcher::new(zhihu_options).unwrap();
+
+        let zhihu_api_url = Url::parse("https://www.zhihu.com/api/v4/answers/123").unwrap();
+        assert_eq!(
+            zhihu_fetcher.resolve_cookie_for_url(&zhihu_api_url),
+            Some("d_c0=zh_sec".to_string())
+        );
+        assert_eq!(zhihu_fetcher.resolve_cookie_for_url(&third_party), None);
+
+        // 3. Unprefixed CLI cookie WITHOUT initial_target_host (e.g. search --fetch-content command)
         let search_options = FetchOptions {
             cookie: Some("SESSDATA=bili_val".to_string()),
             initial_target_host: None,
@@ -1153,7 +1256,7 @@ mod tests {
         let search_fetcher = Fetcher::new(search_options).unwrap();
 
         // Any arbitrary host MUST NOT receive the unprefixed cookie!
-        assert_eq!(search_fetcher.resolve_cookie_for_url(&bili_url), None);
+        assert_eq!(search_fetcher.resolve_cookie_for_url(&api_bili_url), None);
         assert_eq!(search_fetcher.resolve_cookie_for_url(&third_party), None);
         assert_eq!(search_fetcher.resolve_cookie_for_url(&attacker), None);
     }
