@@ -519,6 +519,27 @@ pub fn get_available_tools() -> Vec<McpTool> {
                 },
                 "required": ["platform"]
             }),
+        },
+        McpTool {
+            name: "scaffold_schema".to_string(),
+            description: "Analyzes the DOM structure of a webpage URL or raw HTML string, detects repeating list containers (e.g. products, articles, cards), and generates a ready-to-use ExtractionSchema template to drastically save AI Agent tokens.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "url": {
+                        "type": "string",
+                        "description": "Webpage URL to fetch and analyze DOM skeleton"
+                    },
+                    "html": {
+                        "type": "string",
+                        "description": "Optional raw HTML string to analyze directly without network request"
+                    },
+                    "cdp_endpoint": {
+                        "type": "string",
+                        "description": "Optional Chrome DevTools Protocol endpoint (e.g. 'http://127.0.0.1:9222') for JS-rendered dynamic pages"
+                    }
+                }
+            }),
         }
     ]
 }

@@ -42,7 +42,7 @@ async fn test_mcp_protocol_lifecycle() {
     let tools_array = tools_val["tools"]
         .as_array()
         .expect("Tools should be an array");
-    assert_eq!(tools_array.len(), 9);
+    assert_eq!(tools_array.len(), 10);
 
     let tool_names: Vec<&str> = tools_array
         .iter()
@@ -57,6 +57,7 @@ async fn test_mcp_protocol_lifecycle() {
     assert!(tool_names.contains(&"batch_fetch_webpages"));
     assert!(tool_names.contains(&"clean_html"));
     assert!(tool_names.contains(&"login_platform"));
+    assert!(tool_names.contains(&"scaffold_schema"));
 
     // Verify web_search schema contains scope, cdp_endpoint, schema
     let search_tool = tools_array
@@ -130,6 +131,19 @@ async fn test_mcp_protocol_lifecycle() {
     let login_text = login_val["content"][0]["text"].as_str().unwrap();
     assert!(login_text.contains("https://www.zhihu.com/signin"));
     assert!(login_text.contains("zhihu:"));
+
+    // 5d. Tool Call: scaffold_schema
+    let scaffold_req = r#"{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"scaffold_schema","arguments":{"html":"<div class=\"grid\"><div class=\"card\"><h2 class=\"title\">Item 1</h2><span class=\"price\">10</span></div><div class=\"card\"><h2 class=\"title\">Item 2</h2><span class=\"price\">20</span></div><div class=\"card\"><h2 class=\"title\">Item 3</h2><span class=\"price\">30</span></div></div>"}}}"#;
+    let scaffold_res = server
+        .handle_message(scaffold_req)
+        .await
+        .expect("Should return response");
+    let scaffold_val = scaffold_res
+        .result
+        .expect("Scaffold result should be present");
+    let scaffold_text = scaffold_val["content"][0]["text"].as_str().unwrap();
+    assert!(scaffold_text.contains("card"));
+    assert!(scaffold_text.contains("```json"));
 
     // 5. Unknown Method Error
     let unknown_req = r#"{"jsonrpc":"2.0","id":4,"method":"unknown/method"}"#;

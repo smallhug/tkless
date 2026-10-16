@@ -229,6 +229,10 @@ pub struct CliArgs {
     )]
     pub schema: Option<String>,
 
+    /// 分析目标页面 DOM 结构骨架，自动探测重复列表容器并生成建议的 Schema 抽取模版 (节省 Agent Token)
+    #[arg(long = "scaffold", help_heading = "通用提取选项 (General Options)")]
+    pub scaffold: bool,
+
     // =========================================================================
     // 哔哩哔哩专属选项 (Bilibili Options)
     // =========================================================================

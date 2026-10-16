@@ -97,6 +97,7 @@ impl McpServer {
                     "batch_fetch_webpages" => self.call_batch_fetch_webpages(&arguments).await,
                     "clean_html" => self.call_clean_html(&arguments).await,
                     "login_platform" => self.call_login_platform(&arguments).await,
+                    "scaffold_schema" => self.call_scaffold_schema(&arguments).await,
                     _ => McpToolCallResult::error(format!("Unknown tool: '{tool_name}'")),
                 };
 
@@ -1055,6 +1056,47 @@ impl McpServer {
                 "Unsupported platform '{other}'. Currently supported: 'bilibili', 'zhihu'"
             )),
         }
+    }
+
+    async fn call_scaffold_schema(&self, args: &Value) -> McpToolCallResult {
+        let raw_html = if let Some(html) = args.get("html").and_then(|v| v.as_str()) {
+            html.to_string()
+        } else if let Some(url) = args.get("url").and_then(|v| v.as_str()) {
+            let parsed_url = match url::Url::parse(url) {
+                Ok(u) => u,
+                Err(e) => return McpToolCallResult::error(format!("Invalid URL: {e}")),
+            };
+
+            if let Err(e) = self.engine.fetcher().validate_ssrf(&parsed_url).await {
+                return McpToolCallResult::error(format!("SSRF blocked: {e}"));
+            }
+
+            if let Some(cdp_endpoint) = args.get("cdp_endpoint").and_then(|v| v.as_str()) {
+                let cdp_opts = crate::cdp::CdpOptions {
+                    endpoint: cdp_endpoint.to_string(),
+                    wait_ms: Some(1000),
+                    timeout_ms: None,
+                    user_agent: self.engine.fetcher().options().user_agent.clone(),
+                    cookie: self.engine.fetcher().resolve_cookie_for_url(&parsed_url),
+                };
+                match crate::cdp::fetch_html_via_cdp(url, &cdp_opts).await {
+                    Ok(h) => h,
+                    Err(e) => return McpToolCallResult::error(format!("CDP fetch failed: {e}")),
+                }
+            } else {
+                match self.engine.fetcher().fetch(url).await {
+                    Ok(resp) => resp.html,
+                    Err(e) => return McpToolCallResult::error(format!("Fetch URL failed: {e}")),
+                }
+            }
+        } else {
+            return McpToolCallResult::error(
+                "Either 'url' or 'html' parameter must be provided to scaffold_schema",
+            );
+        };
+
+        let report = crate::schema::scaffold_dom_skeleton(&raw_html);
+        McpToolCallResult::success(report.summary_markdown)
     }
 }
 
