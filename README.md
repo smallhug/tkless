@@ -237,6 +237,12 @@ pageclaw search "Tokio runtime" --fetch-content --limit 2 -f json --max-tokens-p
 # 24. ⚡ 批量并发抓取与多 URL 流水线 (通过多协程并发池并发处理，支持从文件或管道批量输入)
 pageclaw batch ./urls.txt --concurrency 5 -o ./batch_results.md
 cat ./urls.txt | pageclaw batch - --concurrency 10 -f json
+
+# 25. 📚 整站文档递归爬取与知识库汇编 (BFS 遍历站点/同路径超链接，自动构建带 TOC 目录索引的单文件 Markdown 知识库)
+# 从入口 URL 深度递归爬取整套技术文档（限制深度 2，最多 20 页，并发 5，保存为集成知识库）：
+pageclaw crawl "https://tokio.rs/tokio/tutorial" --max-depth 2 --max-pages 20 -o ./tokio_docs.md
+# 仅爬取相同路径前缀的子文档（例如仅抓取 /docs/ 路径下的页面）：
+pageclaw crawl "https://example.com/docs" --same-path-prefix -f json -o ./docs_kb.json
 ```
 
 ---
@@ -278,6 +284,7 @@ AI Agent（如 **Claude Desktop**、**Cursor**、**Windsurf** 等）可以直接
 |---|---|---|
 | **`fetch_webpage`** | 全网网页/B站视频智能抓取与清洗，输出 Markdown 或结构化 JSON，支持 Token 预算截断与缓存，全功能支持 CSS 选择器定向提取、链接/图片/表格结构化资产解析，以及 B站 字幕/弹幕/评论/官方AI大纲提纲提取与 Cookie 鉴权 | `url` (必填), `format`, `mode`, `selector`, `extract_links`, `extract_images`, `extract_tables`, `subtitles`, `danmaku`, `comments`, `conclusion`, `cookie`, `cookie_file`, `max_tokens`, `use_cache` |
 | **`web_search`** | **免 API Key 的通用全网搜索**（支持 Bing、Google 与 Auto 容灾，支持 `--fetch-content` 搜索即抓取一体化调研），输出清晰带链接的检索结果与正文内容 | `query` (必填), `engine` (bing/google/auto, 默认 bing), `fetch_content` (可选布尔值), `max_tokens_per_page` (可选整数), `limit` (默认 5), `format` (markdown/json) |
+| **`crawl_site`** | **整站文档递归爬取与知识库汇编**（从种子 URL 广度优先发现超链接），自动生成带目录索引（TOC）的单文件集成 Markdown 知识库或结构化 JSON | `seed_url` (必填), `max_depth` (默认 2, 最大 5), `max_pages` (默认 20, 最大 100), `same_path_prefix` (可选布尔值), `format` (markdown/json) |
 | **`fetch_bilibili_feed`** | 毫秒级拉取 B站 首页推荐流、全站热榜或分区排行榜 GFM 表格 | `feed_type` (recommendations/popular/ranking), `partition`, `format` |
 | **`search_bilibili`** | 按关键词搜索 B站 视频，输出结构化 GFM 表格或 JSON，支持分页与排序 | `keyword` (必填), `page`, `order`, `format`, `use_cache` |
 | **`download_media`** | 下载 B站 视频高清封面图片或免登录渐进式 MP4 视频流至本地磁盘 | `url_or_bvid` (必填), `media_type` (video/cover), `quality`, `destination` |
@@ -295,6 +302,7 @@ COMMANDS:
     login <PLATFORM>           唤起本地浏览器登录提取 Cookie 凭据并保存至文件 (支持 bilibili, zhihu)
     search <QUERY>             免 API Key 的全网通用搜索，直接输出 Markdown 编号列表或 JSON (支持 -l, -f, -o, -e/--engine, --fetch-content, --max-tokens-per-page, --wechat, --zhihu, --github, --juejin)
     batch <FILE>               并发抓取与批量 URL 提取流水线 (支持 -c, -f, -t, --selector, -o)
+    crawl <URL>                整站文档递归爬取与知识库汇编 (支持 -d/--max-depth, -p/--max-pages, -c/--concurrency, --same-path-prefix, -f, -o, -t)
 
 ARGS:
     <TARGET>                   目标 URL、短 BV 号或 '-' (从标准输入读取 HTML)

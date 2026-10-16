@@ -500,6 +500,54 @@ async fn run(args: CliArgs) -> Result<()> {
     }
 
     // -------------------------------------------------------------------------
+    // Execution Branch 1.7: Deep Site Crawl & Knowledge Base Assembly
+    // -------------------------------------------------------------------------
+    if let Some(SubCommand::Crawl(ref crawl_args)) = args.command {
+        let engine = PageclawEngine::with_options(fetch_options)
+            .context("Failed to initialize PageClaw engine")?;
+
+        let crawl_options = pageclaw_core::CrawlOptions {
+            max_depth: crawl_args.max_depth,
+            max_pages: crawl_args.max_pages,
+            concurrency: crawl_args.concurrency,
+            same_domain_only: true,
+            same_path_prefix: crawl_args.same_path_prefix,
+            exclude_patterns: pageclaw_core::CrawlOptions::default().exclude_patterns,
+        };
+
+        let report = pageclaw_core::crawl_site(
+            &engine,
+            &crawl_args.url,
+            &crawl_options,
+            &extraction_options,
+        )
+        .await
+        .context("Failed to crawl site")?;
+
+        let mut payload = match crawl_args.format {
+            CliFormat::Json => serde_json::to_string_pretty(&report)
+                .context("Failed to serialize crawl report to JSON")?,
+            _ => pageclaw_core::format_crawl_report_markdown(&report),
+        };
+
+        if let Some(total_limit) = args.max_tokens {
+            let initial_tokens =
+                pageclaw_core::token::count_tokens(&payload, args.tokenizer.into());
+            if initial_tokens > total_limit {
+                let (truncated_payload, _) = pageclaw_core::token::truncate_to_tokens(
+                    &payload,
+                    total_limit,
+                    args.tokenizer.into(),
+                );
+                payload = truncated_payload;
+            }
+        }
+
+        output::write_payload(&payload, crawl_args.output.as_deref())?;
+        return Ok(());
+    }
+
+    // -------------------------------------------------------------------------
     // Execution Branch 2: Standard CLI Mode
     // -------------------------------------------------------------------------
     let raw_target = if let Some(ref kw) = args.bili_search {

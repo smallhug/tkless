@@ -305,6 +305,41 @@ pub fn get_available_tools() -> Vec<McpTool> {
                 },
                 "required": ["query"]
             }),
+        },
+        McpTool {
+            name: "crawl_site".to_string(),
+            description: "Deeply crawls documentation or content pages from a seed URL (BFS link discovery) and assembles an integrated Markdown knowledge base with Table of Contents (TOC) or structured JSON.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "seed_url": {
+                        "type": "string",
+                        "description": "Seed webpage URL to start deep crawling"
+                    },
+                    "max_depth": {
+                        "type": "integer",
+                        "default": 2,
+                        "description": "Maximum link traversal depth (default: 2, max: 5)"
+                    },
+                    "max_pages": {
+                        "type": "integer",
+                        "default": 20,
+                        "description": "Maximum number of pages to crawl (default: 20, max: 100)"
+                    },
+                    "same_path_prefix": {
+                        "type": "boolean",
+                        "default": false,
+                        "description": "Restrict crawling strictly to URLs sharing the same path prefix as seed URL"
+                    },
+                    "format": {
+                        "type": "string",
+                        "enum": ["markdown", "json"],
+                        "default": "markdown",
+                        "description": "Output presentation format: 'markdown' (assembled knowledge base with TOC) or 'json'"
+                    }
+                },
+                "required": ["seed_url"]
+            }),
         }
     ]
 }

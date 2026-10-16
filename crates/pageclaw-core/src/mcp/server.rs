@@ -92,6 +92,7 @@ impl McpServer {
                     "search_bilibili" => self.call_search_bilibili(&arguments).await,
                     "download_media" => self.call_download_media(&arguments).await,
                     "web_search" => self.call_web_search(&arguments).await,
+                    "crawl_site" => self.call_crawl_site(&arguments).await,
                     _ => McpToolCallResult::error(format!("Unknown tool: '{tool_name}'")),
                 };
 
@@ -627,6 +628,65 @@ impl McpServer {
                 },
                 Err(e) => McpToolCallResult::error(format!("Web search failed: {e}")),
             }
+        }
+    }
+
+    async fn call_crawl_site(&self, args: &Value) -> McpToolCallResult {
+        let seed_url = match args.get("seed_url").and_then(|v| v.as_str()) {
+            Some(u) if !u.trim().is_empty() => u.trim(),
+            _ => return McpToolCallResult::error("Missing required parameter 'seed_url'"),
+        };
+
+        let max_depth = args
+            .get("max_depth")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(2)
+            .clamp(0, 5) as usize;
+        let max_pages = args
+            .get("max_pages")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(20)
+            .clamp(1, 100) as usize;
+        let same_path_prefix = args
+            .get("same_path_prefix")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
+        let format = match args.get("format").and_then(|v| v.as_str()) {
+            Some("json") => OutputFormat::Json,
+            _ => OutputFormat::Markdown,
+        };
+
+        let crawl_options = crate::crawler::CrawlOptions {
+            max_depth,
+            max_pages,
+            concurrency: 5,
+            same_domain_only: true,
+            same_path_prefix,
+            exclude_patterns: crate::crawler::CrawlOptions::default().exclude_patterns,
+        };
+
+        let extraction_options = ExtractionOptions::default();
+
+        match crate::crawler::crawl_site(
+            &self.engine,
+            seed_url,
+            &crawl_options,
+            &extraction_options,
+        )
+        .await
+        {
+            Ok(report) => match format {
+                OutputFormat::Json => match serde_json::to_string_pretty(&report) {
+                    Ok(json_str) => McpToolCallResult::success(json_str),
+                    Err(e) => McpToolCallResult::error(format!("Failed to serialize JSON: {e}")),
+                },
+                _ => {
+                    let md = crate::crawler::format_crawl_report_markdown(&report);
+                    McpToolCallResult::success(md)
+                }
+            },
+            Err(e) => McpToolCallResult::error(format!("Site crawl failed: {e}")),
         }
     }
 }
