@@ -89,7 +89,7 @@ impl From<CliOnTooLarge> for pageclaw_core::model::OnTooLarge {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, ValueEnum)]
 pub enum CliTokenizer {
-    /// OpenAI o200k_base (GPT-4o, Claude 3.5, DeepSeek default standard)
+    /// OpenAI o200k_base (GPT-4o, Claude 3.5, DeepSeek standard)
     #[default]
     #[value(name = "o200k")]
     O200k,
@@ -107,6 +107,28 @@ impl From<CliTokenizer> for pageclaw_core::model::TokenizerKind {
             CliTokenizer::O200k => pageclaw_core::model::TokenizerKind::O200k,
             CliTokenizer::Cl100k => pageclaw_core::model::TokenizerKind::Cl100k,
             CliTokenizer::Heuristic => pageclaw_core::model::TokenizerKind::Heuristic,
+        }
+    }
+}
+
+/// Search engine provider choices.
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum CliSearchEngine {
+    /// Microsoft Bing search (default, fast connectivity and great Chinese coverage)
+    #[default]
+    Bing,
+    /// Google search (global technical community and documentation index)
+    Google,
+    /// Automatic failover mode (prefers Bing, falls back to Google on error)
+    Auto,
+}
+
+impl From<CliSearchEngine> for pageclaw_core::model::SearchEngineKind {
+    fn from(e: CliSearchEngine) -> Self {
+        match e {
+            CliSearchEngine::Bing => pageclaw_core::model::SearchEngineKind::Bing,
+            CliSearchEngine::Google => pageclaw_core::model::SearchEngineKind::Google,
+            CliSearchEngine::Auto => pageclaw_core::model::SearchEngineKind::Auto,
         }
     }
 }
@@ -138,7 +160,12 @@ pub struct CliArgs {
     pub mode: CliMode,
 
     /// Maximum token budget (content will be safely truncated at paragraph/sentence boundaries)
-    #[arg(short = 't', long = "max-tokens", value_name = "N", help_heading = "通用提取选项 (General Options)")]
+    #[arg(
+        short = 't',
+        long = "max-tokens",
+        value_name = "N",
+        help_heading = "通用提取选项 (General Options)"
+    )]
     pub max_tokens: Option<usize>,
 
     /// Prepend YAML frontmatter with title, URL, date, and metadata (Markdown format only)
@@ -150,19 +177,32 @@ pub struct CliArgs {
     pub json_ld_only: bool,
 
     /// CSS selector for targeted DOM extraction (e.g. 'article.content, #readme')
-    #[arg(long = "selector", value_name = "CSS_SELECTOR", help_heading = "通用提取选项 (General Options)")]
+    #[arg(
+        long = "selector",
+        value_name = "CSS_SELECTOR",
+        help_heading = "通用提取选项 (General Options)"
+    )]
     pub selector: Option<String>,
 
     /// Extract and structure all hyperlinks from the document
-    #[arg(long = "extract-links", help_heading = "通用提取选项 (General Options)")]
+    #[arg(
+        long = "extract-links",
+        help_heading = "通用提取选项 (General Options)"
+    )]
     pub extract_links: bool,
 
     /// Extract and structure all image assets from the document
-    #[arg(long = "extract-images", help_heading = "通用提取选项 (General Options)")]
+    #[arg(
+        long = "extract-images",
+        help_heading = "通用提取选项 (General Options)"
+    )]
     pub extract_images: bool,
 
     /// Extract and structure all tables into 2D arrays and row dictionary objects
-    #[arg(long = "extract-tables", help_heading = "通用提取选项 (General Options)")]
+    #[arg(
+        long = "extract-tables",
+        help_heading = "通用提取选项 (General Options)"
+    )]
     pub extract_tables: bool,
 
     /// Strip images from Markdown to conserve token budget
@@ -184,7 +224,6 @@ pub struct CliArgs {
     // =========================================================================
     // 哔哩哔哩专属选项 (Bilibili Options)
     // =========================================================================
-
     /// 提取 B站 视频官方/AI 生成的 CC 字幕轨
     #[arg(
         long = "bili-sub",
@@ -330,37 +369,75 @@ pub struct CliArgs {
     // =========================================================================
     // 网络与身份认证 (Network & Auth)
     // =========================================================================
-
     /// Cookie header string
-    #[arg(short = 'c', long = "cookie", value_name = "COOKIE", help_heading = "网络与身份认证 (Network & Auth)")]
+    #[arg(
+        short = 'c',
+        long = "cookie",
+        value_name = "COOKIE",
+        help_heading = "网络与身份认证 (Network & Auth)"
+    )]
     pub cookie: Option<String>,
 
-    /// Path to cookie credential file (supports Netscape and standard Header formats)
-    #[arg(long = "cookie-file", value_name = "PATH", help_heading = "网络与身份认证 (Network & Auth)")]
+    /// Path to cookie credential file (supports multi-platform prefix format, e.g. bilibili: ..., zhihu: ...)
+    #[arg(
+        long = "cookie-file",
+        value_name = "PATH",
+        help_heading = "网络与身份认证 (Network & Auth)"
+    )]
     pub cookie_file: Option<PathBuf>,
 
     /// Custom User-Agent header
-    #[arg(short = 'u', long = "user-agent", value_name = "UA", help_heading = "网络与身份认证 (Network & Auth)")]
+    #[arg(
+        short = 'u',
+        long = "user-agent",
+        value_name = "UA",
+        help_heading = "网络与身份认证 (Network & Auth)"
+    )]
     pub user_agent: Option<String>,
 
     /// Custom HTTP request headers in "Key: Value" format (can be specified multiple times)
-    #[arg(short = 'H', long = "header", value_name = "KEY:VALUE", help_heading = "网络与身份认证 (Network & Auth)")]
+    #[arg(
+        short = 'H',
+        long = "header",
+        value_name = "KEY:VALUE",
+        help_heading = "网络与身份认证 (Network & Auth)"
+    )]
     pub headers: Vec<String>,
 
     /// Network request timeout in seconds
-    #[arg(long = "timeout", default_value_t = 15, value_name = "SECS", help_heading = "网络与身份认证 (Network & Auth)")]
+    #[arg(
+        long = "timeout",
+        default_value_t = 15,
+        value_name = "SECS",
+        help_heading = "网络与身份认证 (Network & Auth)"
+    )]
     pub timeout_secs: u64,
 
     /// Network connection handshake timeout in seconds
-    #[arg(long = "connect-timeout", default_value_t = 10, value_name = "SECS", help_heading = "网络与身份认证 (Network & Auth)")]
+    #[arg(
+        long = "connect-timeout",
+        default_value_t = 10,
+        value_name = "SECS",
+        help_heading = "网络与身份认证 (Network & Auth)"
+    )]
     pub connect_timeout: u64,
 
     /// Number of retry attempts with exponential backoff on 5xx server errors or network drops
-    #[arg(long = "retries", default_value_t = 0, value_name = "N", help_heading = "网络与身份认证 (Network & Auth)")]
+    #[arg(
+        long = "retries",
+        default_value_t = 0,
+        value_name = "N",
+        help_heading = "网络与身份认证 (Network & Auth)"
+    )]
     pub retries: u32,
 
     /// Maximum response download size in megabytes
-    #[arg(long = "max-size", default_value_t = 10, value_name = "MB", help_heading = "网络与身份认证 (Network & Auth)")]
+    #[arg(
+        long = "max-size",
+        default_value_t = 10,
+        value_name = "MB",
+        help_heading = "网络与身份认证 (Network & Auth)"
+    )]
     pub max_size_mb: usize,
 
     /// Behavior when response size exceeds max-size: 'error' (default) or 'truncate'
@@ -368,21 +445,31 @@ pub struct CliArgs {
     pub on_too_large: CliOnTooLarge,
 
     /// Allow fetching private IP addresses, localhost, and internal network endpoints (bypasses SSRF guard)
-    #[arg(long = "allow-private-addresses", help_heading = "网络与身份认证 (Network & Auth)")]
+    #[arg(
+        long = "allow-private-addresses",
+        help_heading = "网络与身份认证 (Network & Auth)"
+    )]
     pub allow_private_addresses: bool,
 
     /// Do not fail with non-zero exit code on HTTP 4xx or 5xx error responses (returns body with exit 0)
-    #[arg(long = "allow-http-errors", alias = "no-fail", help_heading = "网络与身份认证 (Network & Auth)")]
+    #[arg(
+        long = "allow-http-errors",
+        alias = "no-fail",
+        help_heading = "网络与身份认证 (Network & Auth)"
+    )]
     pub allow_http_errors: bool,
 
     /// Base URL to resolve relative links when reading HTML from stdin
-    #[arg(long = "base-url", value_name = "URL", help_heading = "网络与身份认证 (Network & Auth)")]
+    #[arg(
+        long = "base-url",
+        value_name = "URL",
+        help_heading = "网络与身份认证 (Network & Auth)"
+    )]
     pub base_url: Option<String>,
 
     // =========================================================================
     // 缓存与运行诊断 (Cache & Diagnostics)
     // =========================================================================
-
     /// Run as native Model Context Protocol (MCP) server over stdio
     #[arg(long = "mcp", help_heading = "缓存与运行诊断 (Cache & Diagnostics)")]
     pub mcp: bool,
@@ -392,15 +479,28 @@ pub struct CliArgs {
     pub cache: bool,
 
     /// Explicitly disable local response caching
-    #[arg(long = "no-cache", conflicts_with = "cache", help_heading = "缓存与运行诊断 (Cache & Diagnostics)")]
+    #[arg(
+        long = "no-cache",
+        conflicts_with = "cache",
+        help_heading = "缓存与运行诊断 (Cache & Diagnostics)"
+    )]
     pub no_cache: bool,
 
     /// Cache TTL in seconds (default: 900 = 15 minutes)
-    #[arg(long = "cache-ttl", default_value_t = 900, value_name = "SECS", help_heading = "缓存与运行诊断 (Cache & Diagnostics)")]
+    #[arg(
+        long = "cache-ttl",
+        default_value_t = 900,
+        value_name = "SECS",
+        help_heading = "缓存与运行诊断 (Cache & Diagnostics)"
+    )]
     pub cache_ttl: u64,
 
     /// Custom directory for persistent file cache
-    #[arg(long = "cache-dir", value_name = "DIR", help_heading = "缓存与运行诊断 (Cache & Diagnostics)")]
+    #[arg(
+        long = "cache-dir",
+        value_name = "DIR",
+        help_heading = "缓存与运行诊断 (Cache & Diagnostics)"
+    )]
     pub cache_dir: Option<PathBuf>,
 
     /// Tokenizer model encoding scheme for token counting and truncation
@@ -408,7 +508,12 @@ pub struct CliArgs {
     pub tokenizer: CliTokenizer,
 
     /// Write output payload to file instead of stdout
-    #[arg(short = 'o', long = "output", value_name = "FILE", help_heading = "缓存与运行诊断 (Cache & Diagnostics)")]
+    #[arg(
+        short = 'o',
+        long = "output",
+        value_name = "FILE",
+        help_heading = "缓存与运行诊断 (Cache & Diagnostics)"
+    )]
     pub output_file: Option<std::path::PathBuf>,
 
     /// Verbose diagnostic output on stderr (-v for debug, -vv for trace)
@@ -416,7 +521,11 @@ pub struct CliArgs {
     pub verbose: u8,
 
     /// Silence all diagnostic logs and progress messages on stderr
-    #[arg(short = 'q', long = "quiet", help_heading = "缓存与运行诊断 (Cache & Diagnostics)")]
+    #[arg(
+        short = 'q',
+        long = "quiet",
+        help_heading = "缓存与运行诊断 (Cache & Diagnostics)"
+    )]
     pub quiet: bool,
 }
 
@@ -452,6 +561,30 @@ pub struct SearchSubArgs {
     /// Write search results to file instead of stdout
     #[arg(short = 'o', long = "output", value_name = "FILE")]
     pub output: Option<PathBuf>,
+
+    /// Scope search to WeChat Official Accounts (mp.weixin.qq.com)
+    #[arg(
+        long = "wechat",
+        help = "Scope search to WeChat Official Accounts (mp.weixin.qq.com)"
+    )]
+    pub wechat: bool,
+
+    /// Scope search to Zhihu (zhihu.com)
+    #[arg(
+        long = "zhihu",
+        help = "Scope search to Zhihu questions and articles (zhihu.com)"
+    )]
+    pub zhihu: bool,
+
+    /// Search engine provider: bing (default), google, or auto (failover)
+    #[arg(
+        short = 'e',
+        long = "engine",
+        value_enum,
+        default_value_t = CliSearchEngine::Bing,
+        help = "Search engine provider: bing (default), google, auto (failover)"
+    )]
+    pub engine: CliSearchEngine,
 }
 
 #[derive(clap::Args, Debug, Clone)]
@@ -461,7 +594,12 @@ pub struct BatchArgs {
     pub file: String,
 
     /// Concurrency limit for simultaneous network requests [default: 5]
-    #[arg(short = 'c', long = "concurrency", default_value_t = 5, value_name = "N")]
+    #[arg(
+        short = 'c',
+        long = "concurrency",
+        default_value_t = 5,
+        value_name = "N"
+    )]
     pub concurrency: usize,
 
     /// Output presentation format [default: markdown]
@@ -504,7 +642,12 @@ pub struct LoginArgs {
     pub platform: String,
 
     /// Destination file path to save extracted cookies [default: ./cookies.txt]
-    #[arg(short = 'o', long = "output", default_value = "./cookies.txt", value_name = "FILE")]
+    #[arg(
+        short = 'o',
+        long = "output",
+        default_value = "./cookies.txt",
+        value_name = "FILE"
+    )]
     pub output: PathBuf,
 
     /// Do not launch default web browser automatically (print terminal QR code and URL only)

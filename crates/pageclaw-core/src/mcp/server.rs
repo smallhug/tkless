@@ -4,8 +4,8 @@ use crate::adapters::BilibiliAdapter;
 use crate::cache::DocumentCache;
 use crate::error::PageclawError;
 use crate::model::{
-    ExtractionMode, ExtractionOptions, FetchOptions, OnTooLarge, OutputFormat, TokenizerKind,
-    VideoQuality,
+    ExtractionMode, ExtractionOptions, FetchOptions, OnTooLarge, OutputFormat, SearchEngineKind,
+    TokenizerKind, VideoQuality,
 };
 use crate::PageclawEngine;
 use serde_json::Value;
@@ -40,7 +40,11 @@ impl McpServer {
             Ok(req) => req,
             Err(e) => {
                 warn!(error = %e, "Malformed JSON-RPC request");
-                return Some(JsonRpcResponse::error(Value::Null, PARSE_ERROR, "Invalid JSON-RPC 2.0 payload"));
+                return Some(JsonRpcResponse::error(
+                    Value::Null,
+                    PARSE_ERROR,
+                    "Invalid JSON-RPC 2.0 payload",
+                ));
             }
         };
 
@@ -77,7 +81,10 @@ impl McpServer {
             "tools/call" => {
                 let params = request.params.unwrap_or(Value::Null);
                 let tool_name = params.get("name").and_then(|v| v.as_str()).unwrap_or("");
-                let arguments = params.get("arguments").cloned().unwrap_or(serde_json::json!({}));
+                let arguments = params
+                    .get("arguments")
+                    .cloned()
+                    .unwrap_or(serde_json::json!({}));
 
                 let tool_result = match tool_name {
                     "fetch_webpage" => self.call_fetch_webpage(&arguments).await,
@@ -100,7 +107,10 @@ impl McpServer {
             _ => Some(JsonRpcResponse::error(
                 req_id,
                 METHOD_NOT_FOUND,
-                format!("Method '{}' is not supported by PageClaw MCP server", request.method),
+                format!(
+                    "Method '{}' is not supported by PageClaw MCP server",
+                    request.method
+                ),
             )),
         }
     }
@@ -162,13 +172,34 @@ impl McpServer {
             _ => ExtractionMode::Article,
         };
 
-        let max_tokens = args.get("max_tokens").and_then(|v| v.as_u64()).map(|n| n as usize);
-        let frontmatter = args.get("frontmatter").and_then(|v| v.as_bool()).unwrap_or(false);
-        let no_images = args.get("no_images").and_then(|v| v.as_bool()).unwrap_or(false);
-        let no_links = args.get("no_links").and_then(|v| v.as_bool()).unwrap_or(false);
-        let no_metadata = args.get("no_metadata").and_then(|v| v.as_bool()).unwrap_or(false);
-        let no_adapter = args.get("no_adapter").and_then(|v| v.as_bool()).unwrap_or(false);
-        let use_cache = args.get("use_cache").and_then(|v| v.as_bool()).unwrap_or(true);
+        let max_tokens = args
+            .get("max_tokens")
+            .and_then(|v| v.as_u64())
+            .map(|n| n as usize);
+        let frontmatter = args
+            .get("frontmatter")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let no_images = args
+            .get("no_images")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let no_links = args
+            .get("no_links")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let no_metadata = args
+            .get("no_metadata")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let no_adapter = args
+            .get("no_adapter")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let use_cache = args
+            .get("use_cache")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
         let tokenizer = match args.get("tokenizer").and_then(|v| v.as_str()) {
             Some("cl100k") => TokenizerKind::Cl100k,
             Some("heuristic") => TokenizerKind::Heuristic,
@@ -176,27 +207,74 @@ impl McpServer {
         };
 
         let timeout = args.get("timeout").and_then(|v| v.as_u64()).unwrap_or(15);
-        let connect_timeout = args.get("connect_timeout").and_then(|v| v.as_u64()).unwrap_or(10);
+        let connect_timeout = args
+            .get("connect_timeout")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(10);
         let retries = args.get("retries").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
         let on_too_large = match args.get("on_too_large").and_then(|v| v.as_str()) {
             Some("truncate") => OnTooLarge::Truncate,
             _ => OnTooLarge::Error,
         };
-        let allow_private_addresses = args.get("allow_private_addresses").and_then(|v| v.as_bool()).unwrap_or(false);
-        let allow_http_errors = args.get("allow_http_errors").and_then(|v| v.as_bool()).unwrap_or(false);
+        let allow_private_addresses = args
+            .get("allow_private_addresses")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let allow_http_errors = args
+            .get("allow_http_errors")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
 
-        let selector = args.get("selector").and_then(|v| v.as_str()).map(|s| s.to_string());
-        let extract_links = args.get("extract_links").and_then(|v| v.as_bool()).unwrap_or(false);
-        let extract_images = args.get("extract_images").and_then(|v| v.as_bool()).unwrap_or(false);
-        let extract_tables = args.get("extract_tables").and_then(|v| v.as_bool()).unwrap_or(false);
-        let subtitles = args.get("subtitles").and_then(|v| v.as_bool()).unwrap_or(false);
-        let danmaku_limit = args.get("danmaku_limit").and_then(|v| v.as_u64()).map(|n| n as usize);
-        let danmaku = args.get("danmaku").and_then(|v| v.as_bool()).unwrap_or(false) || danmaku_limit.is_some();
-        let comments_limit = args.get("comments_limit").and_then(|v| v.as_u64()).map(|n| n as usize);
-        let comments = args.get("comments").and_then(|v| v.as_bool()).unwrap_or(false) || comments_limit.is_some();
-        let conclusion = args.get("conclusion").and_then(|v| v.as_bool()).unwrap_or(false);
-        let cookie = args.get("cookie").and_then(|v| v.as_str()).map(|s| s.to_string());
-        let cookie_file = args.get("cookie_file").and_then(|v| v.as_str()).map(|s| s.to_string());
+        let selector = args
+            .get("selector")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        let extract_links = args
+            .get("extract_links")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let extract_images = args
+            .get("extract_images")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let extract_tables = args
+            .get("extract_tables")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let subtitles = args
+            .get("subtitles")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let danmaku_limit = args
+            .get("danmaku_limit")
+            .and_then(|v| v.as_u64())
+            .map(|n| n as usize);
+        let danmaku = args
+            .get("danmaku")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+            || danmaku_limit.is_some();
+        let comments_limit = args
+            .get("comments_limit")
+            .and_then(|v| v.as_u64())
+            .map(|n| n as usize);
+        let comments = args
+            .get("comments")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+            || comments_limit.is_some();
+        let conclusion = args
+            .get("conclusion")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let cookie = args
+            .get("cookie")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        let cookie_file = args
+            .get("cookie_file")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
 
         let options = ExtractionOptions {
             mode,
@@ -266,21 +344,39 @@ impl McpServer {
     }
 
     async fn call_fetch_bilibili_feed(&self, args: &Value) -> McpToolCallResult {
-        let feed_type = args.get("feed_type").and_then(|v| v.as_str()).unwrap_or("recommendations");
-        let partition = args.get("partition").and_then(|v| v.as_str()).unwrap_or("all");
+        let feed_type = args
+            .get("feed_type")
+            .and_then(|v| v.as_str())
+            .unwrap_or("recommendations");
+        let partition = args
+            .get("partition")
+            .and_then(|v| v.as_str())
+            .unwrap_or("all");
         let format = match args.get("format").and_then(|v| v.as_str()) {
             Some("json") => OutputFormat::Json,
             _ => OutputFormat::Markdown,
         };
-        let max_tokens = args.get("max_tokens").and_then(|v| v.as_u64()).map(|n| n as usize);
-        let use_cache = args.get("use_cache").and_then(|v| v.as_bool()).unwrap_or(true);
+        let max_tokens = args
+            .get("max_tokens")
+            .and_then(|v| v.as_u64())
+            .map(|n| n as usize);
+        let use_cache = args
+            .get("use_cache")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
 
         let (target_url, feed) = match feed_type {
             "ranking" => {
                 if partition == "all" {
-                    ("https://www.bilibili.com/v/popular/rank/all".to_string(), false)
+                    (
+                        "https://www.bilibili.com/v/popular/rank/all".to_string(),
+                        false,
+                    )
                 } else {
-                    (format!("https://www.bilibili.com/v/popular/rank/{partition}"), false)
+                    (
+                        format!("https://www.bilibili.com/v/popular/rank/{partition}"),
+                        false,
+                    )
                 }
             }
             "popular" => ("https://www.bilibili.com/v/popular/all".to_string(), false),
@@ -337,10 +433,14 @@ impl McpServer {
             Some("json") => OutputFormat::Json,
             _ => OutputFormat::Markdown,
         };
-        let use_cache = args.get("use_cache").and_then(|v| v.as_bool()).unwrap_or(true);
+        let use_cache = args
+            .get("use_cache")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
 
         let encoded_kw: String = url::form_urlencoded::byte_serialize(keyword.as_bytes()).collect();
-        let mut target_url = format!("https://search.bilibili.com/all?keyword={encoded_kw}&page={page}");
+        let mut target_url =
+            format!("https://search.bilibili.com/all?keyword={encoded_kw}&page={page}");
         if !order.is_empty() {
             target_url.push_str(&format!("&order={order}"));
         }
@@ -391,10 +491,17 @@ impl McpServer {
 
         let media_type = match args.get("media_type").and_then(|v| v.as_str()) {
             Some(m) => m,
-            None => return McpToolCallResult::error("Missing required parameter 'media_type' ('video' or 'cover')"),
+            None => {
+                return McpToolCallResult::error(
+                    "Missing required parameter 'media_type' ('video' or 'cover')",
+                )
+            }
         };
 
-        let destination = args.get("destination").and_then(|v| v.as_str()).map(Path::new);
+        let destination = args
+            .get("destination")
+            .and_then(|v| v.as_str())
+            .map(Path::new);
         let quality = match args.get("quality").and_then(|v| v.as_str()) {
             Some("480p") => VideoQuality::Q480p,
             Some("360p") => VideoQuality::Q360p,
@@ -408,18 +515,42 @@ impl McpServer {
 
         match media_type {
             "cover" => {
-                match BilibiliAdapter::download_cover(self.engine.client(), &bvid, destination, None).await {
-                    Ok(path) => McpToolCallResult::success(format!("Cover image saved successfully to: {}", path.display())),
+                match BilibiliAdapter::download_cover(
+                    self.engine.client(),
+                    &bvid,
+                    destination,
+                    None,
+                )
+                .await
+                {
+                    Ok(path) => McpToolCallResult::success(format!(
+                        "Cover image saved successfully to: {}",
+                        path.display()
+                    )),
                     Err(e) => McpToolCallResult::error(format!("Failed to download cover: {e}")),
                 }
             }
             "video" => {
-                match BilibiliAdapter::download_video(self.engine.client(), &bvid, page, quality, destination, None).await {
-                    Ok(path) => McpToolCallResult::success(format!("Video stream saved successfully to: {}", path.display())),
+                match BilibiliAdapter::download_video(
+                    self.engine.client(),
+                    &bvid,
+                    page,
+                    quality,
+                    destination,
+                    None,
+                )
+                .await
+                {
+                    Ok(path) => McpToolCallResult::success(format!(
+                        "Video stream saved successfully to: {}",
+                        path.display()
+                    )),
                     Err(e) => McpToolCallResult::error(format!("Failed to download video: {e}")),
                 }
             }
-            _ => McpToolCallResult::error(format!("Invalid media_type '{media_type}'. Expected 'video' or 'cover'.")),
+            _ => McpToolCallResult::error(format!(
+                "Invalid media_type '{media_type}'. Expected 'video' or 'cover'."
+            )),
         }
     }
 
@@ -429,13 +560,24 @@ impl McpServer {
             _ => return McpToolCallResult::error("Missing required parameter 'query'"),
         };
 
-        let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(5).clamp(1, 20) as usize;
+        let limit = args
+            .get("limit")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(5)
+            .clamp(1, 20) as usize;
         let format = match args.get("format").and_then(|v| v.as_str()) {
             Some("json") => OutputFormat::Json,
             _ => OutputFormat::Markdown,
         };
+        let engine = match args.get("engine").and_then(|v| v.as_str()) {
+            Some("google") => SearchEngineKind::Google,
+            Some("auto") => SearchEngineKind::Auto,
+            _ => SearchEngineKind::Bing,
+        };
 
-        match crate::search::web_search(self.engine.client(), query, limit).await {
+        match crate::search::web_search_with_engine(self.engine.client(), query, limit, engine)
+            .await
+        {
             Ok(results) => match format {
                 OutputFormat::Json => match serde_json::to_string_pretty(&results) {
                     Ok(json_str) => McpToolCallResult::success(json_str),

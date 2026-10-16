@@ -267,7 +267,7 @@ pub fn get_available_tools() -> Vec<McpTool> {
         },
         McpTool {
             name: "web_search".to_string(),
-            description: "Performs a zero-API-key web search using DuckDuckGo HTML endpoint and returns structured results with titles, direct URLs, and text snippets.".to_string(),
+            description: "Performs a zero-API-key web search using Microsoft Bing, Google, or Auto failover and returns structured results with titles, direct URLs, snippets, and source engine.".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -279,6 +279,12 @@ pub fn get_available_tools() -> Vec<McpTool> {
                         "type": "integer",
                         "default": 5,
                         "description": "Maximum number of search results to return (default: 5, max: 20)"
+                    },
+                    "engine": {
+                        "type": "string",
+                        "enum": ["bing", "google", "auto"],
+                        "default": "bing",
+                        "description": "Search engine provider: 'bing' (default, fast connectivity and great Chinese coverage), 'google' (global documentation index), or 'auto' (failover)"
                     },
                     "format": {
                         "type": "string",

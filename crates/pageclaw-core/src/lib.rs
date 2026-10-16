@@ -14,17 +14,24 @@ pub mod model;
 pub mod search;
 pub mod token;
 
-pub use adapters::{AdapterRegistry, BilibiliAdapter, PlatformAdapter, WechatAdapter, ZhihuAdapter};
-pub use auth::{execute_login_flow, generate_qrcode, poll_qrcode_status, LoginOptions, QrPollStatus};
+pub use adapters::{
+    AdapterRegistry, BilibiliAdapter, PlatformAdapter, WechatAdapter, ZhihuAdapter,
+};
+pub use auth::{
+    execute_login_flow, generate_qrcode, poll_qrcode_status, LoginOptions, QrPollStatus,
+};
 pub use cache::DocumentCache;
 pub use error::PageclawError;
 pub use mcp::McpServer;
-pub use search::{format_search_results_markdown, web_search, SearchResultItem};
 pub use model::{
     CommentEntry, ConclusionChapter, ConclusionKeypoint, DanmakuEntry, ExtractedImage,
     ExtractedLink, ExtractedTable, ExtractionMode, ExtractionOptions, FetchOptions, OnTooLarge,
-    OutputFormat, PageDocument, PageMetadata, SubtitleLine, TokenizerKind, VideoConclusion,
-    VideoQuality,
+    OutputFormat, PageDocument, PageMetadata, SearchEngineKind, SubtitleLine, TokenizerKind,
+    VideoConclusion, VideoQuality,
+};
+pub use search::{
+    format_search_results_markdown, search_bing, search_google, web_search, web_search_with_engine,
+    SearchResultItem,
 };
 
 use cleaner::{clean_html, extract_selector};
@@ -89,11 +96,21 @@ impl PageclawEngine {
     ) -> Result<PageDocument, PageclawError> {
         let parsed_url = Url::parse(url)?;
 
+        // Enforce SSRF validation upfront for all URLs before entering platform adapters or standard fetching
+        self.fetcher.validate_ssrf(&parsed_url).await?;
+
         // 1. Attempt platform adapter fast path if enabled
         if !options.no_adapter {
             if let Some(adapter) = self.adapter_registry.find_adapter(&parsed_url) {
-                debug!(platform = adapter.name(), url = url, "Intercepting with platform adapter");
-                match adapter.extract(self.fetcher.client(), &parsed_url, options).await {
+                debug!(
+                    platform = adapter.name(),
+                    url = url,
+                    "Intercepting with platform adapter"
+                );
+                match adapter
+                    .extract(self.fetcher.client(), &parsed_url, options)
+                    .await
+                {
                     Ok(mut doc) => {
                         // Enforce token counting and budget truncation
                         let initial_token_count = count_tokens(&doc.content, options.tokenizer);
@@ -214,12 +231,21 @@ impl PageclawEngine {
         if options.extract_links {
             if let Some(ref link_list) = links {
                 if !link_list.is_empty()
-                    && (options.format == OutputFormat::Markdown || options.format == OutputFormat::Text)
+                    && (options.format == OutputFormat::Markdown
+                        || options.format == OutputFormat::Text)
                 {
                     content.push_str("\n\n### 页面链接清单 (Links)\n\n");
                     for link in link_list {
-                        let text = if link.text.is_empty() { "链接" } else { &link.text };
-                        content.push_str(&format!("- [{}]({})\n", text.replace(['\r', '\n'], " ").trim(), link.url));
+                        let text = if link.text.is_empty() {
+                            "链接"
+                        } else {
+                            &link.text
+                        };
+                        content.push_str(&format!(
+                            "- [{}]({})\n",
+                            text.replace(['\r', '\n'], " ").trim(),
+                            link.url
+                        ));
                     }
                 }
             }
@@ -228,12 +254,21 @@ impl PageclawEngine {
         if options.extract_images {
             if let Some(ref image_list) = images {
                 if !image_list.is_empty()
-                    && (options.format == OutputFormat::Markdown || options.format == OutputFormat::Text)
+                    && (options.format == OutputFormat::Markdown
+                        || options.format == OutputFormat::Text)
                 {
                     content.push_str("\n\n### 页面图片资产 (Images)\n\n");
                     for image in image_list {
-                        let alt = if image.alt.is_empty() { "图片" } else { &image.alt };
-                        content.push_str(&format!("- ![{}]({})\n", alt.replace(['\r', '\n'], " ").trim(), image.src));
+                        let alt = if image.alt.is_empty() {
+                            "图片"
+                        } else {
+                            &image.alt
+                        };
+                        content.push_str(&format!(
+                            "- ![{}]({})\n",
+                            alt.replace(['\r', '\n'], " ").trim(),
+                            image.src
+                        ));
                     }
                 }
             }
@@ -245,8 +280,13 @@ impl PageclawEngine {
 
         if let Some(limit) = options.max_tokens {
             if initial_token_count > limit {
-                debug!(current = initial_token_count, limit = limit, "Truncating content to token limit");
-                let (truncated_content, was_truncated) = truncate_to_tokens(&content, limit, options.tokenizer);
+                debug!(
+                    current = initial_token_count,
+                    limit = limit,
+                    "Truncating content to token limit"
+                );
+                let (truncated_content, was_truncated) =
+                    truncate_to_tokens(&content, limit, options.tokenizer);
                 content = truncated_content;
                 truncated = was_truncated;
             }
