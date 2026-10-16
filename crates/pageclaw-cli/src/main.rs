@@ -271,6 +271,8 @@ async fn run(args: CliArgs) -> Result<()> {
         chunk: args.chunk,
         chunk_size: args.chunk_size,
         chunk_overlap: args.chunk_overlap,
+        download_images: args.download_images,
+        assets_dir: args.assets_dir.clone(),
     };
 
     // -------------------------------------------------------------------------
@@ -466,6 +468,8 @@ async fn run(args: CliArgs) -> Result<()> {
             chunk: args.chunk,
             chunk_size: args.chunk_size,
             chunk_overlap: args.chunk_overlap,
+            download_images: false,
+            assets_dir: None,
         });
 
         let semaphore =

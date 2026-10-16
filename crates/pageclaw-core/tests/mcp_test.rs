@@ -113,6 +113,8 @@ async fn test_mcp_protocol_lifecycle() {
     assert!(props.get("chunk_size").is_some());
     assert!(props.get("chunk_overlap").is_some());
     assert!(props.get("proxy").is_some());
+    assert!(props.get("download_images").is_some());
+    assert!(props.get("assets_dir").is_some());
 
     // 5. Tools Call (Validation Error)
     let call_req = r#"{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"search_bilibili","arguments":{}}}"#;

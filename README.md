@@ -279,6 +279,10 @@ pageclaw search "Rust news" --proxy http://127.0.0.1:7890
 # 31. 🧬 64 位 SimHash 内容指纹去重 (--dedup)
 # 递归爬虫自动计算页面指纹，跳过近似度高（Hamming 距离 <= 3）的镜像或重复页面：
 pageclaw crawl "https://example.com/docs" --dedup -o ./docs_dedup.md
+
+# 32. 🖼️ 离线图片资产自动下载与 Markdown 相对路径回写 (--download-images)
+# 下载 Markdown 中的全部远程图片到本地资产目录并自动将链接回写为本地相对路径：
+pageclaw "https://example.com/guide" --download-images --assets-dir ./assets
 ```
 
 ---
@@ -318,7 +322,7 @@ AI Agent（如 **Claude Desktop**、**Cursor**、**Windsurf** 等）可以直接
 
 | MCP 工具名 | 功能说明 | 核心入参 |
 |---|---|---|
-| **`fetch_webpage`** | 全网网页/B站视频智能抓取与清洗，输出 Markdown 或结构化 JSON，支持 Token 预算截断与缓存，全功能支持 CSS 选择器定向提取、链接/图片/表格结构化资产解析、CDP 浏览器渲染与 Schema 结构化实体提取、语义感知分块 (Chunking)、代理配置，以及 B站 字幕/弹幕/评论/官方AI大纲提纲提取与 Cookie 鉴权 | `url` (必填), `format`, `mode`, `selector`, `schema`, `chunk`, `chunk_size`, `chunk_overlap`, `cdp_endpoint`, `cdp_wait_ms`, `proxy`, `extract_links`, `extract_images`, `extract_tables`, `subtitles`, `danmaku`, `comments`, `conclusion`, `cookie`, `cookie_file`, `max_tokens`, `use_cache` |
+| **`fetch_webpage`** | 全网网页/B站视频智能抓取与清洗，输出 Markdown 或结构化 JSON，支持 Token 预算截断与缓存，全功能支持 CSS 选择器定向提取、链接/图片/表格结构化资产解析、CDP 浏览器渲染与 Schema 结构化实体提取、语义感知分块 (Chunking)、离线图片资产下载与链接回写、代理配置，以及 B站 字幕/弹幕/评论/官方AI大纲提纲提取与 Cookie 鉴权 | `url` (必填), `format`, `mode`, `selector`, `schema`, `chunk`, `chunk_size`, `chunk_overlap`, `download_images`, `assets_dir`, `cdp_endpoint`, `cdp_wait_ms`, `proxy`, `extract_links`, `extract_images`, `extract_tables`, `subtitles`, `danmaku`, `comments`, `conclusion`, `cookie`, `cookie_file`, `max_tokens`, `use_cache` |
 | **`batch_fetch_webpages`** | **并发抓取多网页流水线**，使用异步协程并发池并发处理一组 URL 列表，一次性聚合返回清洗后的 Markdown 或 JSON 文档数组 | `urls` (必填字符串数组), `concurrency` (默认 5, 最大 20), `format` (markdown/json), `max_tokens_per_page`, `selector`, `schema`, `cdp_endpoint`, `cdp_wait_ms`, `proxy` |
 | **`clean_html`** | **本地直接清洗已有 HTML 字符串**，剥离广告/脚本/导航噪音，转化为纯净 Markdown、纯文本或执行 Schema/CSS 选择器结构化抽取与语义分块 | `html` (必填), `base_url`, `format` (markdown/json/text/html), `mode` (article/full/raw), `selector`, `schema`, `chunk`, `chunk_size`, `chunk_overlap`, `max_tokens`, `strip_images`, `strip_links`, `frontmatter` |
 | **`web_search`** | **免 API Key 的通用全网搜索**（支持 Bing、Google 与 Auto 容灾），支持生态定向标签（微信公众号、知乎、GitHub、掘金）与 `--fetch-content` 搜索即抓取一体化调研（可叠加 CDP 渲染、Schema 抽取与代理） | `query` (必填), `scope` (all/wechat/zhihu/github/juejin), `engine` (bing/google/auto, 默认 bing), `fetch_content` (可选布尔值), `max_tokens_per_page` (可选整数), `cdp_endpoint`, `schema`, `proxy`, `limit` (默认 5), `format` (markdown/json) |
@@ -383,6 +387,8 @@ OPTIONS:
         --bili-quality <QN>    B站 视频清晰度选择: 720p (默认), 480p, 360p
     -p, --proxy <PROXY_URL>    配置 HTTP/HTTPS 网络代理地址 (如 http://127.0.0.1:7890)
         --dedup                在整站爬取中启用 SimHash 内容去重 (自动跳过近似重复页面)
+        --download-images      下载 Markdown 中的全部远程图片到本地资产目录并自动回写本地相对链接
+        --assets-dir <DIR>     本地图片资产保存目录 [默认: ./assets]
         --cookie <COOKIE>      指定 Cookie 字符串凭据
         --cookie-file <PATH>   指定 Cookie 凭证文件路径 (支持多平台前缀格式，如 bilibili: ..., zhihu: ...)
         --no-images            移除所有图片以节省 Token
