@@ -190,44 +190,36 @@ async fn run(args: CliArgs) -> Result<()> {
         }
     }
 
-    // Resolve cookies from --cookie-file and --cookie with CLI priority (auto-fallback to ./cookies.txt if present)
     let default_cookie_path = std::path::Path::new("./cookies.txt");
     let target_url_ref = args.target.as_deref();
-    let cookie_from_file = if let Some(ref cf) = args.cookie_file {
-        Some(
-            pageclaw_core::fetcher::load_cookie_from_file_for_url(cf, target_url_ref)
-                .with_context(|| format!("Failed to read cookie file: {}", cf.display()))?,
-        )
-    } else if args.cookie.is_none() && default_cookie_path.is_file() {
-        if let Ok(c) = pageclaw_core::fetcher::load_cookie_from_file_for_url(
-            default_cookie_path,
-            target_url_ref,
-        ) {
-            if !args.quiet && !c.trim().is_empty() {
-                if let Some(platform) =
-                    target_url_ref.and_then(pageclaw_core::fetcher::detect_platform_from_url)
-                {
-                    eprintln!("[PageClaw] Automatically loaded [{platform}] credentials from ./cookies.txt");
-                } else {
-                    eprintln!(
-                        "[PageClaw] Automatically loaded default credentials from ./cookies.txt"
-                    );
-                }
-            }
-            Some(c)
-        } else {
-            None
-        }
+
+    let cookie_file_path = if let Some(ref cf) = args.cookie_file {
+        Some(cf.to_string_lossy().to_string())
+    } else if default_cookie_path.is_file() {
+        Some(default_cookie_path.to_string_lossy().to_string())
     } else {
         None
     };
 
-    let effective_cookie = match (cookie_from_file, args.cookie) {
-        (Some(fc), Some(cc)) => Some(pageclaw_core::fetcher::merge_cookies(&fc, &cc)),
-        (Some(fc), None) => Some(fc),
-        (None, Some(cc)) => Some(cc),
-        (None, None) => None,
-    };
+    // Print friendly loading log if target URL is specified upfront
+    if !args.quiet && args.cookie.is_none() {
+        if let Some(ref cf) = cookie_file_path {
+            if let Ok(c) = pageclaw_core::fetcher::load_cookie_from_file_for_url(
+                std::path::Path::new(cf),
+                target_url_ref,
+            ) {
+                if !c.trim().is_empty() {
+                    if let Some(platform) =
+                        target_url_ref.and_then(pageclaw_core::fetcher::detect_platform_from_url)
+                    {
+                        eprintln!(
+                            "[PageClaw] Automatically loaded [{platform}] credentials from {cf}"
+                        );
+                    }
+                }
+            }
+        }
+    }
 
     // Build network fetch options
     let fetch_options = FetchOptions {
@@ -238,8 +230,8 @@ async fn run(args: CliArgs) -> Result<()> {
         max_bytes: args.max_size_mb * 1024 * 1024,
         on_too_large: args.on_too_large.into(),
         headers: custom_headers,
-        cookie: effective_cookie,
-        cookie_file: None,
+        cookie: args.cookie.clone(),
+        cookie_file: cookie_file_path,
         allow_private_addresses: args.allow_private_addresses,
         allow_http_errors: args.allow_http_errors,
     };
