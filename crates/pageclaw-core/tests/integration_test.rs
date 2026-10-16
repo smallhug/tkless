@@ -520,3 +520,56 @@ fn test_integration_tables_only_csv_export() {
     assert!(!doc.content.contains("Navigation links"));
     assert!(!doc.content.contains("Additional footnotes"));
 }
+
+#[test]
+fn test_integration_extraction_metrics_telemetry() {
+    let engine = PageclawEngine::new().expect("Failed to initialize engine");
+
+    let page_html = r#"
+        <!DOCTYPE html>
+        <html>
+        <head><title>Telemetry Benchmark Page</title></head>
+        <body>
+            <header><nav><a href="/">Home</a><a href="/docs">Docs</a><a href="/pricing">Pricing</a></nav></header>
+            <div class="sidebar"><p>Sidebar ads and links...</p></div>
+            <main>
+                <article>
+                    <h1>Telemetry Benchmark Page</h1>
+                    <p>PageClaw prunes boilerplate and reports empirical token savings to LLM agents.</p>
+                </article>
+            </main>
+            <footer><p>Footer copyright boilerplate 2026...</p></footer>
+        </body>
+        </html>
+    "#;
+
+    let options = ExtractionOptions {
+        stats: true,
+        ..Default::default()
+    };
+
+    let doc = engine
+        .process_html(page_html, Some("https://example.com/metrics"), &options)
+        .expect("Failed to process HTML with stats");
+
+    let metrics = doc
+        .metrics
+        .expect("Metrics must be populated when stats is true");
+    assert!(
+        metrics.raw_bytes > metrics.cleaned_bytes,
+        "Raw HTML bytes must exceed cleaned bytes"
+    );
+    assert!(
+        metrics.raw_token_estimate > metrics.final_token_count,
+        "Raw token estimate must exceed cleaned token count"
+    );
+    assert!(
+        metrics.token_savings_percent > 0.0,
+        "Token savings percent must be positive"
+    );
+    assert!(
+        metrics.noise_reduction_percent > 0.0,
+        "Noise reduction percent must be positive"
+    );
+    assert_eq!(metrics.final_token_count, doc.token_count);
+}

@@ -43,9 +43,9 @@ pub use error::PageclawError;
 pub use mcp::McpServer;
 pub use model::{
     CommentEntry, ConclusionChapter, ConclusionKeypoint, DanmakuEntry, ExtractedImage,
-    ExtractedLink, ExtractedTable, ExtractionMode, ExtractionOptions, FetchOptions, OnTooLarge,
-    OutputFormat, PageDocument, PageMetadata, SearchEngineKind, SubtitleLine, TableExportFormat,
-    TokenizerKind, VideoConclusion, VideoQuality,
+    ExtractedLink, ExtractedTable, ExtractionMetrics, ExtractionMode, ExtractionOptions,
+    FetchOptions, OnTooLarge, OutputFormat, PageDocument, PageMetadata, SearchEngineKind,
+    SubtitleLine, TableExportFormat, TokenizerKind, VideoConclusion, VideoQuality,
 };
 pub use schema::{
     extract_entities, scaffold_dom_skeleton, ExtractionSchema, FieldDef, FieldDetail,
@@ -123,6 +123,7 @@ impl PageclawEngine {
         options: &ExtractionOptions,
     ) -> Result<PageDocument, PageclawError> {
         let parsed_url = Url::parse(url)?;
+        let fetch_start = std::time::Instant::now();
 
         // Enforce SSRF validation upfront for all URLs before entering platform adapters or standard fetching
         self.fetcher.validate_ssrf(&parsed_url).await?;
@@ -254,6 +255,11 @@ impl PageclawEngine {
             }
         }
 
+        if let Some(ref mut m) = doc.metrics {
+            m.fetch_time_ms = fetch_start.elapsed().as_millis() as u64;
+            m.total_time_ms = m.fetch_time_ms + m.clean_time_ms;
+        }
+
         Ok(doc)
     }
 
@@ -375,6 +381,7 @@ impl PageclawEngine {
         base_url: Option<&str>,
         options: &ExtractionOptions,
     ) -> Result<PageDocument, PageclawError> {
+        let clean_start = std::time::Instant::now();
         let parsed_doc = Html::parse_document(raw_html);
 
         // 1. Extract metadata and JSON-LD
@@ -559,6 +566,36 @@ impl PageclawEngine {
 
         let content_hash = Some(format!("{:016x}", dedup::simhash(&content)));
 
+        let metrics = if options.stats {
+            let raw_bytes = raw_html.len();
+            let cleaned_bytes = content.len();
+            let raw_token_estimate = count_tokens(raw_html, options.tokenizer);
+            let token_savings_percent = ((raw_token_estimate.saturating_sub(final_token_count))
+                as f64
+                / raw_token_estimate.max(1) as f64
+                * 100.0)
+                .clamp(0.0, 100.0);
+            let noise_reduction_percent = ((raw_bytes.saturating_sub(cleaned_bytes)) as f64
+                / raw_bytes.max(1) as f64
+                * 100.0)
+                .clamp(0.0, 100.0);
+            let clean_time_ms = clean_start.elapsed().as_millis() as u64;
+
+            Some(ExtractionMetrics {
+                fetch_time_ms: 0,
+                clean_time_ms,
+                total_time_ms: clean_time_ms,
+                raw_bytes,
+                cleaned_bytes,
+                raw_token_estimate,
+                final_token_count,
+                token_savings_percent,
+                noise_reduction_percent,
+            })
+        } else {
+            None
+        };
+
         Ok(PageDocument {
             url: base_url.unwrap_or("").to_string(),
             final_url: base_url.unwrap_or("").to_string(),
@@ -581,6 +618,7 @@ impl PageclawEngine {
             entity,
             chunks,
             content_hash,
+            metrics,
         })
     }
 }

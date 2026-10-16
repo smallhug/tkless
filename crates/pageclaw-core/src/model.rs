@@ -210,6 +210,8 @@ pub struct ExtractionOptions {
     pub tables_only: bool,
     /// Presentation format for table export: markdown (default), csv, tsv, json.
     pub table_format: TableExportFormat,
+    /// Whether to measure and compute detailed telemetry and token economy metrics.
+    pub stats: bool,
 }
 
 impl Default for ExtractionOptions {
@@ -246,6 +248,7 @@ impl Default for ExtractionOptions {
             assets_dir: None,
             tables_only: false,
             table_format: TableExportFormat::default(),
+            stats: false,
         }
     }
 }
@@ -583,6 +586,29 @@ pub struct DocumentChunk {
     pub token_count: usize,
 }
 
+/// Telemetry performance and token economy metrics for a document extraction.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ExtractionMetrics {
+    /// Time spent fetching remote HTML over network in milliseconds
+    pub fetch_time_ms: u64,
+    /// Time spent cleaning, converting to markdown, and extracting metadata in milliseconds
+    pub clean_time_ms: u64,
+    /// Overall pipeline duration in milliseconds
+    pub total_time_ms: u64,
+    /// Raw HTML response payload size in bytes
+    pub raw_bytes: usize,
+    /// Final cleaned document content size in bytes
+    pub cleaned_bytes: usize,
+    /// Estimated token count of the raw unmodified HTML
+    pub raw_token_estimate: usize,
+    /// Final token count of the cleaned extracted content
+    pub final_token_count: usize,
+    /// Percentage of tokens saved compared to raw HTML (0.0 to 100.0)
+    pub token_savings_percent: f64,
+    /// Percentage of byte noise removed (0.0 to 100.0)
+    pub noise_reduction_percent: f64,
+}
+
 /// The complete structured result of fetching and extracting a webpage.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PageDocument {
@@ -638,4 +664,7 @@ pub struct PageDocument {
     /// 64-bit hexadecimal SimHash content fingerprint for near-duplicate detection.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content_hash: Option<String>,
+    /// Telemetry performance and token economy metrics.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metrics: Option<ExtractionMetrics>,
 }

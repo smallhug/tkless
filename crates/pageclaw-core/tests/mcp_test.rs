@@ -121,6 +121,7 @@ async fn test_mcp_protocol_lifecycle() {
     assert!(props.get("tables_only").is_some());
     assert!(props.get("table_format").is_some());
     assert!(props.get("mobile").is_some());
+    assert!(props.get("stats").is_some());
 
     // 5. Tools Call (Validation Error)
     let call_req = r#"{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"search_bilibili","arguments":{}}}"#;

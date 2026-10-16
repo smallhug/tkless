@@ -207,6 +207,11 @@ pub fn get_available_tools() -> Vec<McpTool> {
                         "type": "boolean",
                         "default": false,
                         "description": "Whether to emulate a mobile browser User-Agent to trigger lightweight mobile layouts"
+                    },
+                    "stats": {
+                        "type": "boolean",
+                        "default": false,
+                        "description": "Whether to compute and include telemetry performance and token economy metrics"
                     }
                 },
                 "required": ["url"]
@@ -593,6 +598,11 @@ pub fn get_available_tools() -> Vec<McpTool> {
                         "enum": ["markdown", "csv", "tsv", "json"],
                         "default": "markdown",
                         "description": "Presentation format for table export: 'markdown' (default), 'csv', 'tsv', or 'json'"
+                    },
+                    "stats": {
+                        "type": "boolean",
+                        "default": false,
+                        "description": "Whether to compute and include telemetry performance and token economy metrics"
                     }
                 },
                 "required": ["html"]
