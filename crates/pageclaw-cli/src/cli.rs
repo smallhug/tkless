@@ -133,6 +133,31 @@ impl From<CliSearchEngine> for pageclaw_core::model::SearchEngineKind {
     }
 }
 
+/// Table export format choices.
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum CliTableFormat {
+    /// GitHub Flavored Markdown table format (default)
+    #[default]
+    Markdown,
+    /// Comma-Separated Values (RFC 4180)
+    Csv,
+    /// Tab-Separated Values
+    Tsv,
+    /// Structured JSON records
+    Json,
+}
+
+impl From<CliTableFormat> for pageclaw_core::model::TableExportFormat {
+    fn from(f: CliTableFormat) -> Self {
+        match f {
+            CliTableFormat::Markdown => pageclaw_core::model::TableExportFormat::Markdown,
+            CliTableFormat::Csv => pageclaw_core::model::TableExportFormat::Csv,
+            CliTableFormat::Tsv => pageclaw_core::model::TableExportFormat::Tsv,
+            CliTableFormat::Json => pageclaw_core::model::TableExportFormat::Json,
+        }
+    }
+}
+
 #[derive(Parser, Debug)]
 #[command(
     name = "pageclaw",
@@ -267,6 +292,24 @@ pub struct CliArgs {
         help_heading = "通用提取选项 (General Options)"
     )]
     pub assets_dir: Option<String>,
+
+    /// 仅提取并输出页面中的全部数据表格，跳过正文与噪音
+    #[arg(
+        short = 'T',
+        long = "tables-only",
+        alias = "table-only",
+        help_heading = "通用提取选项 (General Options)"
+    )]
+    pub tables_only: bool,
+
+    /// 表格导出呈现格式: markdown (默认), csv, tsv, json
+    #[arg(
+        long = "table-format",
+        value_enum,
+        default_value_t = CliTableFormat::Markdown,
+        help_heading = "通用提取选项 (General Options)"
+    )]
+    pub table_format: CliTableFormat,
 
     // =========================================================================
     // 哔哩哔哩专属选项 (Bilibili Options)

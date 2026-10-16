@@ -44,8 +44,8 @@ pub use mcp::McpServer;
 pub use model::{
     CommentEntry, ConclusionChapter, ConclusionKeypoint, DanmakuEntry, ExtractedImage,
     ExtractedLink, ExtractedTable, ExtractionMode, ExtractionOptions, FetchOptions, OnTooLarge,
-    OutputFormat, PageDocument, PageMetadata, SearchEngineKind, SubtitleLine, TokenizerKind,
-    VideoConclusion, VideoQuality,
+    OutputFormat, PageDocument, PageMetadata, SearchEngineKind, SubtitleLine, TableExportFormat,
+    TokenizerKind, VideoConclusion, VideoQuality,
 };
 pub use schema::{
     extract_entities, scaffold_dom_skeleton, ExtractionSchema, FieldDef, FieldDetail,
@@ -190,6 +190,12 @@ impl PageclawEngine {
                                 doc.content = rewritten;
                             }
                         }
+                        if options.tables_only {
+                            if let Some(ref tables) = doc.tables {
+                                doc.content =
+                                    ExtractedTable::format_tables(tables, options.table_format);
+                            }
+                        }
                         return Ok(doc);
                     }
                     Err(err) => {
@@ -309,7 +315,7 @@ impl PageclawEngine {
             None
         };
 
-        let tables = if options.extract_tables {
+        let tables = if options.extract_tables || options.tables_only {
             Some(extract_tables(&parsed_doc))
         } else {
             None
@@ -350,25 +356,30 @@ impl PageclawEngine {
         });
 
         // 4. Format into desired output presentation
-        let mut content = match options.format {
-            OutputFormat::Markdown | OutputFormat::Json => {
-                let md = self.markdown_converter.convert(
-                    &cleaned.html,
-                    options.strip_images,
-                    options.strip_links,
-                )?;
-                if options.frontmatter && options.format == OutputFormat::Markdown {
-                    prepend_frontmatter(&md, title.as_deref(), base_url, &metadata)
-                } else {
-                    md
+        let mut content = if options.tables_only {
+            let table_list = tables.as_deref().unwrap_or(&[]);
+            ExtractedTable::format_tables(table_list, options.table_format)
+        } else {
+            match options.format {
+                OutputFormat::Markdown | OutputFormat::Json => {
+                    let md = self.markdown_converter.convert(
+                        &cleaned.html,
+                        options.strip_images,
+                        options.strip_links,
+                    )?;
+                    if options.frontmatter && options.format == OutputFormat::Markdown {
+                        prepend_frontmatter(&md, title.as_deref(), base_url, &metadata)
+                    } else {
+                        md
+                    }
                 }
+                OutputFormat::Text => html_to_plain_text(&cleaned.html),
+                OutputFormat::Raw | OutputFormat::Html => cleaned.html,
             }
-            OutputFormat::Text => html_to_plain_text(&cleaned.html),
-            OutputFormat::Raw | OutputFormat::Html => cleaned.html,
         };
 
         // Append structured link and image assets to Markdown/Text output if requested
-        if options.extract_links {
+        if !options.tables_only && options.extract_links {
             if let Some(ref link_list) = links {
                 if !link_list.is_empty()
                     && (options.format == OutputFormat::Markdown
@@ -391,7 +402,7 @@ impl PageclawEngine {
             }
         }
 
-        if options.extract_images {
+        if !options.tables_only && options.extract_images {
             if let Some(ref image_list) = images {
                 if !image_list.is_empty()
                     && (options.format == OutputFormat::Markdown

@@ -115,6 +115,8 @@ async fn test_mcp_protocol_lifecycle() {
     assert!(props.get("proxy").is_some());
     assert!(props.get("download_images").is_some());
     assert!(props.get("assets_dir").is_some());
+    assert!(props.get("tables_only").is_some());
+    assert!(props.get("table_format").is_some());
 
     // 5. Tools Call (Validation Error)
     let call_req = r#"{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"search_bilibili","arguments":{}}}"#;
@@ -173,6 +175,18 @@ async fn test_mcp_protocol_lifecycle() {
     let chunk_text = chunk_val["content"][0]["text"].as_str().unwrap();
     assert!(chunk_text.contains("语义切块输出"));
     assert!(chunk_text.contains("Chunk 1/"));
+
+    // 5f. Tool Call: clean_html with tables_only and table_format: csv
+    let table_req = r#"{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"clean_html","arguments":{"html":"<html><body><p>Unwanted article text</p><table><thead><tr><th>Product</th><th>Price</th></tr></thead><tbody><tr><td>Widget A</td><td>100</td></tr><tr><td>Widget B</td><td>200</td></tr></tbody></table></body></html>","tables_only":true,"table_format":"csv"}}}"#;
+    let table_res = server
+        .handle_message(table_req)
+        .await
+        .expect("Should return response");
+    let table_val = table_res.result.expect("Table result should be present");
+    let table_text = table_val["content"][0]["text"].as_str().unwrap();
+    assert!(table_text.contains("Product,Price"));
+    assert!(table_text.contains("Widget A,100"));
+    assert!(!table_text.contains("Unwanted article text"));
 
     // 5. Unknown Method Error
     let unknown_req = r#"{"jsonrpc":"2.0","id":4,"method":"unknown/method"}"#;

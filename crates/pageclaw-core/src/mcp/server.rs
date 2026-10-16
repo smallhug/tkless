@@ -5,7 +5,7 @@ use crate::cache::DocumentCache;
 use crate::error::PageclawError;
 use crate::model::{
     ExtractionMode, ExtractionOptions, FetchOptions, OnTooLarge, OutputFormat, SearchEngineKind,
-    TokenizerKind, VideoQuality,
+    TableExportFormat, TokenizerKind, VideoQuality,
 };
 use crate::PageclawEngine;
 use serde_json::Value;
@@ -314,6 +314,16 @@ impl McpServer {
             .get("assets_dir")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
+        let tables_only = args
+            .get("tables_only")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let table_format = match args.get("table_format").and_then(|v| v.as_str()) {
+            Some("csv") => TableExportFormat::Csv,
+            Some("tsv") => TableExportFormat::Tsv,
+            Some("json") => TableExportFormat::Json,
+            _ => TableExportFormat::Markdown,
+        };
 
         let options = ExtractionOptions {
             mode,
@@ -345,6 +355,8 @@ impl McpServer {
             chunk_overlap,
             download_images,
             assets_dir,
+            tables_only,
+            table_format,
         };
 
         // Cache check
@@ -1081,6 +1093,16 @@ impl McpServer {
             .get("chunk_overlap")
             .and_then(|v| v.as_u64())
             .map(|v| v as usize);
+        let tables_only = args
+            .get("tables_only")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let table_format = match args.get("table_format").and_then(|v| v.as_str()) {
+            Some("csv") => TableExportFormat::Csv,
+            Some("tsv") => TableExportFormat::Tsv,
+            Some("json") => TableExportFormat::Json,
+            _ => TableExportFormat::Markdown,
+        };
 
         let options = ExtractionOptions {
             mode,
@@ -1094,6 +1116,8 @@ impl McpServer {
             chunk,
             chunk_size,
             chunk_overlap,
+            tables_only,
+            table_format,
             ..Default::default()
         };
 
