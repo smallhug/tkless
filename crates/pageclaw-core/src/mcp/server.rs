@@ -94,6 +94,9 @@ impl McpServer {
                     "download_media" => self.call_download_media(&arguments).await,
                     "web_search" => self.call_web_search(&arguments).await,
                     "crawl_site" => self.call_crawl_site(&arguments).await,
+                    "batch_fetch_webpages" => self.call_batch_fetch_webpages(&arguments).await,
+                    "clean_html" => self.call_clean_html(&arguments).await,
+                    "login_platform" => self.call_login_platform(&arguments).await,
                     _ => McpToolCallResult::error(format!("Unknown tool: '{tool_name}'")),
                 };
 
@@ -596,6 +599,43 @@ impl McpServer {
             Some("auto") => SearchEngineKind::Auto,
             _ => SearchEngineKind::Bing,
         };
+        let scope = args.get("scope").and_then(|v| v.as_str()).unwrap_or("all");
+        let effective_query = match scope {
+            "wechat" => {
+                let clean = query.trim();
+                if clean.starts_with("site:") {
+                    clean.to_string()
+                } else {
+                    format!("site:mp.weixin.qq.com {clean}")
+                }
+            }
+            "zhihu" => {
+                let clean = query.trim();
+                if clean.starts_with("site:") {
+                    clean.to_string()
+                } else {
+                    format!("site:zhihu.com {clean}")
+                }
+            }
+            "github" => {
+                let clean = query.trim();
+                if clean.starts_with("site:") {
+                    clean.to_string()
+                } else {
+                    format!("site:github.com {clean}")
+                }
+            }
+            "juejin" => {
+                let clean = query.trim();
+                if clean.starts_with("site:") {
+                    clean.to_string()
+                } else {
+                    format!("site:juejin.cn {clean}")
+                }
+            }
+            _ => query.to_string(),
+        };
+
         let fetch_content = args
             .get("fetch_content")
             .and_then(|v| v.as_bool())
@@ -606,10 +646,29 @@ impl McpServer {
             .map(|v| v as usize);
 
         if fetch_content {
-            let options = ExtractionOptions::default();
+            let cdp_endpoint = args
+                .get("cdp_endpoint")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let cdp_wait_ms = args.get("cdp_wait_ms").and_then(|v| v.as_u64());
+            let schema = args.get("schema").map(|v| {
+                if let Some(s) = v.as_str() {
+                    s.to_string()
+                } else {
+                    v.to_string()
+                }
+            });
+
+            let options = ExtractionOptions {
+                cdp_endpoint,
+                cdp_wait_ms,
+                schema,
+                ..Default::default()
+            };
+
             match crate::search::web_search_and_fetch(
                 &self.engine,
-                query,
+                &effective_query,
                 limit,
                 engine,
                 &options,
@@ -625,15 +684,21 @@ impl McpServer {
                         }
                     },
                     _ => {
-                        let md = crate::search::format_search_fetch_markdown(query, &items);
+                        let md =
+                            crate::search::format_search_fetch_markdown(&effective_query, &items);
                         McpToolCallResult::success(md)
                     }
                 },
                 Err(e) => McpToolCallResult::error(format!("Search & fetch failed: {e}")),
             }
         } else {
-            match crate::search::web_search_with_engine(self.engine.client(), query, limit, engine)
-                .await
+            match crate::search::web_search_with_engine(
+                self.engine.client(),
+                &effective_query,
+                limit,
+                engine,
+            )
+            .await
             {
                 Ok(results) => match format {
                     OutputFormat::Json => match serde_json::to_string_pretty(&results) {
@@ -643,7 +708,10 @@ impl McpServer {
                         }
                     },
                     _ => {
-                        let md = crate::search::format_search_results_markdown(query, &results);
+                        let md = crate::search::format_search_results_markdown(
+                            &effective_query,
+                            &results,
+                        );
                         McpToolCallResult::success(md)
                     }
                 },
@@ -678,6 +746,24 @@ impl McpServer {
             _ => OutputFormat::Markdown,
         };
 
+        let max_tokens = args
+            .get("max_tokens")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as usize);
+
+        let cdp_endpoint = args
+            .get("cdp_endpoint")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        let cdp_wait_ms = args.get("cdp_wait_ms").and_then(|v| v.as_u64());
+        let schema = args.get("schema").map(|v| {
+            if let Some(s) = v.as_str() {
+                s.to_string()
+            } else {
+                v.to_string()
+            }
+        });
+
         let crawl_options = crate::crawler::CrawlOptions {
             max_depth,
             max_pages,
@@ -687,7 +773,12 @@ impl McpServer {
             exclude_patterns: crate::crawler::CrawlOptions::default().exclude_patterns,
         };
 
-        let extraction_options = ExtractionOptions::default();
+        let extraction_options = ExtractionOptions {
+            cdp_endpoint,
+            cdp_wait_ms,
+            schema,
+            ..Default::default()
+        };
 
         match crate::crawler::crawl_site(
             &self.engine,
@@ -703,11 +794,266 @@ impl McpServer {
                     Err(e) => McpToolCallResult::error(format!("Failed to serialize JSON: {e}")),
                 },
                 _ => {
-                    let md = crate::crawler::format_crawl_report_markdown(&report);
+                    let mut md = crate::crawler::format_crawl_report_markdown(&report);
+                    if let Some(limit) = max_tokens {
+                        let current_tokens =
+                            crate::token::count_tokens(&md, TokenizerKind::default());
+                        if current_tokens > limit {
+                            let (truncated_md, _) = crate::token::truncate_to_tokens(
+                                &md,
+                                limit,
+                                TokenizerKind::default(),
+                            );
+                            md = truncated_md;
+                        }
+                    }
                     McpToolCallResult::success(md)
                 }
             },
             Err(e) => McpToolCallResult::error(format!("Site crawl failed: {e}")),
+        }
+    }
+
+    async fn call_batch_fetch_webpages(&self, args: &Value) -> McpToolCallResult {
+        let urls = match args.get("urls").and_then(|v| v.as_array()) {
+            Some(arr) if !arr.is_empty() => arr
+                .iter()
+                .filter_map(|v| v.as_str())
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect::<Vec<_>>(),
+            _ => return McpToolCallResult::error("Missing or empty 'urls' array"),
+        };
+
+        if urls.is_empty() {
+            return McpToolCallResult::error(
+                "'urls' array must contain at least one valid URL string",
+            );
+        }
+
+        let concurrency = args
+            .get("concurrency")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(5)
+            .clamp(1, 20) as usize;
+
+        let format = match args.get("format").and_then(|v| v.as_str()) {
+            Some("json") => OutputFormat::Json,
+            _ => OutputFormat::Markdown,
+        };
+
+        let max_tokens = args
+            .get("max_tokens_per_page")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as usize);
+
+        let selector = args
+            .get("selector")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+
+        let schema = args.get("schema").map(|v| {
+            if let Some(s) = v.as_str() {
+                s.to_string()
+            } else {
+                v.to_string()
+            }
+        });
+
+        let cdp_endpoint = args
+            .get("cdp_endpoint")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+
+        let cdp_wait_ms = args.get("cdp_wait_ms").and_then(|v| v.as_u64());
+
+        let base_options = ExtractionOptions {
+            format,
+            max_tokens,
+            selector,
+            schema,
+            cdp_endpoint,
+            cdp_wait_ms,
+            ..Default::default()
+        };
+
+        let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(concurrency));
+        let mut join_set = tokio::task::JoinSet::new();
+
+        for (idx, url) in urls.into_iter().enumerate() {
+            let sem = semaphore.clone();
+            let eng = self.engine.clone();
+            let opts = base_options.clone();
+
+            join_set.spawn(async move {
+                let _permit = sem.acquire().await.unwrap();
+                let res = eng.process_url(&url, &opts).await;
+                (idx, url, res)
+            });
+        }
+
+        let mut results = Vec::new();
+        while let Some(res) = join_set.join_next().await {
+            if let Ok(item) = res {
+                results.push(item);
+            }
+        }
+        results.sort_by_key(|(idx, _, _)| *idx);
+
+        let mut docs = Vec::new();
+        let mut errors = Vec::new();
+
+        for (_, url, res) in results {
+            match res {
+                Ok(doc) => docs.push(doc),
+                Err(e) => errors.push(format!("- `{url}`: {e}")),
+            }
+        }
+
+        match format {
+            OutputFormat::Json => match serde_json::to_string_pretty(&docs) {
+                Ok(json_str) => McpToolCallResult::success(json_str),
+                Err(e) => {
+                    McpToolCallResult::error(format!("Failed to serialize documents to JSON: {e}"))
+                }
+            },
+            _ => {
+                let mut out = docs
+                    .iter()
+                    .map(|d| d.content.as_str())
+                    .collect::<Vec<_>>()
+                    .join("\n\n---\n\n");
+                if !errors.is_empty() {
+                    out.push_str("\n\n### 部分 URL 获取失败 (Failed URLs)\n\n");
+                    out.push_str(&errors.join("\n"));
+                }
+                McpToolCallResult::success(out)
+            }
+        }
+    }
+
+    async fn call_clean_html(&self, args: &Value) -> McpToolCallResult {
+        let html = match args.get("html").and_then(|v| v.as_str()) {
+            Some(h) if !h.trim().is_empty() => h,
+            _ => return McpToolCallResult::error("Missing required parameter 'html'"),
+        };
+
+        let base_url = args.get("base_url").and_then(|v| v.as_str());
+
+        let format = match args.get("format").and_then(|v| v.as_str()) {
+            Some("json") => OutputFormat::Json,
+            Some("text") => OutputFormat::Text,
+            Some("html") => OutputFormat::Html,
+            _ => OutputFormat::Markdown,
+        };
+
+        let mode = match args.get("mode").and_then(|v| v.as_str()) {
+            Some("full") => ExtractionMode::Full,
+            Some("raw") => ExtractionMode::Raw,
+            _ => ExtractionMode::Article,
+        };
+
+        let selector = args
+            .get("selector")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+
+        let schema = args.get("schema").map(|v| {
+            if let Some(s) = v.as_str() {
+                s.to_string()
+            } else {
+                v.to_string()
+            }
+        });
+
+        let max_tokens = args
+            .get("max_tokens")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as usize);
+
+        let strip_images = args
+            .get("strip_images")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
+        let strip_links = args
+            .get("strip_links")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
+        let frontmatter = args
+            .get("frontmatter")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
+        let options = ExtractionOptions {
+            mode,
+            format,
+            selector,
+            schema,
+            max_tokens,
+            strip_images,
+            strip_links,
+            frontmatter,
+            ..Default::default()
+        };
+
+        match self.engine.process_html(html, base_url, &options) {
+            Ok(doc) => format_doc_result(&doc, format),
+            Err(e) => McpToolCallResult::error(format!("Failed to clean HTML: {e}")),
+        }
+    }
+
+    async fn call_login_platform(&self, args: &Value) -> McpToolCallResult {
+        let platform = match args.get("platform").and_then(|v| v.as_str()) {
+            Some(p) if !p.trim().is_empty() => p.trim().to_ascii_lowercase(),
+            _ => {
+                return McpToolCallResult::error(
+                    "Missing required parameter 'platform' ('bilibili' or 'zhihu')",
+                )
+            }
+        };
+
+        let output_file = args
+            .get("output_cookie_file")
+            .and_then(|v| v.as_str())
+            .unwrap_or("./cookies.txt");
+
+        let no_browser = args
+            .get("no_browser")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
+
+        let timeout_secs = args
+            .get("timeout_secs")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(180);
+
+        match platform.as_str() {
+            "bilibili" | "bili" => {
+                let login_opts = crate::auth::LoginOptions {
+                    output_path: std::path::PathBuf::from(output_file),
+                    no_browser,
+                    timeout_secs,
+                };
+                match crate::auth::execute_login_flow(Some(self.engine.client()), login_opts).await
+                {
+                    Ok(cookie_str) => McpToolCallResult::success(format!(
+                        "Bilibili 登录成功！凭据已自动以 'bilibili: ...' 格式保存至 `{output_file}`。\n凭据摘要: 长度 {} 字符",
+                        cookie_str.len()
+                    )),
+                    Err(e) => McpToolCallResult::error(format!("Bilibili 扫码登录失败: {e}")),
+                }
+            }
+            "zhihu" => {
+                let msg = format!(
+                    "知乎登录说明：\n1. 请在本地浏览器访问授权登录页：https://www.zhihu.com/signin\n2. 登录成功后，从浏览器开发者工具 (F12 -> Application -> Cookies) 复制 Cookie 字符串\n3. 将凭据以 'zhihu: ...' 前缀格式追加到 `{output_file}`：\n```\nzhihu: d_c0=\"...\"; z_c0=\"...\"\n```\n4. 保存后 PageClaw 将自动识别知乎会话凭据进行鉴权访问。"
+                );
+                McpToolCallResult::success(msg)
+            }
+            other => McpToolCallResult::error(format!(
+                "Unsupported platform '{other}'. Currently supported: 'bilibili', 'zhihu'"
+            )),
         }
     }
 }

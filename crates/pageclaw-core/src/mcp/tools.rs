@@ -298,6 +298,12 @@ pub fn get_available_tools() -> Vec<McpTool> {
                         "default": "bing",
                         "description": "Search engine provider: 'bing' (default, fast connectivity and great Chinese coverage), 'google' (global documentation index), or 'auto' (failover)"
                     },
+                    "scope": {
+                        "type": "string",
+                        "enum": ["all", "wechat", "zhihu", "github", "juejin"],
+                        "default": "all",
+                        "description": "Search scope limitation: 'all' (entire web), 'wechat' (WeChat Official Accounts), 'zhihu' (Zhihu questions and articles), 'github' (GitHub repositories and issues), or 'juejin' (Juejin tech posts)"
+                    },
                     "fetch_content": {
                         "type": "boolean",
                         "default": false,
@@ -307,6 +313,18 @@ pub fn get_available_tools() -> Vec<McpTool> {
                         "type": "integer",
                         "default": 1500,
                         "description": "Maximum tokens extracted per webpage when fetch_content is enabled [default: 1500]"
+                    },
+                    "cdp_endpoint": {
+                        "type": "string",
+                        "description": "Optional Chrome DevTools Protocol (CDP) endpoint (e.g. 'http://127.0.0.1:9222') for JS rendering when fetch_content is enabled"
+                    },
+                    "cdp_wait_ms": {
+                        "type": "integer",
+                        "description": "Additional wait time in milliseconds for CDP DOM hydration when fetch_content is enabled"
+                    },
+                    "schema": {
+                        "type": "string",
+                        "description": "Optional extraction schema (JSON string or file path) for structured entity extraction when fetch_content is enabled"
                     },
                     "format": {
                         "type": "string",
@@ -343,6 +361,22 @@ pub fn get_available_tools() -> Vec<McpTool> {
                         "default": false,
                         "description": "Restrict crawling strictly to URLs sharing the same path prefix as seed URL"
                     },
+                    "max_tokens": {
+                        "type": "integer",
+                        "description": "Maximum overall token budget for the assembled crawl knowledge base"
+                    },
+                    "cdp_endpoint": {
+                        "type": "string",
+                        "description": "Optional Chrome DevTools Protocol endpoint (e.g. 'http://127.0.0.1:9222') for JS-rendered crawling"
+                    },
+                    "cdp_wait_ms": {
+                        "type": "integer",
+                        "description": "Additional wait time in milliseconds for CDP DOM hydration during crawling"
+                    },
+                    "schema": {
+                        "type": "string",
+                        "description": "Optional extraction schema (JSON string or file path) to extract structured entities from each crawled page"
+                    },
                     "format": {
                         "type": "string",
                         "enum": ["markdown", "json"],
@@ -351,6 +385,139 @@ pub fn get_available_tools() -> Vec<McpTool> {
                     }
                 },
                 "required": ["seed_url"]
+            }),
+        },
+        McpTool {
+            name: "batch_fetch_webpages".to_string(),
+            description: "Concurrently fetches and cleans a batch of URLs using a multi-threaded asynchronous worker pool, returning aggregated Markdown or JSON results in a single round-trip.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "urls": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "List of webpage URLs to fetch and extract concurrently"
+                    },
+                    "concurrency": {
+                        "type": "integer",
+                        "default": 5,
+                        "description": "Maximum concurrent network requests (default: 5, max: 20)"
+                    },
+                    "format": {
+                        "type": "string",
+                        "enum": ["markdown", "json"],
+                        "default": "markdown",
+                        "description": "Output format: 'markdown' (separated by dividers) or 'json' (array of document objects)"
+                    },
+                    "max_tokens_per_page": {
+                        "type": "integer",
+                        "description": "Maximum token budget per webpage"
+                    },
+                    "selector": {
+                        "type": "string",
+                        "description": "CSS selector for targeted DOM extraction across all pages"
+                    },
+                    "schema": {
+                        "type": "string",
+                        "description": "Optional extraction schema (JSON string) for structured entity extraction"
+                    },
+                    "cdp_endpoint": {
+                        "type": "string",
+                        "description": "Optional Chrome DevTools Protocol endpoint (e.g. 'http://127.0.0.1:9222')"
+                    },
+                    "cdp_wait_ms": {
+                        "type": "integer",
+                        "description": "Wait time in milliseconds for CDP DOM hydration"
+                    }
+                },
+                "required": ["urls"]
+            }),
+        },
+        McpTool {
+            name: "clean_html".to_string(),
+            description: "Locally sanitizes and cleans an arbitrary HTML string (e.g. from local file, email, or external scraper), strips scripts/ads/noise, and converts it into pure Markdown or extracts structured entities via CSS selector/Schema.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "html": {
+                        "type": "string",
+                        "description": "Raw HTML string content to clean"
+                    },
+                    "base_url": {
+                        "type": "string",
+                        "description": "Optional base URL to resolve relative hyperlinks and images"
+                    },
+                    "format": {
+                        "type": "string",
+                        "enum": ["markdown", "json", "text", "html"],
+                        "default": "markdown",
+                        "description": "Output presentation format: 'markdown', 'json', 'text', or 'html'"
+                    },
+                    "mode": {
+                        "type": "string",
+                        "enum": ["article", "full", "raw"],
+                        "default": "article",
+                        "description": "Cleaning mode: 'article' (Readability heuristic body extraction), 'full' (sanitized whole body), 'raw'"
+                    },
+                    "selector": {
+                        "type": "string",
+                        "description": "CSS selector for targeted DOM extraction"
+                    },
+                    "schema": {
+                        "type": "string",
+                        "description": "Extraction schema (JSON string) defining fields to extract structured JSON directly"
+                    },
+                    "max_tokens": {
+                        "type": "integer",
+                        "description": "Maximum token budget with smart sentence-boundary truncation"
+                    },
+                    "strip_images": {
+                        "type": "boolean",
+                        "default": false,
+                        "description": "Strip images from Markdown"
+                    },
+                    "strip_links": {
+                        "type": "boolean",
+                        "default": false,
+                        "description": "Strip hyperlinks, keeping only the anchor text"
+                    },
+                    "frontmatter": {
+                        "type": "boolean",
+                        "default": false,
+                        "description": "Prepend YAML frontmatter with title, URL, date, and metadata"
+                    }
+                },
+                "required": ["html"]
+            }),
+        },
+        McpTool {
+            name: "login_platform".to_string(),
+            description: "Initiates an interactive QR code login flow for supported platforms (e.g. 'bilibili', 'zhihu') to extract authenticated cookies and save them to cookies.txt with platform-prefix isolation.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "platform": {
+                        "type": "string",
+                        "enum": ["bilibili", "zhihu"],
+                        "description": "Target platform to log in ('bilibili' or 'zhihu')"
+                    },
+                    "output_cookie_file": {
+                        "type": "string",
+                        "default": "./cookies.txt",
+                        "description": "Destination file path to save extracted cookies (default: ./cookies.txt)"
+                    },
+                    "no_browser": {
+                        "type": "boolean",
+                        "default": true,
+                        "description": "Whether to skip opening the system browser automatically (outputs QR code text in tool result, default: true)"
+                    },
+                    "timeout_secs": {
+                        "type": "integer",
+                        "default": 180,
+                        "description": "Maximum waiting timeout in seconds for user to scan the QR code (default: 180)"
+                    }
+                },
+                "required": ["platform"]
             }),
         }
     ]
