@@ -655,6 +655,10 @@ pub fn detect_platform_from_host(host: &str) -> Option<&'static str> {
         Some("juejin")
     } else if is_subdomain_or_exact(&host_lower, "github.com") {
         Some("github")
+    } else if is_subdomain_or_exact(&host_lower, "csdn.net") {
+        Some("csdn")
+    } else if is_subdomain_or_exact(&host_lower, "medium.com") {
+        Some("medium")
     } else {
         None
     }
@@ -984,10 +988,26 @@ mod tests {
             detect_platform_from_url("https://mp.weixin.qq.com/s/abc"),
             Some("wechat")
         );
+        assert_eq!(
+            detect_platform_from_url("https://blog.csdn.net/user/article/details/123"),
+            Some("csdn")
+        );
+        assert_eq!(
+            detect_platform_from_url("https://medium.com/@author/my-article"),
+            Some("medium")
+        );
 
         // Security check: spoofed / typosquatted domains MUST NOT leak cookies!
         assert_eq!(
             detect_platform_from_url("https://evilzhihu.com/p/123"),
+            None
+        );
+        assert_eq!(
+            detect_platform_from_url("https://evilcsdn.net/article/123"),
+            None
+        );
+        assert_eq!(
+            detect_platform_from_url("https://evilmedium.com/story"),
             None
         );
         assert_eq!(

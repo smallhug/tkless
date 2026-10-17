@@ -736,6 +736,20 @@ pub struct SearchSubArgs {
     )]
     pub juejin: bool,
 
+    /// Scope search to CSDN blog posts (blog.csdn.net)
+    #[arg(
+        long = "csdn",
+        help = "Scope search to CSDN blog posts (blog.csdn.net)"
+    )]
+    pub csdn: bool,
+
+    /// Scope search to Medium technical articles (medium.com)
+    #[arg(
+        long = "medium",
+        help = "Scope search to Medium technical articles (medium.com)"
+    )]
+    pub medium: bool,
+
     /// Search engine provider: bing (default), google, auto (failover)
     #[arg(
         short = 'e',

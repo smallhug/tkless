@@ -81,6 +81,27 @@ pub async fn crawl_site(
     crawl_options: &CrawlOptions,
     extraction_options: &ExtractionOptions,
 ) -> Result<SiteCrawlReport, PageclawError> {
+    crawl_site_with_progress::<fn(usize, usize, &str)>(
+        engine,
+        seed_url,
+        crawl_options,
+        extraction_options,
+        None,
+    )
+    .await
+}
+
+/// Executes deep site crawling with an optional real-time progress callback `F(crawled_count, max_pages, current_url)`.
+pub async fn crawl_site_with_progress<F>(
+    engine: &PageclawEngine,
+    seed_url: &str,
+    crawl_options: &CrawlOptions,
+    extraction_options: &ExtractionOptions,
+    mut on_progress: Option<F>,
+) -> Result<SiteCrawlReport, PageclawError>
+where
+    F: FnMut(usize, usize, &str) + Send,
+{
     let parsed_seed = Url::parse(seed_url)?;
     let seed_host = parsed_seed.host_str().unwrap_or("").to_lowercase();
     let seed_path = parsed_seed.path().to_string();
@@ -219,7 +240,7 @@ pub async fn crawl_site(
 
                 crawled_pages.push(CrawledPage {
                     rank,
-                    url: url_str,
+                    url: url_str.clone(),
                     title: page_title,
                     depth,
                     content: doc.content,
@@ -227,19 +248,25 @@ pub async fn crawl_site(
                     status: doc.status,
                     error: None,
                 });
+                if let Some(ref mut cb) = on_progress {
+                    cb(crawled_pages.len(), crawl_options.max_pages, &url_str);
+                }
             }
             Err(err) => {
                 warn!(url = %url_str, error = %err, "Failed to crawl page");
                 crawled_pages.push(CrawledPage {
                     rank,
                     url: url_str.clone(),
-                    title: url_str,
+                    title: url_str.clone(),
                     depth,
                     content: String::new(),
                     token_count: 0,
                     status: 0,
                     error: Some(err.to_string()),
                 });
+                if let Some(ref mut cb) = on_progress {
+                    cb(crawled_pages.len(), crawl_options.max_pages, &url_str);
+                }
             }
         }
     }
