@@ -113,6 +113,168 @@ impl AdapterRegistry {
             .find(|a| a.matches(url))
             .map(|b| b.as_ref())
     }
+
+    /// Returns structured metadata for all 16 built-in platform adapters.
+    pub fn list_adapter_metadata() -> Vec<AdapterInfo> {
+        vec![
+            AdapterInfo {
+                name: "bilibili",
+                title: "哔哩哔哩 (Bilibili)",
+                domain_patterns: &["bilibili.com", "b23.tv"],
+                features: &[
+                    "字幕轨提取",
+                    "AI大纲总结",
+                    "时间轴弹幕",
+                    "高赞评论",
+                    "封面/视频流下载",
+                    "推荐流与排行榜",
+                ],
+            },
+            AdapterInfo {
+                name: "zhihu",
+                title: "知乎 (Zhihu)",
+                domain_patterns: &["zhihu.com", "zhuanlan.zhihu.com"],
+                features: &[
+                    "防外链跳转解包",
+                    "高清原图替换",
+                    "LaTeX公式规范化",
+                    "反爬挑战探测",
+                ],
+            },
+            AdapterInfo {
+                name: "wechat",
+                title: "微信公众号 (WeChat)",
+                domain_patterns: &["mp.weixin.qq.com"],
+                features: &["懒加载图片还原", "作者与发布时间解析", "反爬/删除风控探测"],
+            },
+            AdapterInfo {
+                name: "xiaohongshu",
+                title: "小红书 (Xiaohongshu)",
+                domain_patterns: &["xiaohongshu.com", "xhslink.com"],
+                features: &[
+                    "笔记正文与话题标签",
+                    "无水印多图画廊提取",
+                    "服务端状态树解析",
+                ],
+            },
+            AdapterInfo {
+                name: "github",
+                title: "GitHub",
+                domain_patterns: &["github.com"],
+                features: &[
+                    "README提纯",
+                    "Issue/PR讨论链提取",
+                    "Release发版说明",
+                    "Trending每日/周热榜",
+                ],
+            },
+            AdapterInfo {
+                name: "huggingface",
+                title: "Hugging Face",
+                domain_patterns: &["huggingface.co"],
+                features: &[
+                    "Model Card模型卡",
+                    "数据集正文",
+                    "论文Abstract",
+                    "YAML元数据",
+                ],
+            },
+            AdapterInfo {
+                name: "stackoverflow",
+                title: "Stack Overflow",
+                domain_patterns: &["stackoverflow.com"],
+                features: &["采纳答案标记", "代码与公式规范化", "得票数与作者统计"],
+            },
+            AdapterInfo {
+                name: "v2ex",
+                title: "V2EX",
+                domain_patterns: &["v2ex.com"],
+                features: &["主楼与附言合并", "楼层回复结构化表格"],
+            },
+            AdapterInfo {
+                name: "reddit",
+                title: "Reddit",
+                domain_patterns: &["reddit.com"],
+                features: &["帖子正文还原", "评论树递归扁平化", "JSON接口自适应"],
+            },
+            AdapterInfo {
+                name: "wikipedia",
+                title: "维基百科 (Wikipedia)",
+                domain_patterns: &["*.wikipedia.org"],
+                features: &[
+                    "信息盒Infobox",
+                    "正文层级保留",
+                    "参考引用清理",
+                    "维基表格保留",
+                ],
+            },
+            AdapterInfo {
+                name: "baike",
+                title: "百度百科 (Baidu Baike)",
+                domain_patterns: &["baike.baidu.com"],
+                features: &["词条摘要Lemma", "基础信息表结构化", "多义词消歧"],
+            },
+            AdapterInfo {
+                name: "arxiv",
+                title: "ArXiv",
+                domain_patterns: &["arxiv.org"],
+                features: &["论文Abstract", "作者列表", "PDF下载链接", "Atom订阅源"],
+            },
+            AdapterInfo {
+                name: "medium",
+                title: "Medium",
+                domain_patterns: &["medium.com"],
+                features: &["技术博文提纯", "付费弹窗遮罩剥离", "作者与标签"],
+            },
+            AdapterInfo {
+                name: "substack",
+                title: "Substack",
+                domain_patterns: &["*.substack.com"],
+                features: &["专栏博文提纯", "创作者与订阅信息"],
+            },
+            AdapterInfo {
+                name: "csdn",
+                title: "CSDN",
+                domain_patterns: &["blog.csdn.net"],
+                features: &["外链中间页解包", "代码行号剥离", "广告容器清除"],
+            },
+            AdapterInfo {
+                name: "juejin",
+                title: "掘金 (Juejin)",
+                domain_patterns: &["juejin.cn"],
+                features: &["外链跳转解包", "技术排版保真", "公式与代码高亮"],
+            },
+        ]
+    }
+}
+
+/// Metadata describing a supported platform adapter and its specialized extraction capabilities.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct AdapterInfo {
+    pub name: &'static str,
+    pub title: &'static str,
+    pub domain_patterns: &'static [&'static str],
+    pub features: &'static [&'static str],
+}
+
+/// Formats a list of AdapterInfo into a clean GitHub Flavored Markdown table.
+pub fn format_adapters_markdown(adapters: &[AdapterInfo]) -> String {
+    let mut out = String::new();
+    out.push_str("# 🧩 TkLess 原生平台适配器矩阵 (Supported Platforms)\n\n");
+    out.push_str(
+        "| # | 平台名称 (Platform) | 匹配域名 (Domains) | 核心专属优化能力 (Specialized Features) |\n",
+    );
+    out.push_str("|---|---|---|---|\n");
+    for (idx, a) in adapters.iter().enumerate() {
+        out.push_str(&format!(
+            "| {} | **{}** | `{}` | {} |\n",
+            idx + 1,
+            a.title,
+            a.domain_patterns.join("`, `"),
+            a.features.join("、")
+        ));
+    }
+    out
 }
 
 #[cfg(test)]

@@ -42,7 +42,7 @@ async fn test_mcp_protocol_lifecycle() {
     let tools_array = tools_val["tools"]
         .as_array()
         .expect("Tools should be an array");
-    assert_eq!(tools_array.len(), 21);
+    assert_eq!(tools_array.len(), 22);
 
     let tool_names: Vec<&str> = tools_array
         .iter()
@@ -69,6 +69,7 @@ async fn test_mcp_protocol_lifecycle() {
     assert!(tool_names.contains(&"diff_documents"));
     assert!(tool_names.contains(&"take_screenshot"));
     assert!(tool_names.contains(&"export_tables"));
+    assert!(tool_names.contains(&"list_adapters"));
 
     // Verify web_search schema contains scope, cdp_endpoint, schema
     let search_tool = tools_array
@@ -570,6 +571,72 @@ async fn test_mcp_protocol_lifecycle() {
     assert!(diff_doc_text.contains("+Version 1.1"));
     assert!(diff_doc_text.contains("+Added MCP extensions"));
 
+    // 5v. Tool Call: list_adapters
+    let list_adapters_req = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 26,
+        "method": "tools/call",
+        "params": {
+            "name": "list_adapters",
+            "arguments": {
+                "format": "markdown"
+            }
+        }
+    });
+    let list_adapters_res = server
+        .handle_message(&list_adapters_req.to_string())
+        .await
+        .expect("Should return response");
+    let list_adapters_val = list_adapters_res
+        .result
+        .expect("List adapters result should be present");
+    let list_adapters_text = list_adapters_val["content"][0]["text"].as_str().unwrap();
+    assert!(list_adapters_text.contains("TkLess 原生平台适配器矩阵"));
+    assert!(list_adapters_text.contains("Bilibili"));
+    assert!(list_adapters_text.contains("Zhihu"));
+    assert!(list_adapters_text.contains("GitHub"));
+    assert!(list_adapters_text.contains("ArXiv"));
+
+    // 5w. Token Measurement for CLI vs MCP
+    use tkless_core::mcp::tools::get_available_tools;
+    use tkless_core::model::TokenizerKind;
+    use tkless_core::token::count_tokens;
+
+    let tools = get_available_tools();
+    let mcp_json_compact = serde_json::to_string(&tools).unwrap();
+    let mcp_json_pretty = serde_json::to_string_pretty(&tools).unwrap();
+
+    let mcp_o200k_compact = count_tokens(&mcp_json_compact, TokenizerKind::O200k);
+    let mcp_cl100k_compact = count_tokens(&mcp_json_compact, TokenizerKind::Cl100k);
+    let mcp_o200k_pretty = count_tokens(&mcp_json_pretty, TokenizerKind::O200k);
+    let mcp_cl100k_pretty = count_tokens(&mcp_json_pretty, TokenizerKind::Cl100k);
+
+    let adapters_md = tkless_core::adapters::format_adapters_markdown(
+        &tkless_core::adapters::AdapterRegistry::list_adapter_metadata(),
+    );
+    let ad_o200k = count_tokens(&adapters_md, TokenizerKind::O200k);
+    let ad_cl100k = count_tokens(&adapters_md, TokenizerKind::Cl100k);
+
+    println!("\n=== MCP Tools (22 tools schema) Token Metrics ===");
+    println!(
+        "Compact JSON: chars={}, o200k={}, cl100k={}",
+        mcp_json_compact.len(),
+        mcp_o200k_compact,
+        mcp_cl100k_compact
+    );
+    println!(
+        "Pretty JSON:  chars={}, o200k={}, cl100k={}",
+        mcp_json_pretty.len(),
+        mcp_o200k_pretty,
+        mcp_cl100k_pretty
+    );
+    println!(
+        "tkless adapters Markdown: chars={}, o200k={}, cl100k={}",
+        adapters_md.len(),
+        ad_o200k,
+        ad_cl100k
+    );
+
     // 5. Unknown Method Error
     let unknown_req = r#"{"jsonrpc":"2.0","id":4,"method":"unknown/method"}"#;
     let unknown_res = server
@@ -635,4 +702,234 @@ async fn test_mcp_progress_notification_streaming() {
     assert_eq!(notifications[1]["params"]["progressToken"], "batch-job-42");
     assert_eq!(notifications[1]["params"]["progress"], 2);
     assert_eq!(notifications[1]["params"]["total"], 2);
+}
+
+#[tokio::test]
+async fn test_mcp_two_stage_dynamic_discovery() {
+    use tkless_core::mcp::McpMode;
+    use tkless_core::model::TokenizerKind;
+    use tkless_core::token::count_tokens;
+
+    let engine = TklessEngine::new().expect("Engine should initialize");
+    let cache = DocumentCache::memory_only(300);
+    let server = McpServer::new_with_mode(engine, cache, McpMode::Dynamic);
+    assert_eq!(server.mode(), McpMode::Dynamic);
+
+    // 1. Initial tools/list in Dynamic Mode: should expose only 6 tools (2 Core + 4 Meta)
+    let list_req = r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#;
+    let list_res = server
+        .handle_message(list_req)
+        .await
+        .expect("Should return response");
+    let tools_val = list_res.result.expect("Tools list should be present");
+    let tools_array = tools_val["tools"].as_array().expect("Tools array");
+    assert_eq!(tools_array.len(), 6);
+
+    let tool_names: Vec<&str> = tools_array
+        .iter()
+        .filter_map(|t| t["name"].as_str())
+        .collect();
+    assert!(tool_names.contains(&"fetch_webpage"));
+    assert!(tool_names.contains(&"web_search"));
+    assert!(tool_names.contains(&"discover_tools"));
+    assert!(tool_names.contains(&"get_tool_schema"));
+    assert!(tool_names.contains(&"execute_tool"));
+    assert!(tool_names.contains(&"activate_tools"));
+    // Ensure specialized tools are NOT in the initial tools/list
+    assert!(!tool_names.contains(&"export_tables"));
+    assert!(!tool_names.contains(&"diff_documents"));
+
+    // Measure Token counts for Two-Stage Dynamic Discovery Mode
+    let compact_json = serde_json::to_string(&tools_val).unwrap();
+    let pretty_json = serde_json::to_string_pretty(&tools_val).unwrap();
+    let dyn_o200k_compact = count_tokens(&compact_json, TokenizerKind::O200k);
+    let dyn_cl100k_compact = count_tokens(&compact_json, TokenizerKind::Cl100k);
+    let dyn_o200k_pretty = count_tokens(&pretty_json, TokenizerKind::O200k);
+    let dyn_cl100k_pretty = count_tokens(&pretty_json, TokenizerKind::Cl100k);
+
+    println!("\n=== MCP Two-Stage Dynamic Discovery Token Metrics ===");
+    println!(
+        "Dynamic Initial Schema (6 tools): chars={}, o200k={}, cl100k={}",
+        compact_json.len(),
+        dyn_o200k_compact,
+        dyn_cl100k_compact
+    );
+    println!(
+        "Dynamic Initial Pretty JSON:     chars={}, o200k={}, cl100k={}",
+        pretty_json.len(),
+        dyn_o200k_pretty,
+        dyn_cl100k_pretty
+    );
+
+    // 2. Stage 1: discover_tools by keyword
+    let disc_req = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": {
+            "name": "discover_tools",
+            "arguments": {
+                "query": "table"
+            }
+        }
+    });
+    let disc_res = server
+        .handle_message(&disc_req.to_string())
+        .await
+        .expect("Response");
+    let disc_text = disc_res.result.unwrap()["content"][0]["text"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(disc_text.contains("export_tables"));
+    assert!(disc_text.contains("analysis"));
+
+    // 3. Stage 1: discover_tools by category
+    let disc_cat_req = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "tools/call",
+        "params": {
+            "name": "discover_tools",
+            "arguments": {
+                "category": "media"
+            }
+        }
+    });
+    let disc_cat_res = server
+        .handle_message(&disc_cat_req.to_string())
+        .await
+        .expect("Response");
+    let disc_cat_text = disc_cat_res.result.unwrap()["content"][0]["text"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(disc_cat_text.contains("fetch_bilibili_feed"));
+    assert!(disc_cat_text.contains("download_media"));
+    assert!(disc_cat_text.contains("take_screenshot"));
+
+    // 4. Stage 1: get_tool_schema on-demand inspection
+    let schema_req = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 4,
+        "method": "tools/call",
+        "params": {
+            "name": "get_tool_schema",
+            "arguments": {
+                "tool_name": "export_tables"
+            }
+        }
+    });
+    let schema_res = server
+        .handle_message(&schema_req.to_string())
+        .await
+        .expect("Response");
+    let schema_text = schema_res.result.unwrap()["content"][0]["text"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(schema_text.contains("export_tables"));
+    assert!(schema_text.contains("table_format") || schema_text.contains("format"));
+    assert!(schema_text.contains("table_name"));
+
+    // 5. Stage 2: execute_tool on-demand execution (without registering to tools/list)
+    let sample_table = "<table><thead><tr><th>Language</th><th>Speed</th></tr></thead><tbody><tr><td>Rust</td><td>UltraFast</td></tr></tbody></table>";
+    let exec_req = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 5,
+        "method": "tools/call",
+        "params": {
+            "name": "execute_tool",
+            "arguments": {
+                "tool_name": "export_tables",
+                "arguments": {
+                    "html": sample_table,
+                    "format": "sql",
+                    "table_name": "lang_bench"
+                }
+            }
+        }
+    });
+    let exec_res = server
+        .handle_message(&exec_req.to_string())
+        .await
+        .expect("Response");
+    let exec_text = exec_res.result.unwrap()["content"][0]["text"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(exec_text.contains("CREATE TABLE IF NOT EXISTS lang_bench"));
+    assert!(exec_text.contains("INSERT INTO lang_bench"));
+    assert!(exec_text.contains("Rust"));
+
+    // 6. Stage 2: activate_tools dynamic activation with list_changed notification
+    let (notify_tx, mut notify_rx) = tokio::sync::mpsc::unbounded_channel();
+    let act_req = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 6,
+        "method": "tools/call",
+        "params": {
+            "name": "activate_tools",
+            "arguments": {
+                "tool_names": ["export_tables", "diff_documents"]
+            }
+        }
+    });
+    let act_res = server
+        .handle_message_with_notifier(&act_req.to_string(), Some(&notify_tx))
+        .await
+        .expect("Response");
+    let act_text = act_res.result.unwrap()["content"][0]["text"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(act_text.contains("成功激活工具"));
+    assert!(act_text.contains("export_tables"));
+    assert!(act_text.contains("diff_documents"));
+
+    // Verify notifications/tools/list_changed was emitted
+    let notif = notify_rx
+        .try_recv()
+        .expect("Should receive list_changed notification");
+    assert_eq!(notif["method"], "notifications/tools/list_changed");
+
+    // 7. Verify subsequent tools/list now includes the activated tools (6 -> 8)
+    let list_req2 = r#"{"jsonrpc":"2.0","id":7,"method":"tools/list"}"#;
+    let list_res2 = server
+        .handle_message(list_req2)
+        .await
+        .expect("Should return response");
+    let tools_val2 = list_res2.result.expect("Tools list should be present");
+    let tools_array2 = tools_val2["tools"].as_array().expect("Tools array");
+    assert_eq!(tools_array2.len(), 8);
+    let tool_names2: Vec<&str> = tools_array2
+        .iter()
+        .filter_map(|t| t["name"].as_str())
+        .collect();
+    assert!(tool_names2.contains(&"export_tables"));
+    assert!(tool_names2.contains(&"diff_documents"));
+
+    // 8. Recursive execution guard
+    let rec_req = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 8,
+        "method": "tools/call",
+        "params": {
+            "name": "execute_tool",
+            "arguments": {
+                "tool_name": "execute_tool",
+                "arguments": {}
+            }
+        }
+    });
+    let rec_res = server
+        .handle_message(&rec_req.to_string())
+        .await
+        .expect("Response");
+    let rec_val = rec_res.result.unwrap();
+    assert_eq!(rec_val["isError"], true);
+    assert!(rec_val["content"][0]["text"]
+        .as_str()
+        .unwrap()
+        .contains("recursively"));
 }

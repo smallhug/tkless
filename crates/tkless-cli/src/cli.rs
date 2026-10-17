@@ -2,9 +2,10 @@ use clap::{Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 use tkless_core::model::{ExtractionMode, OutputFormat};
 
-#[derive(Debug, Clone, Copy, ValueEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, ValueEnum)]
 pub enum CliFormat {
     /// GitHub Flavored Markdown (default)
+    #[default]
     Markdown,
     /// Complete structured JSON with metadata, content, and token counts
     Json,
@@ -120,18 +121,12 @@ pub enum CliSearchEngine {
     /// Microsoft Bing search (default, fast connectivity and great Chinese coverage)
     #[default]
     Bing,
-    /// Google search (global technical community and documentation index)
-    Google,
-    /// Automatic failover mode (prefers Bing, falls back to Google on error)
-    Auto,
 }
 
 impl From<CliSearchEngine> for tkless_core::model::SearchEngineKind {
     fn from(e: CliSearchEngine) -> Self {
         match e {
             CliSearchEngine::Bing => tkless_core::model::SearchEngineKind::Bing,
-            CliSearchEngine::Google => tkless_core::model::SearchEngineKind::Google,
-            CliSearchEngine::Auto => tkless_core::model::SearchEngineKind::Auto,
         }
     }
 }
@@ -171,8 +166,13 @@ impl From<CliTableFormat> for tkless_core::model::TableExportFormat {
     about = "TkLess: Spend less tokens, perceive more web.",
     long_about = "TkLess — Spend less tokens, perceive more web.\n\
 专为大语言模型与 AI Agent 量身定制的高性能网页抓取、降噪清洗与搜索提取引擎。\n\
-自动剥离导航、脚本与广告噪音，将正文转化为 LLM 友好的 Markdown 或结构化 JSON，支持段落断句平滑截断与 Token 预算控制。\n\
-原生集成 B站/知乎/微信公众号/小红书/掘金/GitHub 平台适配器，内置 Bing/Google 双引擎检索，并提供原生 MCP 服务模式。",
+自动剥离导航、脚本与广告噪音，将正文转化为 LLM 友好的 Markdown 或结构化 JSON，支持段落断句平滑截断与 Token 预算控制。\n\n\
+【已深度原生适配的 16+ 主流平台 (Built-in Adapters)】\n\
+• 视频与图文社区: B站 (字幕/AI大纲/弹幕/评论/封面)、小红书 (无水印图集/标签)\n\
+• 技术与开源生态: GitHub (README/Issue/Trending热榜)、Hugging Face (模型卡/论文)、Stack Overflow (采纳答案/得分)、V2EX (主楼/附言/楼层)、掘金/CSDN (外链解包/代码提纯)\n\
+• 学术与知识百科: 维基百科/百度百科 (信息盒/表格/去引用)、ArXiv (论文/PDF/Atom订阅)\n\
+• 深度专栏与讨论: 微信公众号 (懒加载图片/防封)、Medium/Substack (去付费遮罩)、Reddit (帖子/评论树)\n\n\
+运行 'tkless adapters' 可查看各平台完整能力矩阵与匹配域名清单。",
     subcommand_precedence_over_arg = true
 )]
 pub struct CliArgs {
@@ -638,6 +638,13 @@ pub struct CliArgs {
     #[arg(long = "mcp", help_heading = "缓存与运行诊断 (Cache & Diagnostics)")]
     pub mcp: bool,
 
+    /// 启用 MCP 两阶段动态工具发现模式 (极简常驻上下文，节省 >80% 初始提示词 Token)
+    #[arg(
+        long = "mcp-dynamic",
+        help_heading = "缓存与运行诊断 (Cache & Diagnostics)"
+    )]
+    pub mcp_dynamic: bool,
+
     /// Enable local response caching
     #[arg(long = "cache", help_heading = "缓存与运行诊断 (Cache & Diagnostics)")]
     pub cache: bool,
@@ -713,10 +720,10 @@ pub enum SubCommand {
     )]
     Login(LoginArgs),
 
-    /// 免 API Key 全网搜索与生态定向检索 (支持 Bing/Google/Auto 及一键 --fetch-content 搜索即抓取)
+    /// 免 API Key 全网搜索与生态定向检索 (支持 Bing 一键 --fetch-content 搜索即抓取)
     #[command(
         name = "search",
-        about = "免 API Key 全网搜索与生态定向检索 (支持 Bing/Google/Auto 及一键 --fetch-content 搜索即抓取)"
+        about = "免 API Key 全网搜索与生态定向检索 (支持 Bing 一键 --fetch-content 搜索即抓取)"
     )]
     Search(SearchSubArgs),
 
@@ -769,6 +776,44 @@ pub enum SubCommand {
         about = "生成 Shell (Bash, Zsh, Fish, PowerShell, Elvish) 终端自动补全脚本"
     )]
     Completions(CompletionsArgs),
+
+    /// 列出支持的全部 16+ 平台原生适配器、匹配域名与专属优化能力
+    #[command(
+        name = "adapters",
+        alias = "platforms",
+        about = "列出支持的全部 16+ 平台原生适配器、匹配域名与专属优化能力"
+    )]
+    Adapters(AdaptersArgs),
+
+    /// 检查并自动升级 TkLess 二进制至 GitHub 最新版本 (类似 bun upgrade / rustup update)
+    #[command(
+        name = "upgrade",
+        alias = "update",
+        about = "检查并自动升级 TkLess 二进制至 GitHub 最新版本 (类似 bun upgrade)"
+    )]
+    Upgrade(UpgradeArgs),
+}
+
+#[derive(clap::Args, Debug, Clone, Default)]
+pub struct UpgradeArgs {
+    /// 仅检查最新版本发布情况，不执行下载或替换
+    #[arg(long = "check")]
+    pub check: bool,
+
+    /// 即使当前已是最新版本，亦强制重新下载并覆盖安装
+    #[arg(short = 'f', long = "force")]
+    pub force: bool,
+
+    /// 自定义 GitHub 仓库所有者与项目 (默认: 'smallhug/cli')
+    #[arg(long = "repo", default_value = "smallhug/cli")]
+    pub repo: String,
+}
+
+#[derive(clap::Args, Debug, Clone, Default)]
+pub struct AdaptersArgs {
+    /// Output presentation format [default: markdown]
+    #[arg(short = 'f', long = "format", value_enum, default_value_t = CliFormat::Markdown)]
+    pub format: CliFormat,
 }
 
 #[derive(clap::Args, Debug, Clone)]
@@ -851,56 +896,64 @@ pub struct SearchSubArgs {
     /// Scope search to WeChat Official Accounts (mp.weixin.qq.com)
     #[arg(
         long = "wechat",
-        help = "Scope search to WeChat Official Accounts (mp.weixin.qq.com)"
+        help = "Scope search to WeChat Official Accounts (mp.weixin.qq.com)",
+        help_heading = "定向生态检索选项 (Platform Scopes)"
     )]
     pub wechat: bool,
 
     /// Scope search to Zhihu (zhihu.com)
     #[arg(
         long = "zhihu",
-        help = "Scope search to Zhihu questions and articles (zhihu.com)"
+        help = "Scope search to Zhihu questions and articles (zhihu.com)",
+        help_heading = "定向生态检索选项 (Platform Scopes)"
     )]
     pub zhihu: bool,
 
     /// Scope search to GitHub repositories, issues, and discussions (github.com)
     #[arg(
         long = "github",
-        help = "Scope search to GitHub repositories, issues, and discussions (github.com)"
+        help = "Scope search to GitHub repositories, issues, and discussions (github.com)",
+        help_heading = "定向生态检索选项 (Platform Scopes)"
     )]
     pub github: bool,
 
     /// Scope search to Juejin technical articles (juejin.cn)
     #[arg(
         long = "juejin",
-        help = "Scope search to Juejin technical articles (juejin.cn)"
+        help = "Scope search to Juejin technical articles (juejin.cn)",
+        help_heading = "定向生态检索选项 (Platform Scopes)"
     )]
     pub juejin: bool,
 
     /// Scope search to CSDN blog posts (blog.csdn.net)
     #[arg(
         long = "csdn",
-        help = "Scope search to CSDN blog posts (blog.csdn.net)"
+        help = "Scope search to CSDN blog posts (blog.csdn.net)",
+        help_heading = "定向生态检索选项 (Platform Scopes)"
     )]
     pub csdn: bool,
 
     /// Scope search to Medium technical articles (medium.com)
     #[arg(
         long = "medium",
-        help = "Scope search to Medium technical articles (medium.com)"
+        help = "Scope search to Medium technical articles (medium.com)",
+        help_heading = "定向生态检索选项 (Platform Scopes)"
     )]
     pub medium: bool,
 
     /// Scope search to Substack newsletters and tech blogs (substack.com)
     #[arg(
         long = "substack",
-        help = "Scope search to Substack newsletters and tech blogs (substack.com)"
+        help = "Scope search to Substack newsletters and tech blogs (substack.com)",
+        help_heading = "定向生态检索选项 (Platform Scopes)"
     )]
     pub substack: bool,
 
     /// Scope search to arXiv research papers and preprints (arxiv.org)
     #[arg(
         long = "arxiv",
-        help = "Scope search to arXiv research papers and preprints (arxiv.org)"
+        help = "Scope search to arXiv research papers and preprints (arxiv.org)",
+        help_heading = "定向生态检索选项 (Platform Scopes)"
     )]
     pub arxiv: bool,
 
@@ -908,7 +961,8 @@ pub struct SearchSubArgs {
     #[arg(
         long = "hf",
         alias = "huggingface",
-        help = "Scope search to Hugging Face models, datasets, papers, and blogs (huggingface.co)"
+        help = "Scope search to Hugging Face models, datasets, papers, and blogs (huggingface.co)",
+        help_heading = "定向生态检索选项 (Platform Scopes)"
     )]
     pub hf: bool,
 
@@ -916,14 +970,16 @@ pub struct SearchSubArgs {
     #[arg(
         long = "wiki",
         alias = "wikipedia",
-        help = "Scope search to Wikipedia encyclopedic articles (wikipedia.org)"
+        help = "Scope search to Wikipedia encyclopedic articles (wikipedia.org)",
+        help_heading = "定向生态检索选项 (Platform Scopes)"
     )]
     pub wiki: bool,
 
     /// Scope search to Reddit community discussions and comments (reddit.com)
     #[arg(
         long = "reddit",
-        help = "Scope search to Reddit community discussions and comments (reddit.com)"
+        help = "Scope search to Reddit community discussions and comments (reddit.com)",
+        help_heading = "定向生态检索选项 (Platform Scopes)"
     )]
     pub reddit: bool,
 
@@ -931,31 +987,34 @@ pub struct SearchSubArgs {
     #[arg(
         long = "so",
         alias = "stackoverflow",
-        help = "Scope search to Stack Overflow and Stack Exchange developer Q&A (stackoverflow.com)"
+        help = "Scope search to Stack Overflow and Stack Exchange developer Q&A (stackoverflow.com)",
+        help_heading = "定向生态检索选项 (Platform Scopes)"
     )]
     pub so: bool,
 
     /// Scope search to V2EX developer community discussions (v2ex.com)
     #[arg(
         long = "v2ex",
-        help = "Scope search to V2EX developer community discussions (v2ex.com)"
+        help = "Scope search to V2EX developer community discussions (v2ex.com)",
+        help_heading = "定向生态检索选项 (Platform Scopes)"
     )]
     pub v2ex: bool,
 
     /// Scope search to Baidu Baike Chinese encyclopedia (baike.baidu.com)
     #[arg(
         long = "baike",
-        help = "Scope search to Baidu Baike Chinese encyclopedia (baike.baidu.com)"
+        help = "Scope search to Baidu Baike Chinese encyclopedia (baike.baidu.com)",
+        help_heading = "定向生态检索选项 (Platform Scopes)"
     )]
     pub baike: bool,
 
-    /// Search engine provider: bing (default), google, auto (failover)
+    /// Search engine provider: bing (default)
     #[arg(
         short = 'e',
         long = "engine",
         value_enum,
         default_value_t = CliSearchEngine::Bing,
-        help = "Search engine provider: bing (default), google, auto (failover)"
+        help = "Search engine provider: bing (default)"
     )]
     pub engine: CliSearchEngine,
 
@@ -1096,6 +1155,14 @@ pub struct LoginArgs {
 
 #[derive(clap::Args, Debug, Clone, Default)]
 pub struct McpArgs {
+    /// 启用两阶段动态工具发现 (仅暴露 2 核心工具 + 4 发现元工具，大幅降低 Token 开销)
+    #[arg(long = "dynamic", visible_alias = "dynamic-tools")]
+    pub dynamic: bool,
+
+    /// MCP 工具配置模式: 'full' (全量 22 工具) 或 'dynamic' (两阶段动态发现)
+    #[arg(long = "profile", default_value = "full", value_name = "PROFILE")]
+    pub profile: String,
+
     /// Disable response caching in MCP server
     #[arg(long = "no-cache")]
     pub no_cache: bool,
