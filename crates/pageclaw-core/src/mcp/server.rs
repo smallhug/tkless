@@ -133,6 +133,7 @@ impl McpServer {
                     "summarize_text" => self.call_summarize_text(&arguments).await,
                     "split_document" => self.call_split_document(&arguments).await,
                     "diff_content" => self.call_diff_content(&arguments).await,
+                    "capture_screenshot" => self.call_capture_screenshot(&arguments).await,
                     _ => McpToolCallResult::error(format!("Unknown tool: '{tool_name}'")),
                 };
 
@@ -825,6 +826,14 @@ impl McpServer {
                     clean.to_string()
                 } else {
                     format!("site:v2ex.com {clean}")
+                }
+            }
+            "baike" => {
+                let clean = query.trim();
+                if clean.starts_with("site:") {
+                    clean.to_string()
+                } else {
+                    format!("site:baike.baidu.com {clean}")
                 }
             }
             _ => query.to_string(),
@@ -1996,6 +2005,62 @@ impl McpServer {
             md.push_str(&report.unified_diff);
             md.push_str("\n```");
             McpToolCallResult::success(md)
+        }
+    }
+
+    async fn call_capture_screenshot(&self, args: &Value) -> McpToolCallResult {
+        let raw_url = match args.get("url").and_then(|v| v.as_str()) {
+            Some(u) if !u.trim().is_empty() => u.trim(),
+            _ => return McpToolCallResult::error("Missing required parameter 'url'"),
+        };
+        let parsed_url = match Url::parse(raw_url) {
+            Ok(u) => u,
+            Err(e) => return McpToolCallResult::error(format!("Invalid URL: {e}")),
+        };
+
+        if let Err(e) = self.engine.fetcher().validate_ssrf(&parsed_url).await {
+            return McpToolCallResult::error(format!("SSRF blocked: {e}"));
+        }
+
+        let cdp_ep = crate::cdp::resolve_cdp_endpoint(
+            args.get("cdp_endpoint").and_then(|v| v.as_str()),
+            true,
+        )
+        .unwrap_or_else(|| "http://127.0.0.1:9222".to_string());
+
+        let wait_ms = args
+            .get("cdp_wait_ms")
+            .and_then(|v| v.as_u64())
+            .or(Some(1000));
+        let format = args.get("format").and_then(|v| v.as_str()).unwrap_or("png");
+        let output_path = args.get("output_path").and_then(|v| v.as_str());
+
+        let cdp_opts = crate::cdp::CdpOptions {
+            endpoint: cdp_ep,
+            wait_ms,
+            timeout_ms: None,
+            user_agent: self.engine.fetcher().options().user_agent.clone(),
+            cookie: self.engine.fetcher().resolve_cookie_for_url(&parsed_url),
+        };
+
+        match crate::cdp::capture_screenshot_via_cdp(raw_url, &cdp_opts, Some(format)).await {
+            Ok(bytes) => {
+                if let Some(dest) = output_path {
+                    if let Err(e) = std::fs::write(dest, &bytes) {
+                        return McpToolCallResult::error(format!(
+                            "Failed to write screenshot file '{dest}': {e}"
+                        ));
+                    }
+                    McpToolCallResult::success(format!(
+                        "✅ 页面高清快照截图成功！已保存至 `{dest}` (容量: {})",
+                        crate::downloader::format_bytes(bytes.len() as u64)
+                    ))
+                } else {
+                    let b64 = crate::cdp::encode_base64(&bytes);
+                    McpToolCallResult::success(format!("data:image/{format};base64,{b64}"))
+                }
+            }
+            Err(e) => McpToolCallResult::error(format!("CDP 截取网页快照失败: {e}")),
         }
     }
 }

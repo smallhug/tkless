@@ -1,4 +1,5 @@
 pub mod arxiv;
+pub mod baike;
 pub mod bilibili;
 pub mod csdn;
 pub mod github;
@@ -15,6 +16,7 @@ pub mod xiaohongshu;
 pub mod zhihu;
 
 pub use arxiv::ArxivAdapter;
+pub use baike::BaikeAdapter;
 pub use bilibili::BilibiliAdapter;
 pub use csdn::CsdnAdapter;
 pub use github::GithubAdapter;
@@ -95,6 +97,7 @@ impl AdapterRegistry {
         registry.register(Arc::new(RedditAdapter::new()));
         registry.register(Arc::new(StackoverflowAdapter::new()));
         registry.register(Arc::new(V2exAdapter::new()));
+        registry.register(Arc::new(BaikeAdapter::new()));
         registry
     }
 

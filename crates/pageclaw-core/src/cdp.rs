@@ -145,28 +145,6 @@ async fn connect_and_extract_html(
 
     let mut message_id = 1u64;
 
-    // Helper closure to send a JSON-RPC command
-    async fn send_cdp_cmd<S: SinkExt<Message> + Unpin>(
-        ws: &mut S,
-        id: u64,
-        method: &str,
-        params: Value,
-    ) -> Result<(), PageclawError>
-    where
-        <S as futures_util::Sink<Message>>::Error: std::fmt::Display,
-    {
-        let payload = json!({
-            "id": id,
-            "method": method,
-            "params": params,
-        });
-        let text = payload.to_string();
-        ws.send(Message::Text(text.into())).await.map_err(|err| {
-            PageclawError::CdpError(format!("发送 CDP 指令失败 ({method}): {err}"))
-        })?;
-        Ok(())
-    }
-
     // 1. Enable Page and Runtime domains
     send_cdp_cmd(&mut ws_stream, message_id, "Page.enable", json!({})).await?;
     message_id += 1;
@@ -293,6 +271,265 @@ async fn connect_and_extract_html(
     .map_err(|_| PageclawError::ConnectionTimeout("CDP Runtime.evaluate 执行超时".to_string()))??;
 
     Ok(html)
+}
+
+/// Helper function to send a JSON-RPC command over a WebSocket stream.
+async fn send_cdp_cmd<S: SinkExt<Message> + Unpin>(
+    ws: &mut S,
+    id: u64,
+    method: &str,
+    params: Value,
+) -> Result<(), PageclawError>
+where
+    <S as futures_util::Sink<Message>>::Error: std::fmt::Display,
+{
+    let payload = json!({
+        "id": id,
+        "method": method,
+        "params": params,
+    });
+    let text = payload.to_string();
+    ws.send(Message::Text(text.into()))
+        .await
+        .map_err(|err| PageclawError::CdpError(format!("发送 CDP 指令失败 ({method}): {err}")))?;
+    Ok(())
+}
+
+/// Captures a rendered visual screenshot of a given URL via Chrome DevTools Protocol.
+/// Returns raw image bytes (PNG or JPEG).
+pub async fn capture_screenshot_via_cdp(
+    url: &str,
+    options: &CdpOptions,
+    format: Option<&str>,
+) -> Result<Vec<u8>, PageclawError> {
+    let (base_endpoint, is_direct_ws) = normalize_cdp_endpoint(&options.endpoint);
+    let total_timeout = Duration::from_millis(options.timeout_ms.unwrap_or(30_000));
+
+    timeout(total_timeout, async {
+        if is_direct_ws {
+            connect_and_capture_screenshot(&base_endpoint, url, options, format).await
+        } else {
+            let req_timeout = Duration::from_millis(options.timeout_ms.unwrap_or(30_000).min(5000));
+            let client = reqwest::Client::builder()
+                .connect_timeout(req_timeout)
+                .timeout(req_timeout)
+                .build()
+                .map_err(|e| PageclawError::CdpError(format!("创建 HTTP 客户端失败: {e}")))?;
+
+            let new_target_url = format!("{}/json/new?{}", base_endpoint, urlencoding(url));
+            debug!(endpoint = %new_target_url, "通过 CDP HTTP 接口创建新页面 Tab (截图)");
+
+            let resp = match client.put(&new_target_url).send().await {
+                Ok(r) if r.status().is_success() => Ok(r),
+                _ => client.get(&new_target_url).send().await,
+            }
+            .map_err(|err| {
+                PageclawError::CdpError(format!(
+                    "无法连接到 Chrome CDP 端点 '{base_endpoint}': {err}。请确保已通过 `google-chrome --remote-debugging-port=9222` 或 `msedge --remote-debugging-port=9222` 启动浏览器远程调试。"
+                ))
+            })?;
+
+            if !resp.status().is_success() {
+                return Err(PageclawError::CdpError(format!(
+                    "CDP 端点返回错误状态码 {}: {}",
+                    resp.status(),
+                    base_endpoint
+                )));
+            }
+
+            let target: DevToolsTarget = resp.json().await.map_err(|err| {
+                PageclawError::CdpError(format!("解析 CDP 目标元数据失败: {err}"))
+            })?;
+
+            let ws_url = target.web_socket_debugger_url.ok_or_else(|| {
+                PageclawError::CdpError("CDP 目标未返回有效的 webSocketDebuggerUrl".to_string())
+            })?;
+
+            let target_id = target.id.clone();
+            let result = connect_and_capture_screenshot(&ws_url, url, options, format).await;
+
+            let close_url = format!("{}/json/close/{}", base_endpoint, target_id);
+            let _ = client.get(&close_url).send().await;
+
+            result
+        }
+    })
+    .await
+    .map_err(|_| {
+        PageclawError::ConnectionTimeout(format!(
+            "CDP 页面加载与截图超时 ({}ms): {url}",
+            options.timeout_ms.unwrap_or(30_000)
+        ))
+    })?
+}
+
+/// Connects to a CDP WebSocket URL, navigates, waits for DOM ready and hydration, and captures screenshot.
+async fn connect_and_capture_screenshot(
+    ws_url: &str,
+    target_url: &str,
+    options: &CdpOptions,
+    format: Option<&str>,
+) -> Result<Vec<u8>, PageclawError> {
+    debug!(ws_url = %ws_url, "连接 CDP WebSocket 截取屏幕快照");
+
+    let (mut ws_stream, _) = connect_async(ws_url).await.map_err(|err| {
+        PageclawError::CdpError(format!("无法建立 CDP WebSocket 连接 ({ws_url}): {err}"))
+    })?;
+
+    let mut message_id = 1u64;
+
+    send_cdp_cmd(&mut ws_stream, message_id, "Page.enable", json!({})).await?;
+    message_id += 1;
+
+    if let Some(ref ua) = options.user_agent {
+        send_cdp_cmd(
+            &mut ws_stream,
+            message_id,
+            "Network.setUserAgentOverride",
+            json!({ "userAgent": ua }),
+        )
+        .await?;
+        message_id += 1;
+    }
+
+    let navigate_cmd_id = message_id;
+    send_cdp_cmd(
+        &mut ws_stream,
+        navigate_cmd_id,
+        "Page.navigate",
+        json!({ "url": target_url }),
+    )
+    .await?;
+    message_id += 1;
+
+    let nav_timeout = Duration::from_millis(options.timeout_ms.unwrap_or(30_000).min(15_000));
+    let _ = timeout(nav_timeout, async {
+        while let Some(msg_result) = ws_stream.next().await {
+            if let Ok(Message::Text(text)) = msg_result {
+                if let Ok(v) = serde_json::from_str::<Value>(&text) {
+                    if let Some(method) = v.get("method").and_then(|m| m.as_str()) {
+                        if method == "Page.loadEventFired" || method == "Page.domContentEventFired"
+                        {
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    })
+    .await;
+
+    if let Some(wait_ms) = options.wait_ms {
+        if wait_ms > 0 {
+            tokio::time::sleep(Duration::from_millis(wait_ms)).await;
+        }
+    }
+
+    let img_format = match format {
+        Some("jpeg") | Some("jpg") => "jpeg",
+        _ => "png",
+    };
+
+    let screenshot_cmd_id = message_id;
+    send_cdp_cmd(
+        &mut ws_stream,
+        screenshot_cmd_id,
+        "Page.captureScreenshot",
+        json!({
+            "format": img_format,
+            "quality": 85,
+            "fromSurface": true,
+            "captureBeyondViewport": true
+        }),
+    )
+    .await?;
+
+    let cap_timeout = Duration::from_secs(15);
+    let b64_str = timeout(cap_timeout, async {
+        while let Some(msg_result) = ws_stream.next().await {
+            if let Ok(Message::Text(text)) = msg_result {
+                if let Ok(v) = serde_json::from_str::<Value>(&text) {
+                    if v.get("id").and_then(|id| id.as_u64()) == Some(screenshot_cmd_id) {
+                        if let Some(res_val) = v
+                            .get("result")
+                            .and_then(|r| r.get("data"))
+                            .and_then(|val| val.as_str())
+                        {
+                            return Ok(res_val.to_string());
+                        }
+                    }
+                }
+            }
+        }
+        Err(PageclawError::CdpError(
+            "未能从 CDP Page.captureScreenshot 获取图像数据".to_string(),
+        ))
+    })
+    .await
+    .map_err(|_| {
+        PageclawError::ConnectionTimeout("CDP Page.captureScreenshot 执行超时".to_string())
+    })??;
+
+    decode_base64(&b64_str)
+        .ok_or_else(|| PageclawError::CdpError("解析 CDP 截图 Base64 数据失败".to_string()))
+}
+
+/// Decodes standard base64 string into raw binary bytes.
+pub fn decode_base64(input: &str) -> Option<Vec<u8>> {
+    let clean = input.trim().trim_end_matches('=');
+    let mut bits = 0u32;
+    let mut bit_count = 0;
+    let mut out = Vec::with_capacity(clean.len() * 3 / 4);
+
+    for b in clean.bytes() {
+        let val = match b {
+            b'A'..=b'Z' => b - b'A',
+            b'a'..=b'z' => b - b'a' + 26,
+            b'0'..=b'9' => b - b'0' + 52,
+            b'+' | b'-' => 62,
+            b'/' | b'_' => 63,
+            b' ' | b'\n' | b'\r' | b'\t' => continue,
+            _ => return None,
+        };
+        bits = (bits << 6) | (val as u32);
+        bit_count += 6;
+        if bit_count >= 8 {
+            bit_count -= 8;
+            out.push((bits >> bit_count) as u8);
+        }
+    }
+    Some(out)
+}
+
+/// Encodes raw binary bytes to standard Base64 string.
+pub fn encode_base64(bytes: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity((bytes.len() + 2) / 3 * 4);
+
+    for chunk in bytes.chunks(3) {
+        let b0 = chunk[0] as u32;
+        let b1 = if chunk.len() > 1 { chunk[1] as u32 } else { 0 };
+        let b2 = if chunk.len() > 2 { chunk[2] as u32 } else { 0 };
+
+        let triple = (b0 << 16) | (b1 << 8) | b2;
+
+        out.push(TABLE[((triple >> 18) & 0x3F) as usize] as char);
+        out.push(TABLE[((triple >> 12) & 0x3F) as usize] as char);
+
+        if chunk.len() > 1 {
+            out.push(TABLE[((triple >> 6) & 0x3F) as usize] as char);
+        } else {
+            out.push('=');
+        }
+
+        if chunk.len() > 2 {
+            out.push(TABLE[(triple & 0x3F) as usize] as char);
+        } else {
+            out.push('=');
+        }
+    }
+
+    out
 }
 
 /// Detects whether an HTML response body or HTTP status indicates an active anti-scraping challenge

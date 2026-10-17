@@ -364,9 +364,9 @@ pub fn get_available_tools() -> Vec<McpTool> {
                     },
                     "scope": {
                         "type": "string",
-                        "enum": ["all", "wechat", "zhihu", "github", "juejin", "csdn", "medium", "substack", "arxiv", "huggingface", "wikipedia", "reddit", "stackoverflow", "v2ex"],
+                        "enum": ["all", "wechat", "zhihu", "github", "juejin", "csdn", "medium", "substack", "arxiv", "huggingface", "wikipedia", "reddit", "stackoverflow", "v2ex", "baike"],
                         "default": "all",
-                        "description": "Search scope limitation: 'all' (entire web), 'wechat' (WeChat Official Accounts), 'zhihu' (Zhihu questions and articles), 'github' (GitHub repositories and issues), 'juejin' (Juejin tech posts), 'csdn' (CSDN blog posts), 'medium' (Medium articles), 'substack' (Substack newsletters), 'arxiv' (arXiv research papers), 'huggingface' (Hugging Face models, papers, blogs), 'wikipedia' (Wikipedia articles), 'reddit' (Reddit discussions), 'stackoverflow' (Stack Overflow Q&A), or 'v2ex' (V2EX discussions)"
+                        "description": "Search scope limitation: 'all' (entire web), 'wechat' (WeChat Official Accounts), 'zhihu' (Zhihu questions and articles), 'github' (GitHub repositories and issues), 'juejin' (Juejin tech posts), 'csdn' (CSDN blog posts), 'medium' (Medium articles), 'substack' (Substack newsletters), 'arxiv' (arXiv research papers), 'huggingface' (Hugging Face models, papers, blogs), 'wikipedia' (Wikipedia articles), 'reddit' (Reddit discussions), 'stackoverflow' (Stack Overflow Q&A), 'v2ex' (V2EX discussions), or 'baike' (Baidu Baike encyclopedia)"
                     },
                     "dedup": {
                         "type": "boolean",
@@ -891,6 +891,38 @@ pub fn get_available_tools() -> Vec<McpTool> {
                     }
                 },
                 "required": ["old_text", "new_text"]
+            }),
+        },
+        McpTool {
+            name: "capture_screenshot".to_string(),
+            description: "Captures a high-resolution visual screenshot of a webpage rendered via Chrome DevTools Protocol (CDP) for multimodal AI models (Claude 3.5 Sonnet, GPT-4o, Gemini).".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "url": {
+                        "type": "string",
+                        "description": "Target webpage URL to navigate, render, and screenshot"
+                    },
+                    "output_path": {
+                        "type": "string",
+                        "description": "Optional local file path to save the screenshot image file (e.g. './screenshot.png')"
+                    },
+                    "format": {
+                        "type": "string",
+                        "enum": ["png", "jpeg"],
+                        "default": "png",
+                        "description": "Image format: 'png' (lossless, default) or 'jpeg'"
+                    },
+                    "cdp_endpoint": {
+                        "type": "string",
+                        "description": "Optional Chrome DevTools Protocol endpoint (e.g. 'http://127.0.0.1:9222')"
+                    },
+                    "cdp_wait_ms": {
+                        "type": "integer",
+                        "description": "Additional wait time in milliseconds for dynamic JS rendering/hydration before capturing screenshot [default: 1000]"
+                    }
+                },
+                "required": ["url"]
             }),
         }
     ]

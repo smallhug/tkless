@@ -682,6 +682,8 @@ pub fn detect_platform_from_host(host: &str) -> Option<&'static str> {
         Some("stackoverflow")
     } else if is_subdomain_or_exact(&host_lower, "v2ex.com") {
         Some("v2ex")
+    } else if is_subdomain_or_exact(&host_lower, "baike.baidu.com") {
+        Some("baike")
     } else {
         None
     }
@@ -1069,6 +1071,10 @@ mod tests {
             detect_platform_from_url("https://www.v2ex.com/t/123"),
             Some("v2ex")
         );
+        assert_eq!(
+            detect_platform_from_url("https://baike.baidu.com/item/Rust"),
+            Some("baike")
+        );
 
         // Security check: spoofed / typosquatted domains MUST NOT leak cookies!
         assert_eq!(
@@ -1108,6 +1114,10 @@ mod tests {
             None
         );
         assert_eq!(detect_platform_from_url("https://evilv2ex.com/t/123"), None);
+        assert_eq!(
+            detect_platform_from_url("https://evilbaike.baidu.com/item/1"),
+            None
+        );
         assert_eq!(
             detect_platform_from_url("https://fake-bilibili.com/video/BV1"),
             None

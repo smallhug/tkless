@@ -590,6 +590,14 @@ pub struct CliArgs {
     #[arg(long = "auto-cdp", help_heading = "网络与身份认证 (Network & Auth)")]
     pub auto_cdp: bool,
 
+    /// 通过 CDP 无头浏览器截取渲染后的页面高清快照并保存为 PNG/JPEG 图像 (供多模态模型分析)
+    #[arg(
+        long = "screenshot",
+        value_name = "PATH",
+        help_heading = "网络与身份认证 (Network & Auth)"
+    )]
+    pub screenshot: Option<PathBuf>,
+
     /// Do not fail with non-zero exit code on HTTP 4xx or 5xx error responses (returns body with exit 0)
     #[arg(
         long = "allow-http-errors",
@@ -866,6 +874,13 @@ pub struct SearchSubArgs {
         help = "Scope search to V2EX developer community discussions (v2ex.com)"
     )]
     pub v2ex: bool,
+
+    /// Scope search to Baidu Baike Chinese encyclopedia (baike.baidu.com)
+    #[arg(
+        long = "baike",
+        help = "Scope search to Baidu Baike Chinese encyclopedia (baike.baidu.com)"
+    )]
+    pub baike: bool,
 
     /// Search engine provider: bing (default), google, auto (failover)
     #[arg(
