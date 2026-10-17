@@ -21,105 +21,136 @@ PageClaw 内置原生轻量级 MCP 服务端（位于 `crates/pageclaw-core/src/
 │ - initialize / ping / tools/list / tools/call          │
 │ - $/progress 进度通知实时推流                          │
 ├────────────────────────────────────────────────────────┤
-│ 工具注册池 (Tool Registry):                            │
+│ 工具注册池 (Tool Registry - 21 Tools):                  │
 │ 1. fetch_webpage (通用/全平台自适应抓取与降噪清洗)     │
-│ 2. search_web (免 Key 双引擎全网搜索与定向生态检索)    │
+│ 2. web_search (免 Key 双引擎全网搜索与定向生态检索)    │
 │ 3. crawl_site (整站递归爬取与知识库聚合)               │
-│                                                        │
-│ [规划中新增扩展工具 (Planned Extensions)]:              │
-│ 4. export_tables (网页表格提取与 SQL/CSV 转换)         │
+│ 4. export_tables (网页表格提取与 SQL/CSV/JSON 转换)    │
 │ 5. chunk_markdown (语义分块与 RAG 向量切分)            │
-│ 6. summarize_content (本地启发式无 Key 核心要点摘要)    │
+│ 6. summarize_content (本地启发式无 Key 核心要点摘要)   │
 │ 7. take_screenshot (CDP 无头浏览器长截图)              │
 │ 8. diff_documents (Markdown 语义差异高亮比对)          │
+│ ... 以及各类平台专属探测与清洗工具                    │
 └────────────────────────────────────────────────────────┘
 ```
 
+> 💡 **前缀自适应 (Prefix-Agnostic Dispatch)**：
+> 服务端对所有工具调用均支持前缀自适应处理。无论是调用 `export_tables` 还是 `pageclaw_export_tables`，服务端内部均会自动归一化分发，无缝兼容各类 MCP 宿主。
+
 ---
 
-## 2. 规划扩展的专属 MCP 工具定义
+## 2. 核心专属 MCP 工具规范 (已全部落地)
 
-为提升 Agent 调用时的决策精准度与参数收敛性，计划在现有大而全的 `fetch_webpage` 之外，拆分并暴露以下 5 个高频专用原子工具：
+为提升 Agent 调用时的决策精准度与参数收敛性，PageClaw 提供了 5 个高频专用原子工具：
 
-### 2.1 `pageclaw_export_tables` (表格提取与数据转换)
+### 2.1 `export_tables` (表格提取与数据转换)
 - **定位**：专门处理财经财报、数据榜单、维基百科信息表，直接产出开箱即用的 SQL 或 CSV，免除大模型繁重的数据格式重排负担。
+- **支持输入**：支持直接传入 `url` 自动网络抓取，或传入本地 `html` 片段。
 - **Schema 定义**：
 ```json
 {
-  "name": "pageclaw_export_tables",
-  "description": "Extract all data tables from a webpage into SQL DDL/INSERT statements, CSV, TSV, or JSON records.",
+  "name": "export_tables",
+  "description": "Extract all data tables from a webpage URL or raw HTML string into clean tabular datasets: SQL DDL + INSERT statements, CSV, TSV, GFM Markdown, or JSON records.",
   "parameters": {
     "type": "object",
     "properties": {
-      "url": { "type": "string", "description": "Target webpage URL" },
+      "url": { "type": "string", "description": "Target webpage URL to fetch and extract tables from" },
+      "html": { "type": "string", "description": "Optional raw HTML string containing one or more <table> elements" },
       "format": {
         "type": "string",
         "enum": ["sql", "csv", "tsv", "json", "markdown"],
         "default": "sql",
         "description": "Target export format (default: 'sql' for SQLite/PostgreSQL compatibility)"
       },
+      "table_name": { "type": "string", "default": "extracted_table", "description": "Custom SQL table name identifier" },
       "table_index": {
         "type": "integer",
         "description": "Optional 0-indexed specific table to extract. If omitted, extracts all tables."
       }
-    },
-    "required": ["url"]
+    }
   }
 }
 ```
 
-### 2.2 `pageclaw_chunk_markdown` (RAG 语义感知切块)
+### 2.2 `chunk_markdown` (RAG 语义感知切块)
 - **定位**：对目标技术文档进行标题感知分块（H1-H6 继承与代码块闭合保护），输出包含层级 Breadcrumbs 的切块数组供向量库入库。
+- **支持输入**：支持直接传入 `url` 自动网络抓取并清洗，或直接传入 `markdown` 文本。
 - **Schema 定义**：
 ```json
 {
-  "name": "pageclaw_chunk_markdown",
-  "description": "Fetch webpage and split its content into semantic chunks respecting heading hierarchy and protecting code fences.",
+  "name": "chunk_markdown",
+  "description": "Fetches a webpage URL or takes a Markdown string, and segments content into semantic chunks respecting heading hierarchy and protecting code fences for RAG vector DB ingestion.",
   "parameters": {
     "type": "object",
     "properties": {
       "url": { "type": "string", "description": "Webpage URL to fetch and chunk" },
+      "markdown": { "type": "string", "description": "Optional Markdown content string to chunk directly" },
       "chunk_size": { "type": "integer", "default": 500, "description": "Target token size per chunk" },
-      "chunk_overlap": { "type": "integer", "default": 50, "description": "Token overlap between chunks" }
-    },
-    "required": ["url"]
+      "chunk_overlap": { "type": "integer", "default": 50, "description": "Token overlap between chunks" },
+      "tokenizer": { "type": "string", "enum": ["o200k", "cl100k", "heuristic"], "default": "o200k" },
+      "format": { "type": "string", "enum": ["json", "markdown"], "default": "json" }
+    }
   }
 }
 ```
 
-### 2.3 `pageclaw_summarize` (本地启发式无 Key 核心要点摘要)
+### 2.3 `summarize_content` (本地启发式无 Key 核心要点摘要)
 - **定位**：在零 API 消耗的前提下，运用 TextRank 与词频算法快速提取 3~5 条核心结论，帮助 Agent 预先研判页面价值。
+- **支持输入**：支持直接传入 `url` 自动抓取分析，或直接传入 `text`。
 - **Schema 定义**：
 ```json
 {
-  "name": "pageclaw_summarize",
-  "description": "Quickly extract 3-5 key takeaways from any article without consuming LLM API credits.",
+  "name": "summarize_content",
+  "description": "Distills salient key takeaway bullet points (TL;DR) from a webpage URL or raw text/Markdown using term frequency and positional heuristics without requiring external LLM API calls.",
   "parameters": {
     "type": "object",
     "properties": {
-      "url": { "type": "string", "description": "Article URL" },
-      "max_points": { "type": "integer", "default": 5, "description": "Max bullet points" }
-    },
-    "required": ["url"]
+      "url": { "type": "string", "description": "Article URL to fetch and summarize" },
+      "text": { "type": "string", "description": "Optional raw text or Markdown content to summarize directly" },
+      "max_bullets": { "type": "integer", "default": 3, "description": "Max bullet points" },
+      "format": { "type": "string", "enum": ["markdown", "json"], "default": "markdown" }
+    }
   }
 }
 ```
 
-### 2.4 `pageclaw_screenshot` (CDP 页面高清快照)
+### 2.4 `take_screenshot` (CDP 页面高清快照)
 - **定位**：利用 Chrome DevTools Protocol 对目标复杂 SPA 或仪表盘页面截取完整高清视口图片（Base64 或本地文件路径）。
 - **Schema 定义**：
 ```json
 {
-  "name": "pageclaw_screenshot",
+  "name": "take_screenshot",
   "description": "Capture a full-page or viewport screenshot of a webpage using headless Chrome DevTools Protocol.",
   "parameters": {
     "type": "object",
     "properties": {
       "url": { "type": "string", "description": "Target webpage URL" },
       "output_path": { "type": "string", "description": "Local path to save the screenshot (.png / .jpg)" },
-      "full_page": { "type": "boolean", "default": true, "description": "Whether to capture the entire scrollable height" }
+      "format": { "type": "string", "enum": ["png", "jpeg"], "default": "png" },
+      "full_page": { "type": "boolean", "default": true, "description": "Whether to capture the entire scrollable height" },
+      "cdp_endpoint": { "type": "string", "description": "CDP endpoint (default: http://127.0.0.1:9222)" },
+      "cdp_wait_ms": { "type": "integer", "default": 1000 }
     },
-    "required": ["url", "output_path"]
+    "required": ["url"]
+  }
+}
+```
+
+### 2.5 `diff_documents` (Markdown 语义差异高亮比对)
+- **定位**：快速对比两份 Markdown 文档或网页版本，输出带行号与统计比例的统一差异报表。
+- **Schema 定义**：
+```json
+{
+  "name": "diff_documents",
+  "description": "Computes line-level differences, change metrics, and unified diff between two versions of text or Markdown documents.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "old_text": { "type": "string", "description": "Original text version" },
+      "new_text": { "type": "string", "description": "Updated text version" },
+      "format": { "type": "string", "enum": ["markdown", "json"], "default": "markdown" }
+    },
+    "required": ["old_text", "new_text"]
   }
 }
 ```
