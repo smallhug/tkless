@@ -209,6 +209,16 @@ pub struct CliArgs {
     )]
     pub selector: Option<String>,
 
+    /// CSS 排除选择器: 剔除指定匹配的 DOM 元素容器 (例如 '.ads, .footer, #comments, .author-bio')
+    #[arg(
+        short = 'R',
+        long = "remove-selector",
+        alias = "exclude-selector",
+        value_name = "CSS_SELECTOR",
+        help_heading = "通用提取选项 (General Options)"
+    )]
+    pub remove_selector: Option<String>,
+
     /// Extract and structure all hyperlinks from the document
     #[arg(
         long = "extract-links",
@@ -310,6 +320,10 @@ pub struct CliArgs {
         help_heading = "通用提取选项 (General Options)"
     )]
     pub table_format: CliTableFormat,
+
+    /// 启用终端流式按行输出 (实时 flush 降低首字延迟)
+    #[arg(long = "stream", help_heading = "通用提取选项 (General Options)")]
+    pub stream: bool,
 
     // =========================================================================
     // 哔哩哔哩专属选项 (Bilibili Options)
@@ -688,6 +702,28 @@ pub enum SubCommand {
         about = "整站文档递归爬取与知识库汇编 (自动构建带 TOC 目录索引的单文件 Markdown 知识库)"
     )]
     Crawl(CrawlArgs),
+
+    /// 本地响应缓存查看与清理维护 (查看磁盘占用/条目统计，或清空缓存)
+    #[command(
+        name = "cache",
+        about = "本地响应缓存查看与清理维护 (查看磁盘占用/条目统计，或清空缓存)"
+    )]
+    Cache(CacheSubArgs),
+}
+
+#[derive(clap::Args, Debug, Clone)]
+pub struct CacheSubArgs {
+    /// 显示当前本地缓存的容量、条目总数与存储路径
+    #[arg(long = "stats", short = 's')]
+    pub stats: bool,
+
+    /// 清理并删除全部本地磁盘与内存缓存条目
+    #[arg(long = "clear", short = 'c')]
+    pub clear: bool,
+
+    /// 自定义缓存存储目录路径
+    #[arg(long = "cache-dir")]
+    pub cache_dir: Option<PathBuf>,
 }
 
 #[derive(clap::Args, Debug, Clone)]

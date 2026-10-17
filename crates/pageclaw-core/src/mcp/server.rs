@@ -126,6 +126,7 @@ impl McpServer {
                     "login_platform" => self.call_login_platform(&arguments).await,
                     "scaffold_schema" => self.call_scaffold_schema(&arguments).await,
                     "compare_similarity" => self.call_compare_similarity(&arguments).await,
+                    "manage_cache" => self.call_manage_cache(&arguments).await,
                     _ => McpToolCallResult::error(format!("Unknown tool: '{tool_name}'")),
                 };
 
@@ -290,6 +291,10 @@ impl McpServer {
             .get("selector")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
+        let remove_selector = args
+            .get("remove_selector")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
         let extract_links = args
             .get("extract_links")
             .and_then(|v| v.as_bool())
@@ -418,6 +423,7 @@ impl McpServer {
             tables_only,
             table_format,
             stats,
+            remove_selector,
         };
 
         let initial_target_host = Url::parse(url.as_str())
@@ -1074,6 +1080,10 @@ impl McpServer {
             .get("selector")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
+        let remove_selector = args
+            .get("remove_selector")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
 
         let schema = args.get("schema").map(|v| {
             if let Some(s) = v.as_str() {
@@ -1122,6 +1132,7 @@ impl McpServer {
             format,
             max_tokens,
             selector,
+            remove_selector,
             schema,
             cdp_endpoint,
             cdp_wait_ms,
@@ -1223,6 +1234,10 @@ impl McpServer {
             .get("selector")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
+        let remove_selector = args
+            .get("remove_selector")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
 
         let schema = args.get("schema").map(|v| {
             if let Some(s) = v.as_str() {
@@ -1287,6 +1302,7 @@ impl McpServer {
             tables_only,
             table_format,
             stats,
+            remove_selector,
             ..Default::default()
         };
 
@@ -1423,6 +1439,37 @@ impl McpServer {
         match serde_json::to_string_pretty(&res) {
             Ok(json_str) => McpToolCallResult::success(json_str),
             Err(e) => McpToolCallResult::error(format!("Failed to serialize result: {e}")),
+        }
+    }
+
+    async fn call_manage_cache(&self, args: &Value) -> McpToolCallResult {
+        let action = args
+            .get("action")
+            .and_then(|v| v.as_str())
+            .unwrap_or("stats");
+        match action {
+            "clear" => match self.cache.clear() {
+                Ok(_) => McpToolCallResult::success("✅ PageClaw 本地响应缓存已成功清空。"),
+                Err(e) => McpToolCallResult::error(format!("Failed to clear cache: {e}")),
+            },
+            "prune_expired" => {
+                let pruned = self.cache.prune_expired();
+                McpToolCallResult::success(format!("已成功清理 {pruned} 条过期缓存。"))
+            }
+            _ => {
+                let stats = self.cache.stats();
+                let res = serde_json::json!({
+                    "memory_entries": stats.memory_entries,
+                    "disk_entries": stats.disk_entries,
+                    "disk_bytes": stats.disk_bytes,
+                    "disk_human": crate::downloader::format_bytes(stats.disk_bytes),
+                    "cache_dir": stats.cache_dir
+                });
+                match serde_json::to_string_pretty(&res) {
+                    Ok(json_str) => McpToolCallResult::success(json_str),
+                    Err(e) => McpToolCallResult::error(format!("Serialization error: {e}")),
+                }
+            }
         }
     }
 }

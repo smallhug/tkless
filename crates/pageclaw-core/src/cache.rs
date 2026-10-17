@@ -29,6 +29,15 @@ impl CacheEntry {
     }
 }
 
+/// Telemetry statistics for the L1/L2 document cache.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CacheStats {
+    pub memory_entries: usize,
+    pub disk_entries: usize,
+    pub disk_bytes: u64,
+    pub cache_dir: Option<String>,
+}
+
 /// Two-level (L1 In-Memory + L2 Filesystem) document cache.
 #[derive(Clone)]
 pub struct DocumentCache {
@@ -278,6 +287,35 @@ impl DocumentCache {
         }
 
         pruned
+    }
+
+    /// Inspects and calculates telemetry statistics for the L1 and L2 document cache.
+    pub fn stats(&self) -> CacheStats {
+        let memory_entries = self.memory.read().map(|m| m.len()).unwrap_or(0);
+        let mut disk_entries = 0;
+        let mut disk_bytes = 0;
+        let cache_dir_str = self.cache_dir.as_ref().map(|p| p.display().to_string());
+
+        if let Some(ref dir) = self.cache_dir {
+            if let Ok(entries) = fs::read_dir(dir) {
+                for entry_res in entries.flatten() {
+                    let path = entry_res.path();
+                    if path.extension().and_then(|s| s.to_str()) == Some("json") {
+                        disk_entries += 1;
+                        if let Ok(meta) = entry_res.metadata() {
+                            disk_bytes += meta.len();
+                        }
+                    }
+                }
+            }
+        }
+
+        CacheStats {
+            memory_entries,
+            disk_entries,
+            disk_bytes,
+            cache_dir: cache_dir_str,
+        }
     }
 
     /// Clears all entries from both memory and disk.

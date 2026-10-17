@@ -299,6 +299,80 @@ fn render_cleaned_node(
     }
 }
 
+/// Prunes and excludes DOM subtrees matching a specified CSS selector from raw HTML.
+pub fn prune_unwanted_selectors(
+    raw_html: &str,
+    selector_str: &str,
+) -> Result<String, PageclawError> {
+    let selector = Selector::parse(selector_str).map_err(|e| {
+        PageclawError::CleaningError(format!(
+            "Invalid remove CSS selector '{selector_str}': {e:?}"
+        ))
+    })?;
+
+    let document = Html::parse_document(raw_html);
+    let mut out_html = String::with_capacity(raw_html.len());
+
+    for child in document.tree.root().children() {
+        render_pruned_node(child.id(), &document, &selector, &mut out_html);
+    }
+
+    Ok(out_html)
+}
+
+fn render_pruned_node(
+    node_id: ego_tree::NodeId,
+    document: &Html,
+    remove_selector: &Selector,
+    out: &mut String,
+) {
+    let node = match document.tree.get(node_id) {
+        Some(n) => n,
+        None => return,
+    };
+
+    let value = node.value();
+    if let Some(element) = value.as_element() {
+        let element_ref = scraper::ElementRef::wrap(node).unwrap();
+
+        // Check if node matches the remove selector
+        if remove_selector.matches(&element_ref) {
+            return;
+        }
+
+        let tag_name = element.name();
+        out.push('<');
+        out.push_str(tag_name);
+
+        for (attr_name, attr_val) in element.attrs() {
+            out.push(' ');
+            out.push_str(attr_name);
+            out.push_str("=\"");
+            if attr_val.contains('"') {
+                out.push_str(&attr_val.replace('"', "&quot;"));
+            } else {
+                out.push_str(attr_val);
+            }
+            out.push('"');
+        }
+        out.push('>');
+
+        for child in node.children() {
+            render_pruned_node(child.id(), document, remove_selector, out);
+        }
+
+        out.push_str("</");
+        out.push_str(tag_name);
+        out.push('>');
+    } else if let Some(text) = value.as_text() {
+        out.push_str(text);
+    } else {
+        for child in node.children() {
+            render_pruned_node(child.id(), document, remove_selector, out);
+        }
+    }
+}
+
 fn extract_title_from_doc(doc: &Html) -> Option<String> {
     let title_el = doc.select(&TITLE_SELECTOR).next()?;
     let t = title_el.text().collect::<Vec<_>>().join(" ");
@@ -424,5 +498,26 @@ mod tests {
         assert!(cleaned
             .html
             .contains("src=\"https://cdn.example.com/subfolder/logo.png\""));
+    }
+
+    #[test]
+    fn test_prune_unwanted_selectors() {
+        let html = r#"
+            <article>
+                <h1>Core Title</h1>
+                <div class="promotional-banner">50% off discount!</div>
+                <p>Real paragraph text.</p>
+                <aside id="author-bio">Author bio</aside>
+                <div class="comments">User comments</div>
+            </article>
+        "#;
+
+        let pruned =
+            prune_unwanted_selectors(html, ".promotional-banner, #author-bio, .comments").unwrap();
+        assert!(pruned.contains("Core Title"));
+        assert!(pruned.contains("Real paragraph text."));
+        assert!(!pruned.contains("50% off discount"));
+        assert!(!pruned.contains("Author bio"));
+        assert!(!pruned.contains("User comments"));
     }
 }

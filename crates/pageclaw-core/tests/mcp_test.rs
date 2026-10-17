@@ -42,7 +42,7 @@ async fn test_mcp_protocol_lifecycle() {
     let tools_array = tools_val["tools"]
         .as_array()
         .expect("Tools should be an array");
-    assert_eq!(tools_array.len(), 11);
+    assert_eq!(tools_array.len(), 12);
 
     let tool_names: Vec<&str> = tools_array
         .iter()
@@ -59,6 +59,7 @@ async fn test_mcp_protocol_lifecycle() {
     assert!(tool_names.contains(&"login_platform"));
     assert!(tool_names.contains(&"scaffold_schema"));
     assert!(tool_names.contains(&"compare_similarity"));
+    assert!(tool_names.contains(&"manage_cache"));
 
     // Verify web_search schema contains scope, cdp_endpoint, schema
     let search_tool = tools_array
@@ -124,6 +125,7 @@ async fn test_mcp_protocol_lifecycle() {
     assert!(props.get("table_format").is_some());
     assert!(props.get("mobile").is_some());
     assert!(props.get("stats").is_some());
+    assert!(props.get("remove_selector").is_some());
 
     // 5. Tools Call (Validation Error)
     let call_req = r#"{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"search_bilibili","arguments":{}}}"#;
@@ -206,6 +208,20 @@ async fn test_mcp_protocol_lifecycle() {
     let parsed_sim: serde_json::Value = serde_json::from_str(sim_text).unwrap();
     assert_eq!(parsed_sim["is_near_duplicate"], true);
     assert!(parsed_sim["hamming_distance"].as_u64().unwrap() <= 3);
+
+    // 5h. Tool Call: manage_cache (stats)
+    let cache_req = r#"{"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"manage_cache","arguments":{"action":"stats"}}}"#;
+    let cache_res = server
+        .handle_message(cache_req)
+        .await
+        .expect("Should return response");
+    let cache_val = cache_res
+        .result
+        .expect("Cache stats result should be present");
+    let cache_text = cache_val["content"][0]["text"].as_str().unwrap();
+    let parsed_cache: serde_json::Value = serde_json::from_str(cache_text).unwrap();
+    assert!(parsed_cache.get("memory_entries").is_some());
+    assert!(parsed_cache.get("disk_entries").is_some());
 
     // 5. Unknown Method Error
     let unknown_req = r#"{"jsonrpc":"2.0","id":4,"method":"unknown/method"}"#;
