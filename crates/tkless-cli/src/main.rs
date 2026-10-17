@@ -491,106 +491,108 @@ async fn run(args: CliArgs) -> Result<()> {
         let engine = TklessEngine::with_options(search_fetch_options)
             .context("Failed to initialize TkLess engine")?;
 
-        let effective_query = if search_args.wechat {
-            let clean = search_args.query.trim();
-            if clean.starts_with("site:") {
-                clean.to_string()
-            } else {
-                format!("site:mp.weixin.qq.com {clean}")
-            }
+        let (effective_scope, effective_query) = if search_args.baike {
+            (Some("baike"), search_args.query.trim().to_string())
+        } else if search_args.wechat {
+            (Some("wechat"), search_args.query.trim().to_string())
         } else if search_args.zhihu {
             let clean = search_args.query.trim();
-            if clean.starts_with("site:") {
+            let q = if clean.starts_with("site:") {
                 clean.to_string()
             } else {
                 format!("site:zhihu.com {clean}")
-            }
+            };
+            (Some("zhihu"), q)
         } else if search_args.github {
             let clean = search_args.query.trim();
-            if clean.starts_with("site:") {
+            let q = if clean.starts_with("site:") {
                 clean.to_string()
             } else {
                 format!("site:github.com {clean}")
-            }
+            };
+            (Some("github"), q)
         } else if search_args.juejin {
             let clean = search_args.query.trim();
-            if clean.starts_with("site:") {
+            let q = if clean.starts_with("site:") {
                 clean.to_string()
             } else {
                 format!("site:juejin.cn {clean}")
-            }
+            };
+            (Some("juejin"), q)
         } else if search_args.csdn {
             let clean = search_args.query.trim();
-            if clean.starts_with("site:") {
+            let q = if clean.starts_with("site:") {
                 clean.to_string()
             } else {
                 format!("site:blog.csdn.net {clean}")
-            }
+            };
+            (Some("csdn"), q)
         } else if search_args.medium {
             let clean = search_args.query.trim();
-            if clean.starts_with("site:") {
+            let q = if clean.starts_with("site:") {
                 clean.to_string()
             } else {
                 format!("site:medium.com {clean}")
-            }
+            };
+            (Some("medium"), q)
         } else if search_args.substack {
             let clean = search_args.query.trim();
-            if clean.starts_with("site:") {
+            let q = if clean.starts_with("site:") {
                 clean.to_string()
             } else {
                 format!("site:substack.com {clean}")
-            }
+            };
+            (Some("substack"), q)
         } else if search_args.arxiv {
             let clean = search_args.query.trim();
-            if clean.starts_with("site:") {
+            let q = if clean.starts_with("site:") {
                 clean.to_string()
             } else {
                 format!("site:arxiv.org {clean}")
-            }
+            };
+            (Some("arxiv"), q)
         } else if search_args.hf {
             let clean = search_args.query.trim();
-            if clean.starts_with("site:") {
+            let q = if clean.starts_with("site:") {
                 clean.to_string()
             } else {
                 format!("site:huggingface.co {clean}")
-            }
+            };
+            (Some("huggingface"), q)
         } else if search_args.wiki {
             let clean = search_args.query.trim();
-            if clean.starts_with("site:") {
+            let q = if clean.starts_with("site:") {
                 clean.to_string()
             } else {
                 format!("site:wikipedia.org {clean}")
-            }
+            };
+            (Some("wikipedia"), q)
         } else if search_args.reddit {
             let clean = search_args.query.trim();
-            if clean.starts_with("site:") {
+            let q = if clean.starts_with("site:") {
                 clean.to_string()
             } else {
                 format!("site:reddit.com {clean}")
-            }
+            };
+            (Some("reddit"), q)
         } else if search_args.so {
             let clean = search_args.query.trim();
-            if clean.starts_with("site:") {
+            let q = if clean.starts_with("site:") {
                 clean.to_string()
             } else {
                 format!("site:stackoverflow.com {clean}")
-            }
+            };
+            (Some("stackoverflow"), q)
         } else if search_args.v2ex {
             let clean = search_args.query.trim();
-            if clean.starts_with("site:") {
+            let q = if clean.starts_with("site:") {
                 clean.to_string()
             } else {
                 format!("site:v2ex.com {clean}")
-            }
-        } else if search_args.baike {
-            let clean = search_args.query.trim();
-            if clean.starts_with("site:") {
-                clean.to_string()
-            } else {
-                format!("site:baike.baidu.com {clean}")
-            }
+            };
+            (Some("v2ex"), q)
         } else {
-            search_args.query.clone()
+            (None, search_args.query.clone())
         };
 
         if search_args.fetch_content {
@@ -600,9 +602,10 @@ async fn run(args: CliArgs) -> Result<()> {
                 search_opts.cdp_wait_ms = search_args.cdp_wait_ms;
             }
 
-            let items = tkless_core::web_search_and_fetch(
+            let items = tkless_core::web_search_and_fetch_scoped(
                 &engine,
                 &effective_query,
+                effective_scope,
                 search_args.limit,
                 search_args.engine.into(),
                 &search_opts,
@@ -646,9 +649,10 @@ async fn run(args: CliArgs) -> Result<()> {
                 ..Default::default()
             });
 
-        let results = tkless_core::web_search_with_options(
+        let results = tkless_core::web_search_scoped(
             engine.client(),
             &effective_query,
+            effective_scope,
             search_args.limit,
             search_args.engine.into(),
             cdp_opts.as_ref(),

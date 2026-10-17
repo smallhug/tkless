@@ -960,120 +960,119 @@ impl McpServer {
         };
         let engine = SearchEngineKind::Bing;
         let scope = args.get("scope").and_then(|v| v.as_str()).unwrap_or("all");
-        let effective_query = match scope {
-            "wechat" => {
-                let clean = query.trim();
-                if clean.starts_with("site:") {
-                    clean.to_string()
-                } else {
-                    format!("site:mp.weixin.qq.com {clean}")
-                }
-            }
+
+        let (effective_scope, effective_query) = match scope {
+            "baike" => (Some("baike"), query.trim().to_string()),
+            "wechat" => (Some("wechat"), query.trim().to_string()),
             "zhihu" => {
                 let clean = query.trim();
-                if clean.starts_with("site:") {
+                let q = if clean.starts_with("site:") {
                     clean.to_string()
                 } else {
                     format!("site:zhihu.com {clean}")
-                }
+                };
+                (Some("zhihu"), q)
             }
             "github" => {
                 let clean = query.trim();
-                if clean.starts_with("site:") {
+                let q = if clean.starts_with("site:") {
                     clean.to_string()
                 } else {
                     format!("site:github.com {clean}")
-                }
+                };
+                (Some("github"), q)
             }
             "juejin" => {
                 let clean = query.trim();
-                if clean.starts_with("site:") {
+                let q = if clean.starts_with("site:") {
                     clean.to_string()
                 } else {
                     format!("site:juejin.cn {clean}")
-                }
+                };
+                (Some("juejin"), q)
             }
             "csdn" => {
                 let clean = query.trim();
-                if clean.starts_with("site:") {
+                let q = if clean.starts_with("site:") {
                     clean.to_string()
                 } else {
                     format!("site:blog.csdn.net {clean}")
-                }
+                };
+                (Some("csdn"), q)
             }
             "medium" => {
                 let clean = query.trim();
-                if clean.starts_with("site:") {
+                let q = if clean.starts_with("site:") {
                     clean.to_string()
                 } else {
                     format!("site:medium.com {clean}")
-                }
+                };
+                (Some("medium"), q)
             }
             "substack" => {
                 let clean = query.trim();
-                if clean.starts_with("site:") {
+                let q = if clean.starts_with("site:") {
                     clean.to_string()
                 } else {
                     format!("site:substack.com {clean}")
-                }
+                };
+                (Some("substack"), q)
             }
             "arxiv" => {
                 let clean = query.trim();
-                if clean.starts_with("site:") {
+                let q = if clean.starts_with("site:") {
                     clean.to_string()
                 } else {
                     format!("site:arxiv.org {clean}")
-                }
+                };
+                (Some("arxiv"), q)
             }
             "huggingface" | "hf" => {
                 let clean = query.trim();
-                if clean.starts_with("site:") {
+                let q = if clean.starts_with("site:") {
                     clean.to_string()
                 } else {
                     format!("site:huggingface.co {clean}")
-                }
+                };
+                (Some("huggingface"), q)
             }
             "wikipedia" | "wiki" => {
                 let clean = query.trim();
-                if clean.starts_with("site:") {
+                let q = if clean.starts_with("site:") {
                     clean.to_string()
                 } else {
                     format!("site:wikipedia.org {clean}")
-                }
+                };
+                (Some("wikipedia"), q)
             }
             "reddit" => {
                 let clean = query.trim();
-                if clean.starts_with("site:") {
+                let q = if clean.starts_with("site:") {
                     clean.to_string()
                 } else {
                     format!("site:reddit.com {clean}")
-                }
+                };
+                (Some("reddit"), q)
             }
             "stackoverflow" | "so" => {
                 let clean = query.trim();
-                if clean.starts_with("site:") {
+                let q = if clean.starts_with("site:") {
                     clean.to_string()
                 } else {
                     format!("site:stackoverflow.com {clean}")
-                }
+                };
+                (Some("stackoverflow"), q)
             }
             "v2ex" => {
                 let clean = query.trim();
-                if clean.starts_with("site:") {
+                let q = if clean.starts_with("site:") {
                     clean.to_string()
                 } else {
                     format!("site:v2ex.com {clean}")
-                }
+                };
+                (Some("v2ex"), q)
             }
-            "baike" => {
-                let clean = query.trim();
-                if clean.starts_with("site:") {
-                    clean.to_string()
-                } else {
-                    format!("site:baike.baidu.com {clean}")
-                }
-            }
-            _ => query.to_string(),
+            _ => (None, query.to_string()),
         };
 
         let fetch_content = args
@@ -1135,9 +1134,10 @@ impl McpServer {
                 ..Default::default()
             };
 
-            match crate::search::web_search_and_fetch(
+            match crate::search::web_search_and_fetch_scoped(
                 engine_ref,
                 &effective_query,
+                effective_scope,
                 limit,
                 engine,
                 &options,
@@ -1178,9 +1178,10 @@ impl McpServer {
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
 
-            match crate::search::web_search_with_options(
+            match crate::search::web_search_scoped(
                 engine_ref.client(),
                 &effective_query,
+                effective_scope,
                 limit,
                 engine,
                 cdp_options.as_ref(),

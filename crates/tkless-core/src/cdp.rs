@@ -7,14 +7,209 @@
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::path::PathBuf;
+use std::process::{Child, Command, Stdio};
+use std::sync::{LazyLock, Mutex};
 use std::time::Duration;
 use tokio::time::timeout;
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::Message;
-use tracing::debug;
+use tracing::{debug, info};
 use url::Url;
 
 use crate::error::TklessError;
+
+/// Globally managed headless browser daemon child process.
+static MANAGED_BROWSER_PROCESS: LazyLock<Mutex<Option<Child>>> = LazyLock::new(|| Mutex::new(None));
+
+/// Searches the system for installed Chrome, Chromium, or Edge browser executables.
+pub fn locate_system_browser() -> Option<PathBuf> {
+    // 1. Platform-specific known installation paths
+    #[cfg(target_os = "windows")]
+    {
+        let mut candidates = vec![
+            PathBuf::from(r"C:\Program Files\Google\Chrome\Application\chrome.exe"),
+            PathBuf::from(r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe"),
+            PathBuf::from(r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"),
+            PathBuf::from(r"C:\Program Files\Microsoft\Edge\Application\msedge.exe"),
+        ];
+        if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
+            candidates.push(
+                PathBuf::from(&local_app_data)
+                    .join("Google")
+                    .join("Chrome")
+                    .join("Application")
+                    .join("chrome.exe"),
+            );
+            candidates.push(
+                PathBuf::from(&local_app_data)
+                    .join("Microsoft")
+                    .join("Edge")
+                    .join("Application")
+                    .join("msedge.exe"),
+            );
+        }
+        for path in candidates {
+            if path.is_file() {
+                return Some(path);
+            }
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let candidates = [
+            "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+            "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+            "/Applications/Chromium.app/Contents/MacOS/Chromium",
+            "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
+        ];
+        for path_str in candidates {
+            let p = PathBuf::from(path_str);
+            if p.is_file() {
+                return Some(p);
+            }
+        }
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        let candidates = [
+            "/usr/bin/google-chrome",
+            "/usr/bin/google-chrome-stable",
+            "/usr/bin/chromium",
+            "/usr/bin/chromium-browser",
+            "/usr/bin/microsoft-edge",
+            "/usr/bin/microsoft-edge-stable",
+            "/usr/bin/brave-browser",
+        ];
+        for path_str in candidates {
+            let p = PathBuf::from(path_str);
+            if p.is_file() {
+                return Some(p);
+            }
+        }
+    }
+
+    // 2. Search PATH environment variable
+    let bin_names = if cfg!(windows) {
+        vec!["chrome.exe", "msedge.exe", "chromium.exe"]
+    } else {
+        vec![
+            "google-chrome",
+            "google-chrome-stable",
+            "chromium",
+            "chromium-browser",
+            "msedge",
+        ]
+    };
+
+    if let Some(path_var) = std::env::var_os("PATH") {
+        for dir in std::env::split_paths(&path_var) {
+            for bin in &bin_names {
+                let candidate = dir.join(bin);
+                if candidate.is_file() {
+                    return Some(candidate);
+                }
+            }
+        }
+    }
+
+    None
+}
+
+/// Ensures the target CDP endpoint is reachable. If it points to local loopback (127.0.0.1/localhost)
+/// and is not currently listening, automatically launches a managed headless Chrome/Edge daemon.
+pub async fn ensure_cdp_daemon_ready(endpoint: &str) -> Result<String, TklessError> {
+    let (base_endpoint, is_direct_ws) = normalize_cdp_endpoint(endpoint);
+    if is_direct_ws {
+        return Ok(base_endpoint);
+    }
+
+    // Check if endpoint is local loopback
+    let is_local = base_endpoint.contains("127.0.0.1") || base_endpoint.contains("localhost");
+    if !is_local {
+        return Ok(base_endpoint);
+    }
+
+    let port: u16 = if let Ok(parsed) = Url::parse(&base_endpoint) {
+        parsed.port().unwrap_or(9222)
+    } else {
+        9222
+    };
+
+    let probe_client = reqwest::Client::builder()
+        .connect_timeout(Duration::from_millis(500))
+        .timeout(Duration::from_millis(500))
+        .build()
+        .map_err(|e| TklessError::CdpError(e.to_string()))?;
+
+    let version_url = format!("http://127.0.0.1:{port}/json/version");
+
+    // 1. Probe if existing CDP endpoint is already alive
+    if let Ok(resp) = probe_client.get(&version_url).send().await {
+        if resp.status().is_success() {
+            debug!(port = port, "CDP 远程调试端点已就绪 (现有服务复用)");
+            return Ok(base_endpoint);
+        }
+    }
+
+    // 2. Launch auto-managed browser daemon
+    let browser_bin = locate_system_browser().ok_or_else(|| {
+        TklessError::CdpError(
+            "未检测到本地安装的 Chrome、Edge 或 Chromium 浏览器，无法自动拉起 CDP 无头守护进程。请安装 Chrome/Edge，或手动指定 `--cdp` 远程端点。".to_string(),
+        )
+    })?;
+
+    info!(
+        browser = %browser_bin.display(),
+        port = port,
+        "正在自动启动系统内置无头浏览器 CDP 守护进程..."
+    );
+
+    let profile_dir = std::env::temp_dir().join(format!("tkless_cdp_profile_{port}"));
+    let _ = std::fs::create_dir_all(&profile_dir);
+
+    let mut cmd = Command::new(&browser_bin);
+    cmd.arg("--headless=new")
+        .arg(format!("--remote-debugging-port={port}"))
+        .arg("--disable-gpu")
+        .arg("--no-first-run")
+        .arg("--no-default-browser-check")
+        .arg(format!("--user-data-dir={}", profile_dir.display()))
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+
+    let child = cmd.spawn().map_err(|e| {
+        TklessError::CdpError(format!(
+            "无法启动无头浏览器进程 ({}): {e}",
+            browser_bin.display()
+        ))
+    })?;
+
+    if let Ok(mut lock) = MANAGED_BROWSER_PROCESS.lock() {
+        *lock = Some(child);
+    }
+
+    // 3. Poll until port is alive (up to 8 seconds)
+    let start_wait = std::time::Instant::now();
+    let max_wait = Duration::from_secs(8);
+
+    while start_wait.elapsed() < max_wait {
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        if let Ok(resp) = probe_client.get(&version_url).send().await {
+            if resp.status().is_success() {
+                info!(port = port, "无头浏览器 CDP 守护进程已成功启动并就绪");
+                return Ok(base_endpoint);
+            }
+        }
+    }
+
+    Err(TklessError::CdpError(format!(
+        "无头浏览器 CDP 守护进程启动超时 (端口 {port} 未在 6 秒内响应)"
+    )))
+}
 
 /// Options controlling CDP browser interaction.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -67,7 +262,12 @@ fn normalize_cdp_endpoint(endpoint: &str) -> (String, bool) {
 
 /// Fetches rendered HTML for a given URL via Chrome DevTools Protocol.
 pub async fn fetch_html_via_cdp(url: &str, options: &CdpOptions) -> Result<String, TklessError> {
-    let (base_endpoint, is_direct_ws) = normalize_cdp_endpoint(&options.endpoint);
+    let (raw_base_endpoint, is_direct_ws) = normalize_cdp_endpoint(&options.endpoint);
+    let base_endpoint = if !is_direct_ws {
+        ensure_cdp_daemon_ready(&raw_base_endpoint).await?
+    } else {
+        raw_base_endpoint
+    };
     let total_timeout = Duration::from_millis(options.timeout_ms.unwrap_or(30_000));
 
     timeout(total_timeout, async {
@@ -75,7 +275,7 @@ pub async fn fetch_html_via_cdp(url: &str, options: &CdpOptions) -> Result<Strin
             connect_and_extract_html(&base_endpoint, url, options, None).await
         } else {
             // 1. Create a new target tab via Chrome DevTools HTTP API
-            let req_timeout = Duration::from_millis(options.timeout_ms.unwrap_or(30_000).min(5000));
+            let req_timeout = Duration::from_millis(options.timeout_ms.unwrap_or(30_000).min(2000));
             let client = reqwest::Client::builder()
                 .connect_timeout(req_timeout)
                 .timeout(req_timeout)
@@ -302,14 +502,19 @@ pub async fn capture_screenshot_via_cdp(
     options: &CdpOptions,
     format: Option<&str>,
 ) -> Result<Vec<u8>, TklessError> {
-    let (base_endpoint, is_direct_ws) = normalize_cdp_endpoint(&options.endpoint);
+    let (raw_base_endpoint, is_direct_ws) = normalize_cdp_endpoint(&options.endpoint);
+    let base_endpoint = if !is_direct_ws {
+        ensure_cdp_daemon_ready(&raw_base_endpoint).await?
+    } else {
+        raw_base_endpoint
+    };
     let total_timeout = Duration::from_millis(options.timeout_ms.unwrap_or(30_000));
 
     timeout(total_timeout, async {
         if is_direct_ws {
             connect_and_capture_screenshot(&base_endpoint, url, options, format).await
         } else {
-            let req_timeout = Duration::from_millis(options.timeout_ms.unwrap_or(30_000).min(5000));
+            let req_timeout = Duration::from_millis(options.timeout_ms.unwrap_or(30_000).min(2000));
             let client = reqwest::Client::builder()
                 .connect_timeout(req_timeout)
                 .timeout(req_timeout)
@@ -533,9 +738,9 @@ pub fn encode_base64(bytes: &[u8]) -> String {
 }
 
 /// Detects whether an HTML response body or HTTP status indicates an active anti-scraping challenge
-/// (e.g. Cloudflare Turnstile, 5-second shield, Zhihu captcha, WeChat verification, DDOS-GUARD, WAF block).
+/// (e.g. Cloudflare Turnstile, 5-second shield, Zhihu captcha, WeChat verification, DDOS-GUARD, Baidu WAF, Sogou anti-spider).
 pub fn is_anti_scraping_challenge(html: &str, status: u16) -> bool {
-    if status == 403 || status == 503 {
+    if status == 403 || status == 503 || status == 429 {
         return true;
     }
 
@@ -547,6 +752,43 @@ pub fn is_anti_scraping_challenge(html: &str, status: u16) -> bool {
         || lower.contains("cf-turnstile")
         || lower.contains("_cf_chl_opt")
         || lower.contains("just a moment...")
+    {
+        return true;
+    }
+
+    // Baidu Baike / WAF / Paris anti-scraping challenge
+    if lower.contains("__paris_challenge_start__")
+        || lower.contains("__challenge_config__")
+        || lower.contains("百度安全验证")
+        || lower.contains("mkdjump")
+        || lower.contains("dlswbr.baidu.com/heicha")
+    {
+        return true;
+    }
+
+    // Sogou anti-spider verification challenge
+    if lower.contains("antispider.min.js")
+        || lower.contains("static/js/antispider")
+        || lower.contains("verify.css")
+        || lower.contains("请输入验证码")
+        || lower.contains("checksnuid")
+    {
+        return true;
+    }
+
+    // Bing captcha / bot challenge
+    if lower.contains("最后一步 请解决以下难题以继续")
+        || lower.contains("请解决以下难题以继续")
+        || lower.contains("b_captcha")
+        || lower.contains("please solve the challenge below")
+    {
+        return true;
+    }
+
+    // Google captcha / bot challenge
+    if lower.contains("/httpservice/retry/enablejs")
+        || lower.contains("异常流量")
+        || lower.contains("unusual traffic")
     {
         return true;
     }
@@ -645,5 +887,14 @@ mod tests {
         let (ep, is_ws) = normalize_cdp_endpoint("ws://127.0.0.1:9222/devtools/page/123");
         assert_eq!(ep, "ws://127.0.0.1:9222/devtools/page/123");
         assert!(is_ws);
+    }
+
+    #[test]
+    fn test_locate_system_browser() {
+        // Must execute without panic on any host system
+        let browser = locate_system_browser();
+        if let Some(ref path) = browser {
+            assert!(path.is_file(), "Located browser binary must be a file");
+        }
     }
 }

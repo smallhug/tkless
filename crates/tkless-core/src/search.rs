@@ -39,7 +39,7 @@ pub struct SearchFetchItem {
 }
 
 /// Executes an all-in-one search & fetch pipeline:
-/// 1. Searches Bing / Google / Auto for the query to get top URLs
+/// 1. Searches Bing / vertical pipelines for the query to get top URLs
 /// 2. Concurrently fetches and extracts clean Markdown content for each page via TklessEngine
 /// 3. Enforces per-page token budgets to prevent LLM context explosion
 pub async fn web_search_and_fetch(
@@ -51,14 +51,57 @@ pub async fn web_search_and_fetch(
     max_tokens_per_page: Option<usize>,
     dedup: bool,
 ) -> Result<Vec<SearchFetchItem>, TklessError> {
+    web_search_and_fetch_scoped(
+        engine,
+        query,
+        None,
+        limit,
+        search_engine,
+        base_options,
+        max_tokens_per_page,
+        dedup,
+    )
+    .await
+}
+
+/// Executes an all-in-one search & fetch pipeline with platform scope awareness.
+#[allow(clippy::too_many_arguments)]
+pub async fn web_search_and_fetch_scoped(
+    engine: &TklessEngine,
+    query: &str,
+    scope: Option<&str>,
+    limit: usize,
+    search_engine: SearchEngineKind,
+    base_options: &ExtractionOptions,
+    max_tokens_per_page: Option<usize>,
+    dedup: bool,
+) -> Result<Vec<SearchFetchItem>, TklessError> {
     let clean_query = query.trim();
     if clean_query.is_empty() {
         return Ok(Vec::new());
     }
 
-    // 1. Search phase
-    let search_results =
-        web_search_with_engine(engine.client(), clean_query, limit, search_engine).await?;
+    let cdp_opts = base_options
+        .cdp_endpoint
+        .as_ref()
+        .map(|ep| crate::cdp::CdpOptions {
+            endpoint: ep.clone(),
+            wait_ms: base_options.cdp_wait_ms,
+            timeout_ms: None,
+            ..Default::default()
+        });
+
+    // 1. Search phase using scoped vertical routing
+    let search_results = web_search_scoped(
+        engine.client(),
+        clean_query,
+        scope,
+        limit,
+        search_engine,
+        cdp_opts.as_ref(),
+        base_options.auto_cdp,
+    )
+    .await?;
     if search_results.is_empty() {
         return Ok(Vec::new());
     }
@@ -170,7 +213,7 @@ pub async fn web_search_with_engine(
     limit: usize,
     engine: SearchEngineKind,
 ) -> Result<Vec<SearchResultItem>, TklessError> {
-    web_search_with_options(client, query, limit, engine, None, false).await
+    web_search_scoped(client, query, None, limit, engine, None, false).await
 }
 
 /// Executes a web search with optional CDP browser fallback to bypass anti-scraping challenges.
@@ -182,16 +225,259 @@ pub async fn web_search_with_options(
     cdp_options: Option<&crate::cdp::CdpOptions>,
     auto_cdp: bool,
 ) -> Result<Vec<SearchResultItem>, TklessError> {
+    web_search_scoped(client, query, None, limit, engine, cdp_options, auto_cdp).await
+}
+
+/// Executes a scoped web search with intelligent routing to dedicated vertical pipelines
+/// (e.g. Baidu Baike native API, Sogou WeChat article search with redirect decryption)
+/// before falling back to general web search.
+pub async fn web_search_scoped(
+    client: &reqwest::Client,
+    query: &str,
+    scope: Option<&str>,
+    limit: usize,
+    engine: SearchEngineKind,
+    cdp_options: Option<&crate::cdp::CdpOptions>,
+    auto_cdp: bool,
+) -> Result<Vec<SearchResultItem>, TklessError> {
     let clean_query = query.trim();
     if clean_query.is_empty() {
         return Ok(Vec::new());
     }
 
+    // 1. Dedicated Baidu Baike vertical search pipeline
+    let is_baike_scope = scope == Some("baike") || clean_query.contains("site:baike.baidu.com");
+    if is_baike_scope {
+        let stripped_q = clean_query
+            .replace("site:baike.baidu.com", "")
+            .trim()
+            .to_string();
+        debug!(query = %stripped_q, "Routing search through dedicated Baidu Baike vertical pipeline");
+        let baike_results = search_baike(client, &stripped_q, limit).await;
+        if let Ok(ref results) = baike_results {
+            if !results.is_empty() {
+                return baike_results;
+            }
+        }
+    }
+
+    // 2. Dedicated WeChat Official Accounts vertical search pipeline
+    let is_wechat_scope = scope == Some("wechat") || clean_query.contains("site:mp.weixin.qq.com");
+    if is_wechat_scope {
+        let stripped_q = clean_query
+            .replace("site:mp.weixin.qq.com", "")
+            .trim()
+            .to_string();
+        debug!(query = %stripped_q, "Routing search through dedicated WeChat Official Accounts pipeline");
+        let wechat_results = search_wechat_sogou(client, &stripped_q, limit).await;
+        if let Ok(ref results) = wechat_results {
+            if !results.is_empty() {
+                return wechat_results;
+            }
+        }
+    }
+
+    // 3. General web search via Bing with multi-stage relaxation and anti-degradation
     match engine {
         SearchEngineKind::Bing => {
             search_bing_with_options(client, clean_query, limit, cdp_options, auto_cdp).await
         }
     }
+}
+
+/// Dedicated Baidu Baike vertical search querying Baidu's native OpenAPI endpoint.
+/// Completely immune to Bing site: mangling, zero captcha risk, instant response.
+pub async fn search_baike(
+    client: &reqwest::Client,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<SearchResultItem>, TklessError> {
+    let clean = query.trim();
+    if clean.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let encoded: String = url::form_urlencoded::byte_serialize(clean.as_bytes()).collect();
+    let api_url = format!(
+        "https://baike.baidu.com/api/openapi/BaikeLemmaCardApi?scope=103&format=json&appid=379020&bk_key={encoded}"
+    );
+
+    debug!(query = clean, url = %api_url, "Querying Baidu Baike native LemmaCard OpenAPI");
+
+    let resp = client
+        .get(&api_url)
+        .header(
+            "User-Agent",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",
+        )
+        .header("Referer", "https://baike.baidu.com/")
+        .send()
+        .await?;
+
+    if resp.status().is_success() {
+        if let Ok(data) = resp.json::<serde_json::Value>().await {
+            if let Some(title) = data.get("title").and_then(|v| v.as_str()) {
+                let url = data
+                    .get("url")
+                    .and_then(|v| v.as_str())
+                    .or_else(|| data.get("wapUrl").and_then(|v| v.as_str()))
+                    .map(|s| {
+                        if s.starts_with("http://") {
+                            s.replace("http://", "https://")
+                        } else {
+                            s.to_string()
+                        }
+                    })
+                    .unwrap_or_else(|| format!("https://baike.baidu.com/item/{title}"));
+
+                let snippet = data
+                    .get("abstract")
+                    .and_then(|v| v.as_str())
+                    .or_else(|| data.get("desc").and_then(|v| v.as_str()))
+                    .unwrap_or_default()
+                    .to_string();
+
+                return Ok(vec![SearchResultItem {
+                    title: format!("{title}_百度百科"),
+                    url,
+                    snippet,
+                    engine: "baike".to_string(),
+                }]);
+            }
+        }
+    }
+
+    // Fallback: If OpenAPI didn't return an exact card, search Bing with cleaned keyword
+    search_bing(client, &format!("{} 百度百科", clean), limit).await
+}
+
+/// Dedicated WeChat Official Accounts vertical search via Sogou WeChat with automated JS redirect decryption.
+pub async fn search_wechat_sogou(
+    client: &reqwest::Client,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<SearchResultItem>, TklessError> {
+    let clean = query.trim();
+    if clean.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let encoded: String = url::form_urlencoded::byte_serialize(clean.as_bytes()).collect();
+    let search_url = format!("https://weixin.sogou.com/weixin?type=2&query={encoded}");
+
+    debug!(query = clean, url = %search_url, "Querying Sogou WeChat article search engine");
+
+    let resp = client
+        .get(&search_url)
+        .header(
+            "User-Agent",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36 Edg/133.0.0.0",
+        )
+        .header("Referer", "https://weixin.sogou.com/")
+        .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+        .header("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
+        .send()
+        .await?;
+
+    if !resp.status().is_success() {
+        return Err(TklessError::AdapterError {
+            platform: "wechat_search",
+            message: format!("Sogou WeChat returned HTTP status {}", resp.status()),
+        });
+    }
+
+    let mut search_cookies = Vec::new();
+    for (name, val) in resp.headers() {
+        if name == reqwest::header::SET_COOKIE {
+            if let Ok(v_str) = val.to_str() {
+                let c_part = v_str.split(';').next().unwrap_or("").trim();
+                if !c_part.is_empty() {
+                    search_cookies.push(c_part);
+                }
+            }
+        }
+    }
+    let cookie_header = search_cookies.join("; ");
+
+    let html = resp.text().await?;
+    let doc = Html::parse_document(&html);
+
+    let box_sel = Selector::parse("div.txt-box").unwrap();
+    let title_sel = Selector::parse("h3 a").unwrap();
+    let snip_sel = Selector::parse("p.txt-info").unwrap();
+
+    let js_regex = regex::Regex::new(r#"url\s*\+?=\s*['"]([^'"]*)['"]"#).unwrap();
+
+    let mut results = Vec::new();
+
+    for el in doc.select(&box_sel) {
+        let title_node = match el.select(&title_sel).next() {
+            Some(node) => node,
+            None => continue,
+        };
+
+        let raw_title = title_node.text().collect::<String>().trim().to_string();
+        let raw_href = title_node.value().attr("href").unwrap_or("").trim();
+
+        if raw_title.is_empty() || raw_href.is_empty() {
+            continue;
+        }
+
+        let redirect_url = if raw_href.starts_with('/') {
+            format!("https://weixin.sogou.com{raw_href}")
+        } else {
+            raw_href.to_string()
+        };
+
+        let snippet = el
+            .select(&snip_sel)
+            .next()
+            .map(|s| s.text().collect::<String>().trim().to_string())
+            .unwrap_or_default();
+
+        // Attempt to decrypt Sogou intermediate redirect into real mp.weixin.qq.com URL
+        let mut final_url = redirect_url.clone();
+        let mut link_req = client
+            .get(&redirect_url)
+            .header(
+                "User-Agent",
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36 Edg/133.0.0.0",
+            )
+            .header("Referer", &search_url);
+        if !cookie_header.is_empty() {
+            link_req = link_req.header("Cookie", &cookie_header);
+        }
+
+        if let Ok(link_resp) = link_req.send().await {
+            if let Ok(link_html) = link_resp.text().await {
+                let mut parts = Vec::new();
+                for cap in js_regex.captures_iter(&link_html) {
+                    if let Some(m) = cap.get(1) {
+                        parts.push(m.as_str());
+                    }
+                }
+                if !parts.is_empty() {
+                    let assembled = parts.concat().replace('@', "");
+                    if assembled.starts_with("http") && assembled.contains("mp.weixin.qq.com") {
+                        final_url = assembled;
+                    }
+                }
+            }
+        }
+
+        results.push(SearchResultItem {
+            title: raw_title,
+            url: final_url,
+            snippet,
+            engine: "wechat".to_string(),
+        });
+
+        if results.len() >= limit {
+            break;
+        }
+    }
+
+    Ok(results)
 }
 
 /// Default web search implementation using the default configured engine (Bing).
@@ -1035,5 +1321,100 @@ mod tests {
         );
         assert_eq!(results[0].title, "2026年北京小学入学政策官方解答");
         assert_eq!(results[0].url, "https://jw.beijing.gov.cn/policy/2026");
+    }
+
+    #[test]
+    fn test_baike_openapi_response_parsing() {
+        let sample_json = serde_json::json!({
+            "title": "光合作用",
+            "url": "http://baike.baidu.com/subview/8885/20565692.htm",
+            "abstract": "光合作用是绿色植物生命活动的核心过程，其本质在于将外界光能转化为化学能。"
+        });
+
+        let title = sample_json.get("title").and_then(|v| v.as_str()).unwrap();
+        let raw_url = sample_json.get("url").and_then(|v| v.as_str()).unwrap();
+        let url = if raw_url.starts_with("http://") {
+            raw_url.replace("http://", "https://")
+        } else {
+            raw_url.to_string()
+        };
+        let snippet = sample_json
+            .get("abstract")
+            .and_then(|v| v.as_str())
+            .unwrap();
+
+        let item = SearchResultItem {
+            title: format!("{title}_百度百科"),
+            url,
+            snippet: snippet.to_string(),
+            engine: "baike".to_string(),
+        };
+
+        assert_eq!(item.title, "光合作用_百度百科");
+        assert_eq!(
+            item.url,
+            "https://baike.baidu.com/subview/8885/20565692.htm"
+        );
+        assert!(item.snippet.contains("光合作用是绿色植物"));
+        assert_eq!(item.engine, "baike");
+    }
+
+    #[test]
+    fn test_sogou_wechat_search_html_parsing() {
+        let sample_html = r#"
+            <ul class="news-list">
+                <li>
+                    <div class="txt-box">
+                        <h3>
+                            <a target="_blank" href="/link?url=sogou_sample_test_link" id="sogou_title_0">
+                                <em><!--red_beg-->大模型<!--red_end--></em>想落地，先让大家用得起
+                            </a>
+                        </h3>
+                        <p class="txt-info" id="sogou_summary_0">
+                            自2023年开始，全球范围掀起了以大模型为代表的生成式AI浪潮。
+                        </p>
+                        <div class="s-p">
+                            <span class="all-time-y2">钛媒体APP</span>
+                        </div>
+                    </div>
+                </li>
+            </ul>
+        "#;
+
+        let doc = Html::parse_document(sample_html);
+        let box_sel = Selector::parse("div.txt-box").unwrap();
+        let title_sel = Selector::parse("h3 a").unwrap();
+        let snip_sel = Selector::parse("p.txt-info").unwrap();
+
+        let mut results = Vec::new();
+        for el in doc.select(&box_sel) {
+            let title_node = el.select(&title_sel).next().unwrap();
+            let raw_title = title_node.text().collect::<String>().trim().to_string();
+            let raw_href = title_node.value().attr("href").unwrap().trim();
+            let snippet = el
+                .select(&snip_sel)
+                .next()
+                .unwrap()
+                .text()
+                .collect::<String>()
+                .trim()
+                .to_string();
+
+            results.push(SearchResultItem {
+                title: raw_title,
+                url: format!("https://weixin.sogou.com{raw_href}"),
+                snippet,
+                engine: "wechat".to_string(),
+            });
+        }
+
+        assert_eq!(results.len(), 1);
+        assert!(results[0].title.contains("大模型想落地"));
+        assert_eq!(
+            results[0].url,
+            "https://weixin.sogou.com/link?url=sogou_sample_test_link"
+        );
+        assert!(results[0].snippet.contains("以大模型为代表"));
+        assert_eq!(results[0].engine, "wechat");
     }
 }
