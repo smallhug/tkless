@@ -1,9 +1,9 @@
-use pageclaw_core::model::{ExtractionMode, ExtractionOptions, OutputFormat};
-use pageclaw_core::PageclawEngine;
+use tkless_core::model::{ExtractionMode, ExtractionOptions, OutputFormat};
+use tkless_core::TklessEngine;
 
 #[test]
 fn test_integration_pipeline_html_to_markdown() {
-    let engine = PageclawEngine::new().expect("Failed to initialize engine");
+    let engine = TklessEngine::new().expect("Failed to initialize engine");
 
     let sample_html = r#"
         <!DOCTYPE html>
@@ -56,7 +56,7 @@ fn test_integration_pipeline_html_to_markdown() {
         mode: ExtractionMode::Article,
         format: OutputFormat::Markdown,
         max_tokens: None,
-        tokenizer: pageclaw_core::model::TokenizerKind::default(),
+        tokenizer: tkless_core::model::TokenizerKind::default(),
         include_metadata: true,
         include_json_ld: true,
         strip_images: false,
@@ -112,7 +112,7 @@ fn test_integration_pipeline_html_to_markdown() {
 
 #[test]
 fn test_integration_token_budget_truncation() {
-    let engine = PageclawEngine::new().expect("Failed to initialize engine");
+    let engine = TklessEngine::new().expect("Failed to initialize engine");
 
     let long_html = r#"
         <article>
@@ -127,7 +127,7 @@ fn test_integration_token_budget_truncation() {
         mode: ExtractionMode::Article,
         format: OutputFormat::Markdown,
         max_tokens: Some(25),
-        tokenizer: pageclaw_core::model::TokenizerKind::default(),
+        tokenizer: tkless_core::model::TokenizerKind::default(),
         include_metadata: false,
         include_json_ld: false,
         strip_images: false,
@@ -150,7 +150,7 @@ fn test_integration_token_budget_truncation() {
 
 #[test]
 fn test_integration_selector_targeted_extraction() {
-    let engine = PageclawEngine::new().expect("Failed to initialize engine");
+    let engine = TklessEngine::new().expect("Failed to initialize engine");
 
     let page_html = r#"
         <!DOCTYPE html>
@@ -207,7 +207,7 @@ fn test_integration_selector_targeted_extraction() {
 
 #[test]
 fn test_integration_extract_assets_and_tables_json() {
-    let engine = PageclawEngine::new().expect("Failed to initialize engine");
+    let engine = TklessEngine::new().expect("Failed to initialize engine");
 
     let page_html = r#"
         <html>
@@ -273,7 +273,7 @@ fn test_integration_extract_assets_and_tables_json() {
 
 #[test]
 fn test_integration_extract_assets_markdown() {
-    let engine = PageclawEngine::new().expect("Failed to initialize engine");
+    let engine = TklessEngine::new().expect("Failed to initialize engine");
 
     let page_html = r#"
         <html>
@@ -306,7 +306,7 @@ fn test_integration_extract_assets_markdown() {
 
 #[test]
 fn test_integration_schema_driven_entity_extraction() {
-    let engine = PageclawEngine::new().expect("Failed to initialize engine");
+    let engine = TklessEngine::new().expect("Failed to initialize engine");
 
     let page_html = r#"
         <!DOCTYPE html>
@@ -375,7 +375,7 @@ fn test_integration_schema_driven_entity_extraction() {
 
 #[tokio::test]
 async fn test_integration_cdp_connection_failure_actionable_error() {
-    let cdp_options = pageclaw_core::cdp::CdpOptions {
+    let cdp_options = tkless_core::cdp::CdpOptions {
         endpoint: "http://127.0.0.1:59999".to_string(), // Unused port
         wait_ms: Some(100),
         timeout_ms: Some(5000),
@@ -383,7 +383,7 @@ async fn test_integration_cdp_connection_failure_actionable_error() {
         cookie: None,
     };
 
-    let res = pageclaw_core::cdp::fetch_html_via_cdp("https://example.com", &cdp_options).await;
+    let res = tkless_core::cdp::fetch_html_via_cdp("https://example.com", &cdp_options).await;
     assert!(res.is_err());
     let err_msg = res.unwrap_err().to_string();
     assert!(
@@ -394,7 +394,7 @@ async fn test_integration_cdp_connection_failure_actionable_error() {
 
 #[test]
 fn test_integration_semantic_markdown_chunking() {
-    let engine = PageclawEngine::new().expect("Failed to initialize engine");
+    let engine = TklessEngine::new().expect("Failed to initialize engine");
 
     let doc_html = r#"
         <!DOCTYPE html>
@@ -472,7 +472,7 @@ fn test_integration_semantic_markdown_chunking() {
 
 #[test]
 fn test_integration_tables_only_csv_export() {
-    let engine = PageclawEngine::new().expect("Failed to initialize engine");
+    let engine = TklessEngine::new().expect("Failed to initialize engine");
 
     let page_html = r#"
         <!DOCTYPE html>
@@ -501,7 +501,7 @@ fn test_integration_tables_only_csv_export() {
 
     let options = ExtractionOptions {
         tables_only: true,
-        table_format: pageclaw_core::model::TableExportFormat::Csv,
+        table_format: tkless_core::model::TableExportFormat::Csv,
         ..Default::default()
     };
 
@@ -523,7 +523,7 @@ fn test_integration_tables_only_csv_export() {
 
 #[test]
 fn test_integration_extraction_metrics_telemetry() {
-    let engine = PageclawEngine::new().expect("Failed to initialize engine");
+    let engine = TklessEngine::new().expect("Failed to initialize engine");
 
     let page_html = r#"
         <!DOCTYPE html>
@@ -576,7 +576,7 @@ fn test_integration_extraction_metrics_telemetry() {
 
 #[test]
 fn test_integration_rss_feed_parsing_and_markdown() {
-    let engine = PageclawEngine::new().expect("Failed to initialize engine");
+    let engine = TklessEngine::new().expect("Failed to initialize engine");
 
     let sample_rss = r#"<?xml version="1.0" encoding="UTF-8"?>
         <rss version="2.0">

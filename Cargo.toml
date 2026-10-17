@@ -1,20 +1,20 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/pageclaw-core",
-    "crates/pageclaw-cli",
+    "crates/tkless-core",
+    "crates/tkless-cli",
 ]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-authors = ["PageClaw Contributors"]
+authors = ["TkLess Contributors"]
 license = "MIT OR Apache-2.0"
-description = "Token-efficient, high-performance web extraction engine for AI agents"
+description = "TkLess: Spend less tokens, perceive more web."
 
 [workspace.dependencies]
 # Internal workspace crates
-pageclaw-core = { path = "crates/pageclaw-core" }
+tkless-core = { path = "crates/tkless-core" }
 
 # Async runtime & networking
 tokio = { version = "1.43", features = ["macros", "rt-multi-thread", "time", "io-util", "io-std"] }

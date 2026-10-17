@@ -4,14 +4,14 @@ mod output;
 use anyhow::{bail, Context, Result};
 use clap::Parser;
 use cli::{CliArgs, CliFormat, SubCommand};
-use pageclaw_core::adapters::BilibiliAdapter;
-use pageclaw_core::downloader::{format_bytes, DownloadProgressReporter};
-use pageclaw_core::model::{ExtractionOptions, FetchOptions};
-use pageclaw_core::{DocumentCache, McpServer, PageclawEngine, PageclawError};
 use std::io::{self, Read, Write};
 use std::path::Path;
 use std::sync::Mutex;
 use std::time::Instant;
+use tkless_core::adapters::BilibiliAdapter;
+use tkless_core::downloader::{format_bytes, DownloadProgressReporter};
+use tkless_core::model::{ExtractionOptions, FetchOptions};
+use tkless_core::{DocumentCache, McpServer, TklessEngine, TklessError};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tracing_subscriber::EnvFilter;
 use url::Url;
@@ -45,10 +45,7 @@ impl DownloadProgressReporter for ConsoleProgressReporter {
             Some(t) => format!(" (total: {})", format_bytes(t)),
             None => String::new(),
         };
-        eprintln!(
-            "[PageClaw] Starting {} download{}...",
-            self.label, total_str
-        );
+        eprintln!("[TkLess] Starting {} download{}...", self.label, total_str);
     }
 
     fn on_progress(&self, downloaded_bytes: u64, total_bytes: Option<u64>) {
@@ -77,12 +74,12 @@ impl DownloadProgressReporter for ConsoleProgressReporter {
             };
             let total_str = format_bytes(total);
             eprint!(
-                "\r[PageClaw] Downloading {}: {:>5.1}% ({:>9} / {:>9}, {:>10})   ",
+                "\r[TkLess] Downloading {}: {:>5.1}% ({:>9} / {:>9}, {:>10})   ",
                 self.label, percent, downloaded_str, total_str, speed_str
             );
         } else {
             eprint!(
-                "\r[PageClaw] Downloading {}: {:>9} ({:>10})   ",
+                "\r[TkLess] Downloading {}: {:>9} ({:>10})   ",
                 self.label, downloaded_str, speed_str
             );
         }
@@ -100,10 +97,10 @@ impl DownloadProgressReporter for ConsoleProgressReporter {
                 format_bytes((total_bytes as f64 / elapsed.as_secs_f64()) as u64)
             )
         } else {
-            "N/A".into()
+            "-".to_string()
         };
         eprintln!(
-            "\r[PageClaw] {} download complete: {} in {:.2?} ({})                    ",
+            "\r[TkLess] {} download complete: {} in {:.2?} ({})                    ",
             self.label,
             format_bytes(total_bytes),
             elapsed,
@@ -116,7 +113,7 @@ impl DownloadProgressReporter for ConsoleProgressReporter {
 async fn main() {
     let args = CliArgs::parse();
     if let Err(err) = run(args).await {
-        let exit_code = if let Some(pe) = err.downcast_ref::<PageclawError>() {
+        let exit_code = if let Some(pe) = err.downcast_ref::<TklessError>() {
             pe.exit_code()
         } else {
             1
@@ -130,10 +127,10 @@ async fn run(args: CliArgs) -> Result<()> {
     // Configure tracing logger to output strictly to stderr
     if !args.quiet {
         let filter_str = match args.verbose {
-            0 => "pageclaw=warn,pageclaw_core=warn",
-            1 => "pageclaw=info,pageclaw_core=info",
-            2 => "pageclaw=debug,pageclaw_core=debug",
-            _ => "pageclaw=trace,pageclaw_core=trace",
+            0 => "tkless=warn,tkless_core=warn",
+            1 => "tkless=info,tkless_core=info",
+            2 => "tkless=debug,tkless_core=debug",
+            _ => "tkless=trace,tkless_core=trace",
         };
 
         let env_filter = EnvFilter::try_new(filter_str).unwrap_or_else(|_| EnvFilter::new("warn"));
@@ -151,7 +148,7 @@ async fn run(args: CliArgs) -> Result<()> {
             custom_headers.push((k.trim().to_string(), v.trim().to_string()));
         } else {
             eprintln!(
-                "[PageClaw warning] Skipping invalid header format (expected Key: Value): '{h}'"
+                "[TkLess warning] Skipping invalid header format (expected Key: Value): '{h}'"
             );
         }
     }
@@ -163,26 +160,26 @@ async fn run(args: CliArgs) -> Result<()> {
         let platform_clean = login_args.platform.trim().to_ascii_lowercase();
         match platform_clean.as_str() {
             "bilibili" | "bili" => {
-                let login_options = pageclaw_core::auth::LoginOptions {
+                let login_options = tkless_core::auth::LoginOptions {
                     output_path: login_args.output.clone(),
                     no_browser: login_args.no_browser,
                     timeout_secs: login_args.timeout_secs,
                 };
 
-                pageclaw_core::auth::execute_login_flow(None, login_options).await?;
+                tkless_core::auth::execute_login_flow(None, login_options).await?;
                 return Ok(());
             }
             "zhihu" => {
                 let login_url = "https://www.zhihu.com/signin";
                 eprintln!("打开浏览器授权登录zhihu：{login_url}");
                 if !login_args.no_browser {
-                    if let Err(e) = pageclaw_core::auth::open_browser(login_url) {
-                        eprintln!("[PageClaw warning] Failed to launch browser: {e}");
+                    if let Err(e) = tkless_core::auth::open_browser(login_url) {
+                        eprintln!("[TkLess warning] Failed to launch browser: {e}");
                     }
                 }
-                eprintln!("[PageClaw] 登录完成后，可将 Cookie 凭据按前缀格式保存至 cookies.txt（自动区分多网站，互不覆盖）：");
+                eprintln!("[TkLess] 登录完成后，可将 Cookie 凭据按前缀格式保存至 cookies.txt（自动区分多网站，互不覆盖）：");
                 eprintln!("  zhihu: d_c0=\"...\"; z_c0=\"...\"");
-                eprintln!("或直接使用命令行参数: pageclaw <URL> --cookie \"...\"");
+                eprintln!("或直接使用命令行参数: tkless <URL> --cookie \"...\"");
                 return Ok(());
             }
             other => {
@@ -205,16 +202,16 @@ async fn run(args: CliArgs) -> Result<()> {
     // Print friendly loading log if target URL is specified upfront
     if !args.quiet && args.cookie.is_none() {
         if let Some(ref cf) = cookie_file_path {
-            if let Ok(c) = pageclaw_core::fetcher::load_cookie_from_file_for_url(
+            if let Ok(c) = tkless_core::fetcher::load_cookie_from_file_for_url(
                 std::path::Path::new(cf),
                 target_url_ref,
             ) {
                 if !c.trim().is_empty() {
                     if let Some(platform) =
-                        target_url_ref.and_then(pageclaw_core::fetcher::detect_platform_from_url)
+                        target_url_ref.and_then(tkless_core::fetcher::detect_platform_from_url)
                     {
                         eprintln!(
-                            "[PageClaw] Automatically loaded [{platform}] credentials from {cf}"
+                            "[TkLess] Automatically loaded [{platform}] credentials from {cf}"
                         );
                     }
                 }
@@ -299,7 +296,7 @@ async fn run(args: CliArgs) -> Result<()> {
         }
 
         let stats = cache.stats();
-        println!("# 🗄️ PageClaw 本地响应缓存状态 (Cache Status)\n");
+        println!("# 🗄️ TkLess 本地响应缓存状态 (Cache Status)\n");
         println!(
             "- **存储路径**: {}",
             stats.cache_dir.unwrap_or_else(|| "内存缓存".to_string())
@@ -308,7 +305,7 @@ async fn run(args: CliArgs) -> Result<()> {
         println!("- **磁盘条目总数 (L2)**: {}", stats.disk_entries);
         println!(
             "- **磁盘总占用空间**: {}",
-            pageclaw_core::downloader::format_bytes(stats.disk_bytes)
+            tkless_core::downloader::format_bytes(stats.disk_bytes)
         );
         return Ok(());
     }
@@ -333,8 +330,8 @@ async fn run(args: CliArgs) -> Result<()> {
             DocumentCache::new(cache_dir, cache_ttl)
         };
 
-        let engine = PageclawEngine::with_options(fetch_options)
-            .context("Failed to initialize PageClaw engine")?;
+        let engine = TklessEngine::with_options(fetch_options)
+            .context("Failed to initialize TkLess engine")?;
         let mcp_server = McpServer::new(engine, cache);
         return mcp_server.run_stdio().await.map_err(Into::into);
     }
@@ -343,8 +340,8 @@ async fn run(args: CliArgs) -> Result<()> {
     // Execution Branch 1.2: Interactive Exploratory REPL Shell
     // -------------------------------------------------------------------------
     if let Some(SubCommand::Shell(_)) = args.command {
-        let engine = PageclawEngine::with_options(fetch_options)
-            .context("Failed to initialize PageClaw engine")?;
+        let engine = TklessEngine::with_options(fetch_options)
+            .context("Failed to initialize TkLess engine")?;
         return run_shell(&engine, &extraction_options).await;
     }
 
@@ -352,11 +349,11 @@ async fn run(args: CliArgs) -> Result<()> {
     // Execution Branch 1.3: Document Version Diff Analysis
     // -------------------------------------------------------------------------
     if let Some(SubCommand::Diff(ref diff_args)) = args.command {
-        let engine = PageclawEngine::with_options(fetch_options)
-            .context("Failed to initialize PageClaw engine")?;
+        let engine = TklessEngine::with_options(fetch_options)
+            .context("Failed to initialize TkLess engine")?;
         let old_text = load_target_text(&diff_args.old_target, &engine).await?;
         let new_text = load_target_text(&diff_args.new_target, &engine).await?;
-        let report = pageclaw_core::diff::compute_diff(&old_text, &new_text);
+        let report = tkless_core::diff::compute_diff(&old_text, &new_text);
 
         if matches!(diff_args.format, CliFormat::Json | CliFormat::Jsonl) {
             println!("{}", serde_json::to_string_pretty(&report)?);
@@ -378,11 +375,11 @@ async fn run(args: CliArgs) -> Result<()> {
     // Execution Branch 1.4: Webpage Tables Extraction & SQL/CSV Export
     // -------------------------------------------------------------------------
     if let Some(SubCommand::Tables(ref tables_args)) = args.command {
-        let engine = PageclawEngine::with_options(fetch_options)
-            .context("Failed to initialize PageClaw engine")?;
+        let engine = TklessEngine::with_options(fetch_options)
+            .context("Failed to initialize TkLess engine")?;
         let html = load_target_html(&tables_args.target, &engine).await?;
         let doc = scraper::Html::parse_document(&html);
-        let mut tables = pageclaw_core::extractor::extract_tables(&doc);
+        let mut tables = tkless_core::extractor::extract_tables(&doc);
 
         if tables.is_empty() {
             bail!("未在目标网页或 HTML 中检测到有效的 <table> 表格元素");
@@ -400,8 +397,8 @@ async fn run(args: CliArgs) -> Result<()> {
             tables = vec![tables.swap_remove(idx)];
         }
 
-        let table_format: pageclaw_core::model::TableExportFormat = tables_args.format.into();
-        if table_format == pageclaw_core::model::TableExportFormat::Sql {
+        let table_format: tkless_core::model::TableExportFormat = tables_args.format.into();
+        if table_format == tkless_core::model::TableExportFormat::Sql {
             let ddl = tables
                 .iter()
                 .enumerate()
@@ -418,7 +415,7 @@ async fn run(args: CliArgs) -> Result<()> {
             println!("{ddl}");
         } else {
             let formatted =
-                pageclaw_core::model::ExtractedTable::format_tables(&tables, table_format);
+                tkless_core::model::ExtractedTable::format_tables(&tables, table_format);
             println!("{formatted}");
         }
         return Ok(());
@@ -433,8 +430,8 @@ async fn run(args: CliArgs) -> Result<()> {
             search_fetch_options.proxy = search_args.proxy.clone();
         }
         search_fetch_options.mobile = search_args.mobile || args.mobile;
-        let engine = PageclawEngine::with_options(search_fetch_options)
-            .context("Failed to initialize PageClaw engine")?;
+        let engine = TklessEngine::with_options(search_fetch_options)
+            .context("Failed to initialize TkLess engine")?;
 
         let effective_query = if search_args.wechat {
             let clean = search_args.query.trim();
@@ -545,7 +542,7 @@ async fn run(args: CliArgs) -> Result<()> {
                 search_opts.cdp_wait_ms = search_args.cdp_wait_ms;
             }
 
-            let items = pageclaw_core::web_search_and_fetch(
+            let items = tkless_core::web_search_and_fetch(
                 &engine,
                 &effective_query,
                 search_args.limit,
@@ -560,15 +557,15 @@ async fn run(args: CliArgs) -> Result<()> {
             let mut payload = match search_args.format {
                 CliFormat::Json => serde_json::to_string_pretty(&items)
                     .context("Failed to serialize search & fetch items to JSON")?,
-                _ => pageclaw_core::format_search_fetch_markdown(&effective_query, &items),
+                _ => tkless_core::format_search_fetch_markdown(&effective_query, &items),
             };
 
             // Enforce overall max-tokens limit if specified
             if let Some(total_limit) = args.max_tokens {
                 let initial_tokens =
-                    pageclaw_core::token::count_tokens(&payload, args.tokenizer.into());
+                    tkless_core::token::count_tokens(&payload, args.tokenizer.into());
                 if initial_tokens > total_limit {
-                    let (truncated_payload, _) = pageclaw_core::token::truncate_to_tokens(
+                    let (truncated_payload, _) = tkless_core::token::truncate_to_tokens(
                         &payload,
                         total_limit,
                         args.tokenizer.into(),
@@ -581,7 +578,7 @@ async fn run(args: CliArgs) -> Result<()> {
             return Ok(());
         }
 
-        let results = pageclaw_core::web_search_with_engine(
+        let results = tkless_core::web_search_with_engine(
             engine.client(),
             &effective_query,
             search_args.limit,
@@ -593,7 +590,7 @@ async fn run(args: CliArgs) -> Result<()> {
         let payload = match search_args.format {
             CliFormat::Json => serde_json::to_string_pretty(&results)
                 .context("Failed to serialize search results to JSON")?,
-            _ => pageclaw_core::format_search_results_markdown(&effective_query, &results),
+            _ => tkless_core::format_search_results_markdown(&effective_query, &results),
         };
 
         output::write_payload(&payload, search_args.output.as_deref())?;
@@ -632,8 +629,8 @@ async fn run(args: CliArgs) -> Result<()> {
         batch_fetch_options.mobile = batch_args.mobile || args.mobile;
 
         let engine = std::sync::Arc::new(
-            PageclawEngine::with_options(batch_fetch_options)
-                .context("Failed to initialize PageClaw engine")?,
+            TklessEngine::with_options(batch_fetch_options)
+                .context("Failed to initialize TkLess engine")?,
         );
 
         let batch_extraction_opts = std::sync::Arc::new(ExtractionOptions {
@@ -667,7 +664,7 @@ async fn run(args: CliArgs) -> Result<()> {
             download_images: false,
             assets_dir: None,
             tables_only: false,
-            table_format: pageclaw_core::model::TableExportFormat::default(),
+            table_format: tkless_core::model::TableExportFormat::default(),
             stats: false,
             remove_selector: args.remove_selector.clone(),
             auto_cdp: args.auto_cdp,
@@ -697,11 +694,11 @@ async fn run(args: CliArgs) -> Result<()> {
                         Ok(doc) => {
                             let title_disp = doc.title.as_deref().unwrap_or("<no title>");
                             eprintln!(
-                                "[PageClaw Batch] [{done}/{total}] OK: \"{title_disp}\" ({url})"
+                                "[TkLess Batch] [{done}/{total}] OK: \"{title_disp}\" ({url})"
                             );
                         }
                         Err(e) => {
-                            eprintln!("[PageClaw Batch] [{done}/{total}] FAILED ({url}): {e}");
+                            eprintln!("[TkLess Batch] [{done}/{total}] FAILED ({url}): {e}");
                         }
                     }
                 }
@@ -739,16 +736,16 @@ async fn run(args: CliArgs) -> Result<()> {
             crawl_fetch_options.proxy = crawl_args.proxy.clone();
         }
         crawl_fetch_options.mobile = crawl_args.mobile || args.mobile;
-        let engine = PageclawEngine::with_options(crawl_fetch_options)
-            .context("Failed to initialize PageClaw engine")?;
+        let engine = TklessEngine::with_options(crawl_fetch_options)
+            .context("Failed to initialize TkLess engine")?;
 
-        let crawl_options = pageclaw_core::CrawlOptions {
+        let crawl_options = tkless_core::CrawlOptions {
             max_depth: crawl_args.max_depth,
             max_pages: crawl_args.max_pages,
             concurrency: crawl_args.concurrency,
             same_domain_only: true,
             same_path_prefix: crawl_args.same_path_prefix,
-            exclude_patterns: pageclaw_core::CrawlOptions::default().exclude_patterns,
+            exclude_patterns: tkless_core::CrawlOptions::default().exclude_patterns,
             sitemap: crawl_args.sitemap,
             dedup: crawl_args.dedup,
             delay_ms: crawl_args.delay_ms,
@@ -760,7 +757,7 @@ async fn run(args: CliArgs) -> Result<()> {
             crawl_extraction_options.cdp_wait_ms = crawl_args.cdp_wait_ms;
         }
 
-        let report = pageclaw_core::crawl_site(
+        let report = tkless_core::crawl_site(
             &engine,
             &crawl_args.url,
             &crawl_options,
@@ -772,15 +769,14 @@ async fn run(args: CliArgs) -> Result<()> {
         let mut payload = match crawl_args.format {
             CliFormat::Json => serde_json::to_string_pretty(&report)
                 .context("Failed to serialize crawl report to JSON")?,
-            CliFormat::Jsonl => pageclaw_core::format_crawl_report_jsonl(&report),
-            _ => pageclaw_core::format_crawl_report_markdown(&report),
+            CliFormat::Jsonl => tkless_core::format_crawl_report_jsonl(&report),
+            _ => tkless_core::format_crawl_report_markdown(&report),
         };
 
         if let Some(total_limit) = args.max_tokens {
-            let initial_tokens =
-                pageclaw_core::token::count_tokens(&payload, args.tokenizer.into());
+            let initial_tokens = tkless_core::token::count_tokens(&payload, args.tokenizer.into());
             if initial_tokens > total_limit {
-                let (truncated_payload, _) = pageclaw_core::token::truncate_to_tokens(
+                let (truncated_payload, _) = tkless_core::token::truncate_to_tokens(
                     &payload,
                     total_limit,
                     args.tokenizer.into(),
@@ -817,24 +813,23 @@ async fn run(args: CliArgs) -> Result<()> {
                 }
                 t_str
             }
-            None => bail!("Missing target URL, '--bili-search <KEYWORD>', or '-'. See 'pageclaw --help' for available options."),
+            None => bail!("Missing target URL, '--bili-search <KEYWORD>', or '-'. See 'tkless --help' for available options."),
         }
     };
 
     let start_time = Instant::now();
-    let engine = PageclawEngine::with_options(fetch_options)
-        .context("Failed to initialize PageClaw engine")?;
+    let engine =
+        TklessEngine::with_options(fetch_options).context("Failed to initialize TkLess engine")?;
 
     // Auto-normalize target (e.g. bare BV1xx411c7mD -> https://www.bilibili.com/video/BV1xx411c7mD)
-    let target = pageclaw_core::adapters::bilibili::normalize_bilibili_url(&raw_target);
+    let target = tkless_core::adapters::bilibili::normalize_bilibili_url(&raw_target);
 
     // -------------------------------------------------------------------------
     // Dedicated Media Action 1: Download Video Stream
     // -------------------------------------------------------------------------
     if let Some(ref dest_val) = args.bili_dl {
-        let (bvid, default_page) =
-            pageclaw_core::adapters::bilibili::extract_video_info(&target)
-                .context("The --bili-dl option requires a valid Bilibili video URL or BV ID")?;
+        let (bvid, default_page) = tkless_core::adapters::bilibili::extract_video_info(&target)
+            .context("The --bili-dl option requires a valid Bilibili video URL or BV ID")?;
 
         let page_num = args.bili_page.map(|p| p as usize).unwrap_or(default_page);
 
@@ -857,7 +852,7 @@ async fn run(args: CliArgs) -> Result<()> {
         .context("Failed to download video stream")?;
 
         if !args.quiet {
-            eprintln!("[PageClaw] Saved video to: {}", saved_path.display());
+            eprintln!("[TkLess] Saved video to: {}", saved_path.display());
         }
         return Ok(());
     }
@@ -866,7 +861,7 @@ async fn run(args: CliArgs) -> Result<()> {
     // Dedicated Media Action 2: Download Video Cover
     // -------------------------------------------------------------------------
     if let Some(ref dest_val) = args.bili_dl_cover {
-        let (bvid, _) = pageclaw_core::adapters::bilibili::extract_video_info(&target)
+        let (bvid, _) = tkless_core::adapters::bilibili::extract_video_info(&target)
             .context("The --bili-dl-cover option requires a valid Bilibili video URL or BV ID")?;
 
         let user_dest = if dest_val.is_empty() {
@@ -882,7 +877,7 @@ async fn run(args: CliArgs) -> Result<()> {
                 .context("Failed to download video cover image")?;
 
         if !args.quiet {
-            eprintln!("[PageClaw] Saved cover to: {}", saved_path.display());
+            eprintln!("[TkLess] Saved cover to: {}", saved_path.display());
         }
         return Ok(());
     }
@@ -891,22 +886,22 @@ async fn run(args: CliArgs) -> Result<()> {
     // Dedicated Visual Action: Capture Screenshot via CDP Headless Browser
     // -------------------------------------------------------------------------
     if let Some(ref shot_path) = args.screenshot {
-        let cdp_ep = pageclaw_core::cdp::resolve_cdp_endpoint(args.cdp.as_deref(), true)
+        let cdp_ep = tkless_core::cdp::resolve_cdp_endpoint(args.cdp.as_deref(), true)
             .unwrap_or_else(|| "http://127.0.0.1:9222".to_string());
         let parsed_url = url::Url::parse(&target)?;
-        let cdp_opts = pageclaw_core::cdp::CdpOptions {
+        let cdp_opts = tkless_core::cdp::CdpOptions {
             endpoint: cdp_ep,
             wait_ms: args.cdp_wait_ms.or(Some(1000)),
             timeout_ms: None,
             user_agent: args.user_agent.clone(),
             cookie: engine.fetcher().resolve_cookie_for_url(&parsed_url),
         };
-        let img_bytes = pageclaw_core::capture_screenshot_via_cdp(&target, &cdp_opts, None).await?;
+        let img_bytes = tkless_core::capture_screenshot_via_cdp(&target, &cdp_opts, None).await?;
         std::fs::write(shot_path, &img_bytes)?;
         if !args.quiet {
             eprintln!(
-                "[PageClaw] Successfully saved visual screenshot ({}) to: {}",
-                pageclaw_core::downloader::format_bytes(img_bytes.len() as u64),
+                "[TkLess] Successfully saved visual screenshot ({}) to: {}",
+                tkless_core::downloader::format_bytes(img_bytes.len() as u64),
                 shot_path.display()
             );
         }
@@ -935,7 +930,7 @@ async fn run(args: CliArgs) -> Result<()> {
             if !args.quiet {
                 let title_disp = cached_doc.title.as_deref().unwrap_or("<no title>");
                 eprintln!(
-                    "[PageClaw] Cache hit: \"{}\" (Tokens: {})",
+                    "[TkLess] Cache hit: \"{}\" (Tokens: {})",
                     title_disp, cached_doc.token_count
                 );
             }
@@ -969,20 +964,20 @@ async fn run(args: CliArgs) -> Result<()> {
             stdin_content
         } else if let Some(ref cdp_endpoint) = args.cdp {
             let parsed_url = url::Url::parse(&target)?;
-            let cdp_opts = pageclaw_core::cdp::CdpOptions {
+            let cdp_opts = tkless_core::cdp::CdpOptions {
                 endpoint: cdp_endpoint.clone(),
                 wait_ms: args.cdp_wait_ms.or(Some(1000)),
                 timeout_ms: None,
                 user_agent: args.user_agent.clone(),
                 cookie: engine.fetcher().resolve_cookie_for_url(&parsed_url),
             };
-            pageclaw_core::cdp::fetch_html_via_cdp(&target, &cdp_opts).await?
+            tkless_core::cdp::fetch_html_via_cdp(&target, &cdp_opts).await?
         } else {
             let resp = engine.fetcher().fetch(&target).await?;
             resp.html
         };
 
-        let report = pageclaw_core::schema::scaffold_dom_skeleton(&raw_html);
+        let report = tkless_core::schema::scaffold_dom_skeleton(&raw_html);
         output::write_payload(&report.summary_markdown, args.output_file.as_deref())?;
         return Ok(());
     }
@@ -1038,13 +1033,13 @@ async fn run(args: CliArgs) -> Result<()> {
     if !args.quiet {
         let title_disp = doc.title.as_deref().unwrap_or("<no title>");
         eprintln!(
-            "[PageClaw] Finished in {:.2?}: \"{}\" (Status: {}, Tokens: {}, Truncated: {})",
+            "[TkLess] Finished in {:.2?}: \"{}\" (Status: {}, Tokens: {}, Truncated: {})",
             elapsed, title_disp, doc.status, doc.token_count, doc.truncated
         );
 
         if args.stats {
             if let Some(ref m) = doc.metrics {
-                eprintln!("\n[PageClaw Telemetry & Token Economy]");
+                eprintln!("\n[TkLess Telemetry & Token Economy]");
                 eprintln!("----------------------------------------------------------");
                 eprintln!("Target URL        : {}", doc.url);
                 eprintln!(
@@ -1053,8 +1048,8 @@ async fn run(args: CliArgs) -> Result<()> {
                 );
                 eprintln!(
                     "Payload Reduction : {} -> {} (降噪率: {:.1}%)",
-                    pageclaw_core::downloader::format_bytes(m.raw_bytes as u64),
-                    pageclaw_core::downloader::format_bytes(m.cleaned_bytes as u64),
+                    tkless_core::downloader::format_bytes(m.raw_bytes as u64),
+                    tkless_core::downloader::format_bytes(m.cleaned_bytes as u64),
                     m.noise_reduction_percent
                 );
                 eprintln!(
@@ -1071,12 +1066,12 @@ async fn run(args: CliArgs) -> Result<()> {
 
     // Multi-file directory export divided by headings if --out-dir is specified
     if let Some(ref out_dir) = args.out_dir {
-        let sections = pageclaw_core::split_markdown_by_headings(&doc.content, 2);
+        let sections = tkless_core::split_markdown_by_headings(&doc.content, 2);
         let _written =
-            pageclaw_core::export_sections_to_dir(&sections, out_dir, doc.title.as_deref())?;
+            tkless_core::export_sections_to_dir(&sections, out_dir, doc.title.as_deref())?;
         if !args.quiet {
             eprintln!(
-                "[PageClaw] Successfully exported {} sections and index.md to: {}",
+                "[TkLess] Successfully exported {} sections and index.md to: {}",
                 sections.len(),
                 out_dir.display()
             );
@@ -1120,14 +1115,14 @@ fn apply_search_params(url_str: &str, page: Option<u32>, order: Option<&str>) ->
     }
 }
 
-async fn load_target_text(target: &str, engine: &PageclawEngine) -> Result<String> {
+async fn load_target_text(target: &str, engine: &TklessEngine) -> Result<String> {
     if target.starts_with("http://") || target.starts_with("https://") {
         let doc = engine
             .process_url(
                 target,
                 &ExtractionOptions {
-                    mode: pageclaw_core::model::ExtractionMode::Article,
-                    format: pageclaw_core::model::OutputFormat::Markdown,
+                    mode: tkless_core::model::ExtractionMode::Article,
+                    format: tkless_core::model::OutputFormat::Markdown,
                     ..Default::default()
                 },
             )
@@ -1140,7 +1135,7 @@ async fn load_target_text(target: &str, engine: &PageclawEngine) -> Result<Strin
     }
 }
 
-async fn load_target_html(target: &str, engine: &PageclawEngine) -> Result<String> {
+async fn load_target_html(target: &str, engine: &TklessEngine) -> Result<String> {
     if target == "-" {
         let mut buffer = String::new();
         io::stdin()
@@ -1167,9 +1162,9 @@ async fn load_target_html(target: &str, engine: &PageclawEngine) -> Result<Strin
 }
 
 /// Interactive REPL shell session for exploratory scraping, search, and feed inspection.
-async fn run_shell(engine: &PageclawEngine, base_options: &ExtractionOptions) -> Result<()> {
+async fn run_shell(engine: &TklessEngine, base_options: &ExtractionOptions) -> Result<()> {
     println!("╔════════════════════════════════════════════════════════════════╗");
-    println!("║   PageClaw Interactive Shell (REPL 探索会话模式)               ║");
+    println!("║   TkLess Interactive Shell (REPL 探索会话模式)                 ║");
     println!("║   输入 'help' 查看指令指南，输入 'exit' 或 'quit' 退出会话      ║");
     println!("╚════════════════════════════════════════════════════════════════╝\n");
 
@@ -1178,7 +1173,7 @@ async fn run_shell(engine: &PageclawEngine, base_options: &ExtractionOptions) ->
     let mut lines = reader.lines();
 
     loop {
-        eprint!("pageclaw> ");
+        eprint!("tkless> ");
         let _ = io::stderr().flush();
 
         let line = match lines.next_line().await {
@@ -1230,16 +1225,16 @@ async fn run_shell(engine: &PageclawEngine, base_options: &ExtractionOptions) ->
                 if query.is_empty() {
                     eprintln!("用法: search <query>");
                 } else {
-                    match pageclaw_core::search::web_search_with_engine(
+                    match tkless_core::search::web_search_with_engine(
                         engine.client(),
                         &query,
                         5,
-                        pageclaw_core::model::SearchEngineKind::Bing,
+                        tkless_core::model::SearchEngineKind::Bing,
                     )
                     .await
                     {
                         Ok(results) => {
-                            let md = pageclaw_core::search::format_search_results_markdown(
+                            let md = tkless_core::search::format_search_results_markdown(
                                 &query, &results,
                             );
                             println!("\n{md}\n");
@@ -1251,11 +1246,11 @@ async fn run_shell(engine: &PageclawEngine, base_options: &ExtractionOptions) ->
             "feed" => {
                 if let Some(feed_url) = rest.first() {
                     match engine.fetcher().fetch(feed_url).await {
-                        Ok(resp) => match pageclaw_core::feed::parse_feed(&resp.html) {
+                        Ok(resp) => match tkless_core::feed::parse_feed(&resp.html) {
                             Ok(channel) => {
                                 println!(
                                     "\n{}\n",
-                                    pageclaw_core::feed::format_feed_markdown(&channel)
+                                    tkless_core::feed::format_feed_markdown(&channel)
                                 );
                             }
                             Err(e) => eprintln!("❌ 解析订阅源失败: {e}"),
@@ -1271,13 +1266,13 @@ async fn run_shell(engine: &PageclawEngine, base_options: &ExtractionOptions) ->
                     match engine.fetcher().fetch(target_url).await {
                         Ok(resp) => {
                             let doc = scraper::Html::parse_document(&resp.html);
-                            let tables = pageclaw_core::extractor::extract_tables(&doc);
+                            let tables = tkless_core::extractor::extract_tables(&doc);
                             if tables.is_empty() {
                                 eprintln!("⚠️ 未在页面中检测到 <table> 表格元素");
                             } else {
-                                let formatted = pageclaw_core::model::ExtractedTable::format_tables(
+                                let formatted = tkless_core::model::ExtractedTable::format_tables(
                                     &tables,
-                                    pageclaw_core::model::TableExportFormat::Markdown,
+                                    tkless_core::model::TableExportFormat::Markdown,
                                 );
                                 println!("\n{formatted}\n");
                             }
@@ -1293,7 +1288,7 @@ async fn run_shell(engine: &PageclawEngine, base_options: &ExtractionOptions) ->
                     match engine.process_url(target_url, base_options).await {
                         Ok(doc) => {
                             let bullets =
-                                pageclaw_core::summarizer::extract_key_takeaways(&doc.content, 4);
+                                tkless_core::summarizer::extract_key_takeaways(&doc.content, 4);
                             println!("\n### 💡 核心要点速览 (Key Takeaways):\n");
                             for b in bullets {
                                 println!("- {}", b.trim());
@@ -1310,11 +1305,11 @@ async fn run_shell(engine: &PageclawEngine, base_options: &ExtractionOptions) ->
                 if let Some(target_url) = rest.first() {
                     match engine.process_url(target_url, base_options).await {
                         Ok(doc) => {
-                            let chunks = pageclaw_core::chunker::chunk_markdown(
+                            let chunks = tkless_core::chunker::chunk_markdown(
                                 &doc.content,
                                 500,
                                 50,
-                                pageclaw_core::model::TokenizerKind::O200k,
+                                tkless_core::model::TokenizerKind::O200k,
                             );
                             println!("\n# ✂️ 语义分块输出 (共 {} 块):\n", chunks.len());
                             for c in chunks {
@@ -1346,7 +1341,7 @@ async fn run_shell(engine: &PageclawEngine, base_options: &ExtractionOptions) ->
                     let doc2 = engine.process_url(url2, base_options).await;
                     match (doc1, doc2) {
                         (Ok(d1), Ok(d2)) => {
-                            let rep = pageclaw_core::diff::compute_diff(&d1.content, &d2.content);
+                            let rep = tkless_core::diff::compute_diff(&d1.content, &d2.content);
                             println!("\n# 🔄 页面差异比对结果:\n");
                             println!(
                                 "> 新增: +{} | 删除: -{} | 变更比例: {:.1}%\n",

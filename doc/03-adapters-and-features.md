@@ -1,12 +1,13 @@
 # 03 - 平台适配器矩阵与功能特性实战手册
 
-本文档是 PageClaw 的全量功能特性、15+ 平台适配器与 CLI 命令行使用手册，旨在为开发者与 AI Agent 管道集成提供完整的参考标准。
+本文档是 TkLess 的全量功能特性、15+ 平台适配器与 CLI 命令行使用手册，旨在为开发者与 AI Agent 管道集成提供完整的参考标准。
+> **Spend less tokens, perceive more web.**
 
 ---
 
 ## 1. 平台专属适配器矩阵 (15+ Platforms)
 
-PageClaw 内置自动化平台识别调度器，当输入的 URL 命中受支持的主流平台时，会自动激活专属的数据提取与降噪策略：
+TkLess 内置自动化平台识别调度器，当输入的 URL 命中受支持的主流平台时，会自动激活专属的数据提取与降噪策略：
 
 | 平台名称 | 匹配域名规则 | 核心支持能力与专属选项 |
 | :--- | :--- | :--- |
@@ -34,46 +35,46 @@ PageClaw 内置自动化平台识别调度器，当输入的 URL 命中受支持
 ### 2.1 基础网页抓取与输出控制
 ```bash
 # 抓取网页并输出纯净 GFM Markdown
-pageclaw https://example.com/article
+tkless https://example.com/article
 
 # 限制上下文 Token 预算（段落安全断句，自动闭合未封闭的代码块）
-pageclaw https://example.com/long-page --max-tokens 1500
+tkless https://example.com/long-page --max-tokens 1500
 
 # 输出带 YAML 前置元数据的 Markdown (Title, URL, Date, Author)
-pageclaw https://example.com/article --frontmatter
+tkless https://example.com/article --frontmatter
 
 # 剔除正文中的图片或超链接（大幅压减 Token 消耗）
-pageclaw https://example.com/article --no-images --no-links
+tkless https://example.com/article --no-images --no-links
 
 # 输出完整的结构化 JSON（包含 content, metadata, tokens 等字段）
-pageclaw https://example.com/article -f json
+tkless https://example.com/article -f json
 ```
 
 ### 2.2 DOM 定向提取与负向剪枝
 ```bash
 # 仅提取特定 CSS 选择器容器内容
-pageclaw https://docs.rs/tokio/latest/tokio/ --selector "div.docblock"
+tkless https://docs.rs/tokio/latest/tokio/ --selector "div.docblock"
 
 # 剔除正文中的指定噪音容器（负向选择器，支持逗号分隔多个选择器）
-pageclaw https://example.com/article -R ".advertisement, .comment-box, #author-sidebar"
+tkless https://example.com/article -R ".advertisement, .comment-box, #author-sidebar"
 ```
 
 ### 2.3 网页表格一键提取与 SQL/CSV 转换
 ```bash
 # 仅提取网页中的全部数据表，并转为 SQLite/PostgreSQL 兼容的 DDL 与 INSERT 语句
-pageclaw https://finance.example.com/report --tables-only --table-format sql
+tkless https://finance.example.com/report --tables-only --table-format sql
 
 # 将数据表导出为标准 CSV 格式
-pageclaw https://en.wikipedia.org/wiki/List_of_countries --tables-only --table-format csv
+tkless https://en.wikipedia.org/wiki/List_of_countries --tables-only --table-format csv
 ```
 
 ### 2.4 Schema 驱动的结构化实体抽取 (免 LLM 消耗)
 ```bash
 # 自动探测页面的重复列表容器并生成推荐的 Schema 模版
-pageclaw https://news.ycombinator.com/ --scaffold
+tkless https://news.ycombinator.com/ --scaffold
 
 # 使用内联 Schema 直接抽取特定结构化实体数组
-pageclaw https://news.ycombinator.com/ --schema '{
+tkless https://news.ycombinator.com/ --schema '{
   "items": {
     "selector": "tr.athing",
     "fields": {
@@ -88,34 +89,34 @@ pageclaw https://news.ycombinator.com/ --schema '{
 ### 2.5 语义感知分块与长文档目录拆分 (RAG 增强)
 ```bash
 # 启用语义切块（保护代码块与段落完整性，输出切块 JSON 流）
-pageclaw https://docs.rs/tokio/latest/tokio/ --chunk --chunk-size 500
+tkless https://docs.rs/tokio/latest/tokio/ --chunk --chunk-size 500
 
 # 将长篇文档按标题拆分为多个独立 Markdown 文件并生成 index.md 导航索引
-pageclaw https://en.wikipedia.org/wiki/Rust_(programming_language) --out-dir ./rust_doc
+tkless https://en.wikipedia.org/wiki/Rust_(programming_language) --out-dir ./rust_doc
 ```
 
 ### 2.6 CDP 无头浏览器渲染与高清长截图
 ```bash
 # 针对复杂 SPA 动态页面，调用本地 Chrome 渲染并抓取高清整页截图
-pageclaw https://dashboard.example.com/app --screenshot ./dashboard.png
+tkless https://dashboard.example.com/app --screenshot ./dashboard.png
 ```
 
 ### 2.7 免 API Key 全网搜索与即搜即抓
 ```bash
 # 使用 Bing/Google 检索关键词并以 Markdown 呈现结果
-pageclaw search "Rust async tokio tutorial" --limit 5
+tkless search "Rust async tokio tutorial" --limit 5
 
 # 针对微信公众号定向检索
-pageclaw search "大模型 Agent 架构设计" --wechat --limit 5
+tkless search "大模型 Agent 架构设计" --wechat --limit 5
 
 # 搜索前 3 条结果并在一次调用中直接抓取其清洗后的正文内容
-pageclaw search "DeepSeek v3 架构解析" --limit 3 --fetch-content
+tkless search "DeepSeek v3 架构解析" --limit 3 --fetch-content
 ```
 
-### 2.8 交互式 REPL 探索会话命令行 (pageclaw shell)
+### 2.8 交互式 REPL 探索会话命令行 (tkless shell)
 ```bash
 # 启动交互式终端 REPL，无需重复冷启动进程即可执行一系列探索操作
-pageclaw shell
+tkless shell
 
 # 交互式会话支持指令：
 #   fetch <url>         - 抓取目标网页并输出清洗后的 Markdown
@@ -128,25 +129,25 @@ pageclaw shell
 #   help / exit         - 查看帮助或退出会话
 ```
 
-### 2.9 网页表格提取与格式转换子命令 (pageclaw tables)
+### 2.9 网页表格提取与格式转换子命令 (tkless tables)
 ```bash
 # 提取网页中的全部表格并直接导出为 SQLite/PostgreSQL 兼容的 SQL DDL 与 INSERT
-pageclaw tables https://finance.example.com/report --format sql
+tkless tables https://finance.example.com/report --format sql
 
 # 从本地 HTML 文件或管道提取表格并转为 CSV
-pageclaw tables ./report.html --format csv --index 0
+tkless tables ./report.html --format csv --index 0
 
 # 指定自定义 SQL 数据表名称
-pageclaw tables https://example.com/stats --format sql --table-name "annual_metrics"
+tkless tables https://example.com/stats --format sql --table-name "annual_metrics"
 ```
 
-### 2.10 文档版本差异分析子命令 (pageclaw diff)
+### 2.10 文档版本差异分析子命令 (tkless diff)
 ```bash
 # 对比两个网页版本，输出统一 Diff 视图与增删行级指标
-pageclaw diff https://example.com/v1.0 https://example.com/v2.0
+tkless diff https://example.com/v1.0 https://example.com/v2.0
 
 # 对比本地两份 Markdown 文档并输出结构化 JSON 报表
-pageclaw diff ./spec_v1.md ./spec_v2.md -f json
+tkless diff ./spec_v1.md ./spec_v2.md -f json
 ```
 
 ---
@@ -155,8 +156,8 @@ pageclaw diff ./spec_v1.md ./spec_v2.md -f json
 
 ### 3.1 Claude Code / Cursor 自动化调研 Prompt 模板
 ```text
-请使用 pageclaw 命令行工具，针对用户提出的技术问题进行深度调研：
-1. 优先使用 `pageclaw search "<关键词>" --limit 3 --fetch-content` 获取前 3 篇核心文章。
-2. 若遇到长篇文档，使用 `pageclaw "<URL>" --max-tokens 2000 --summarize` 提取要点。
-3. 若需提取对比表格，使用 `pageclaw "<URL>" --tables-only --table-format markdown`。
+请使用 tkless 命令行工具，针对用户提出的技术问题进行深度调研：
+1. 优先使用 `tkless search "<关键词>" --limit 3 --fetch-content` 获取前 3 篇核心文章。
+2. 若遇到长篇文档，使用 `tkless "<URL>" --max-tokens 2000 --summarize` 提取要点。
+3. 若需提取对比表格，使用 `tkless "<URL>" --tables-only --table-format markdown`。
 ```

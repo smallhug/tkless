@@ -1,10 +1,10 @@
-use pageclaw_core::cache::DocumentCache;
-use pageclaw_core::mcp::McpServer;
-use pageclaw_core::PageclawEngine;
+use tkless_core::cache::DocumentCache;
+use tkless_core::mcp::McpServer;
+use tkless_core::TklessEngine;
 
 #[tokio::test]
 async fn test_mcp_protocol_lifecycle() {
-    let engine = PageclawEngine::new().expect("Engine should initialize");
+    let engine = TklessEngine::new().expect("Engine should initialize");
     let cache = DocumentCache::memory_only(300);
     let server = McpServer::new(engine, cache);
 
@@ -17,7 +17,7 @@ async fn test_mcp_protocol_lifecycle() {
     assert_eq!(init_res.id, serde_json::json!(1));
     let res_val = init_res.result.expect("Result should be present");
     assert_eq!(res_val["protocolVersion"], "2024-11-05");
-    assert_eq!(res_val["serverInfo"]["name"], "pageclaw");
+    assert_eq!(res_val["serverInfo"]["name"], "tkless");
 
     // 2. Initialized Notification (should return None)
     let initialized_notif = r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#;
@@ -464,13 +464,13 @@ async fn test_mcp_protocol_lifecycle() {
     assert!(convert_sql.contains("INSERT INTO quarterly_financials"));
     assert!(convert_sql.contains("Q1 2026"));
 
-    // 5r. Tool Call: export_tables with pageclaw_ prefix and CSV format
+    // 5r. Tool Call: export_tables with tkless_ prefix and CSV format
     let export_req = serde_json::json!({
         "jsonrpc": "2.0",
         "id": 22,
         "method": "tools/call",
         "params": {
-            "name": "pageclaw_export_tables",
+            "name": "tkless_export_tables",
             "arguments": {
                 "html": "<table><thead><tr><th>Asset</th><th>Value</th></tr></thead><tbody><tr><td>Bitcoin</td><td>95000</td></tr><tr><td>Ethereum</td><td>3500</td></tr></tbody></table>",
                 "format": "csv",
@@ -489,15 +489,15 @@ async fn test_mcp_protocol_lifecycle() {
     assert!(export_csv.contains("Asset,Value"));
     assert!(export_csv.contains("Bitcoin,95000"));
 
-    // 5s. Tool Call: chunk_markdown with pageclaw_ prefix
+    // 5s. Tool Call: chunk_markdown with tkless_ prefix
     let chunk_md_req = serde_json::json!({
         "jsonrpc": "2.0",
         "id": 23,
         "method": "tools/call",
         "params": {
-            "name": "pageclaw_chunk_markdown",
+            "name": "tkless_chunk_markdown",
             "arguments": {
-                "markdown": "# Overview\nPageClaw is an ultra-fast token-efficient extraction engine for LLMs.\n## Architecture\nBuilt in pure Rust with strict stream separation and MCP stdio support.\n## Features\nSupports 15+ platform adapters.",
+                "markdown": "# Overview\nTkLess is an ultra-fast token-efficient extraction engine for LLMs.\n## Architecture\nBuilt in pure Rust with strict stream separation and MCP stdio support.\n## Features\nSupports 15+ platform adapters.",
                 "chunk_size": 25,
                 "chunk_overlap": 5,
                 "format": "json"
@@ -518,17 +518,17 @@ async fn test_mcp_protocol_lifecycle() {
     assert!(chunks_arr[0]["content"]
         .as_str()
         .unwrap()
-        .contains("PageClaw"));
+        .contains("TkLess"));
 
-    // 5t. Tool Call: summarize_content with pageclaw_ prefix
+    // 5t. Tool Call: summarize_content with tkless_ prefix
     let sum_content_req = serde_json::json!({
         "jsonrpc": "2.0",
         "id": 24,
         "method": "tools/call",
         "params": {
-            "name": "pageclaw_summarize_content",
+            "name": "tkless_summarize_content",
             "arguments": {
-                "text": "PageClaw provides an ultra-fast web content extraction engine designed specifically for LLMs. By stripping aggressive advertisements and noisy navigation elements, PageClaw reduces LLM context token consumption by up to 90%. Native adapters for GitHub, Bilibili, WeChat, Zhihu, and Wikipedia are included.",
+                "text": "TkLess provides an ultra-fast web content extraction engine designed specifically for LLMs. By stripping aggressive advertisements and noisy navigation elements, TkLess reduces LLM context token consumption by up to 90%. Native adapters for GitHub, Bilibili, WeChat, Zhihu, and Wikipedia are included.",
                 "max_bullets": 2,
                 "format": "json"
             }
@@ -545,13 +545,13 @@ async fn test_mcp_protocol_lifecycle() {
     let parsed_sum: serde_json::Value = serde_json::from_str(sum_content_text).unwrap();
     assert!(parsed_sum.as_array().unwrap().len() <= 2);
 
-    // 5u. Tool Call: diff_documents with pageclaw_ prefix
+    // 5u. Tool Call: diff_documents with tkless_ prefix (also tests backward-compatible pageclaw_ prefix)
     let diff_doc_req = serde_json::json!({
         "jsonrpc": "2.0",
         "id": 25,
         "method": "tools/call",
         "params": {
-            "name": "pageclaw_diff_documents",
+            "name": "tkless_diff_documents",
             "arguments": {
                 "old_text": "Version 1.0\nInitial release",
                 "new_text": "Version 1.1\nInitial release\nAdded MCP extensions",
@@ -591,7 +591,7 @@ async fn test_mcp_protocol_lifecycle() {
 
 #[tokio::test]
 async fn test_mcp_progress_notification_streaming() {
-    let engine = PageclawEngine::new().expect("Engine should initialize");
+    let engine = TklessEngine::new().expect("Engine should initialize");
     let cache = DocumentCache::memory_only(300);
     let server = McpServer::new(engine, cache);
 

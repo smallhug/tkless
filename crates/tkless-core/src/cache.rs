@@ -356,11 +356,11 @@ fn current_time_secs() -> u64 {
 }
 
 fn resolve_default_cache_dir() -> Option<PathBuf> {
-    let local = Path::new(".pageclaw_cache");
+    let local = Path::new(".tkless_cache");
     if fs::create_dir_all(local).is_ok() {
         return Some(local.to_path_buf());
     }
-    let temp = std::env::temp_dir().join("pageclaw_cache");
+    let temp = std::env::temp_dir().join("tkless_cache");
     let _ = fs::create_dir_all(&temp);
     Some(temp)
 }

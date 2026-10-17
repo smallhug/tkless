@@ -1,8 +1,8 @@
 use anyhow::{Context, Result};
-use pageclaw_core::model::{OutputFormat, PageDocument};
 use std::fs::File;
 use std::io::{self, Write};
 use std::path::Path;
+use tkless_core::model::{OutputFormat, PageDocument};
 
 /// Renders the extracted document according to the requested format and flags,
 /// writing the payload to stdout or a designated output file.
@@ -82,7 +82,7 @@ pub fn write_payload_streaming(
 /// Formats extracted document chunks into a human and agent readable Markdown document.
 fn format_chunks_markdown(
     doc: &PageDocument,
-    chunks: &[pageclaw_core::model::DocumentChunk],
+    chunks: &[tkless_core::model::DocumentChunk],
 ) -> String {
     let mut out = String::new();
     out.push_str(&format!(

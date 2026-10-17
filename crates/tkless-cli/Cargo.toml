@@ -1,17 +1,17 @@
 [package]
-name = "pageclaw-cli"
+name = "tkless-cli"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
-description = "Fast CLI tool for token-efficient web content extraction"
+description = "TkLess CLI - Spend less tokens, perceive more web"
 
 [[bin]]
-name = "pageclaw"
+name = "tkless"
 path = "src/main.rs"
 
 [dependencies]
-pageclaw-core.workspace = true
+tkless-core.workspace = true
 scraper.workspace = true
 clap.workspace = true
 tokio.workspace = true

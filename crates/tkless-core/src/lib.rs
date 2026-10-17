@@ -45,7 +45,7 @@ pub use downloader::{
     download_and_rewrite_markdown_images, download_file, format_bytes, DownloadOptions,
     DownloadProgressReporter,
 };
-pub use error::PageclawError;
+pub use error::{PageclawError, TklessError};
 pub use feed::{format_feed_markdown, is_feed_xml, parse_feed, FeedChannel, FeedItem};
 pub use mcp::McpServer;
 pub use model::{
@@ -77,19 +77,22 @@ use url::Url;
 /// The central engine coordinating web fetching, sanitization, markdown conversion,
 /// metadata extraction, and token budget management.
 #[derive(Clone)]
-pub struct PageclawEngine {
+pub struct TklessEngine {
     fetcher: Fetcher,
     markdown_converter: MarkdownConverter,
     adapter_registry: AdapterRegistry,
 }
 
-impl Default for PageclawEngine {
+/// Backward-compatible type alias for `TklessEngine`.
+pub type PageclawEngine = TklessEngine;
+
+impl Default for TklessEngine {
     fn default() -> Self {
-        Self::new().expect("Failed to initialize default PageclawEngine")
+        Self::new().expect("Failed to initialize default TklessEngine")
     }
 }
 
-impl PageclawEngine {
+impl TklessEngine {
     /// Creates a new engine instance with default network options.
     pub fn new() -> Result<Self, PageclawError> {
         Self::with_options(FetchOptions::default())

@@ -1480,49 +1480,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "pageclaw-cli"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "pageclaw-core",
- "scraper",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "url",
- "winres",
-]
-
-[[package]]
-name = "pageclaw-core"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "criterion",
- "ego-tree",
- "encoding_rs",
- "flate2",
- "futures-util",
- "htmd",
- "qrcode",
- "readability",
- "regex",
- "reqwest 0.12.28",
- "scraper",
- "serde",
- "serde_json",
- "thiserror",
- "tiktoken-rs",
- "tokio",
- "tokio-tungstenite",
- "tracing",
- "url",
-]
-
-[[package]]
 name = "parking_lot"
 version = "0.12.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2526,6 +2483,49 @@ name = "tinyvec"
 version = "1.13.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fd3ca314f692efd6c868f8408f53fe444634a845f96c028b97d35f6a1f79f0ee"
+
+[[package]]
+name = "tkless-cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "scraper",
+ "serde",
+ "serde_json",
+ "tkless-core",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+ "winres",
+]
+
+[[package]]
+name = "tkless-core"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "criterion",
+ "ego-tree",
+ "encoding_rs",
+ "flate2",
+ "futures-util",
+ "htmd",
+ "qrcode",
+ "readability",
+ "regex",
+ "reqwest 0.12.28",
+ "scraper",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tiktoken-rs",
+ "tokio",
+ "tokio-tungstenite",
+ "tracing",
+ "url",
+]
 
 [[package]]
 name = "tokio"

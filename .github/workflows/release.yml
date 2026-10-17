@@ -17,25 +17,25 @@ jobs:
         include:
           - target: x86_64-pc-windows-msvc
             os: windows-latest
-            artifact_name: pageclaw-windows-amd64.zip
-            binary_name: pageclaw.exe
+            artifact_name: tkless-windows-amd64.zip
+            binary_name: tkless.exe
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
-            artifact_name: pageclaw-linux-amd64.tar.gz
-            binary_name: pageclaw
+            artifact_name: tkless-linux-amd64.tar.gz
+            binary_name: tkless
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-latest
-            artifact_name: pageclaw-linux-arm64.tar.gz
-            binary_name: pageclaw
+            artifact_name: tkless-linux-arm64.tar.gz
+            binary_name: tkless
             use_cross: true
           - target: x86_64-apple-darwin
             os: macos-13
-            artifact_name: pageclaw-darwin-amd64.tar.gz
-            binary_name: pageclaw
+            artifact_name: tkless-darwin-amd64.tar.gz
+            binary_name: tkless
           - target: aarch64-apple-darwin
             os: macos-latest
-            artifact_name: pageclaw-darwin-arm64.tar.gz
-            binary_name: pageclaw
+            artifact_name: tkless-darwin-arm64.tar.gz
+            binary_name: tkless
 
     steps:
       - name: Checkout repository
@@ -53,9 +53,9 @@ jobs:
       - name: Build Release Binary
         run: |
           if [ "${{ matrix.use_cross }}" = "true" ]; then
-            cross build --release --target ${{ matrix.target }} -p pageclaw-cli
+            cross build --release --target ${{ matrix.target }} -p tkless-cli
           else
-            cargo build --release --target ${{ matrix.target }} -p pageclaw-cli
+            cargo build --release --target ${{ matrix.target }} -p tkless-cli
           fi
         shell: bash
 
