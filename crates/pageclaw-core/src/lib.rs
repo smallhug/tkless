@@ -10,6 +10,7 @@ pub mod chunker;
 pub mod cleaner;
 pub mod crawler;
 pub mod dedup;
+pub mod diff;
 pub mod downloader;
 pub mod error;
 pub mod extractor;
@@ -39,6 +40,7 @@ pub use crawler::{
     SiteCrawlReport,
 };
 pub use dedup::{hamming_distance, is_near_duplicate, simhash, similarity_ratio};
+pub use diff::{compute_diff, DiffReport};
 pub use downloader::{
     download_and_rewrite_markdown_images, download_file, format_bytes, DownloadOptions,
     DownloadProgressReporter,

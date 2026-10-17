@@ -8,6 +8,7 @@ pub mod medium;
 pub mod reddit;
 pub mod stackoverflow;
 pub mod substack;
+pub mod v2ex;
 pub mod wechat;
 pub mod wikipedia;
 pub mod xiaohongshu;
@@ -23,6 +24,7 @@ pub use medium::MediumAdapter;
 pub use reddit::RedditAdapter;
 pub use stackoverflow::StackoverflowAdapter;
 pub use substack::SubstackAdapter;
+pub use v2ex::V2exAdapter;
 pub use wechat::WechatAdapter;
 pub use wikipedia::WikipediaAdapter;
 pub use xiaohongshu::XiaohongshuAdapter;
@@ -92,6 +94,7 @@ impl AdapterRegistry {
         registry.register(Arc::new(WikipediaAdapter::new()));
         registry.register(Arc::new(RedditAdapter::new()));
         registry.register(Arc::new(StackoverflowAdapter::new()));
+        registry.register(Arc::new(V2exAdapter::new()));
         registry
     }
 

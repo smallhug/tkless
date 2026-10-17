@@ -364,9 +364,9 @@ pub fn get_available_tools() -> Vec<McpTool> {
                     },
                     "scope": {
                         "type": "string",
-                        "enum": ["all", "wechat", "zhihu", "github", "juejin", "csdn", "medium", "substack", "arxiv", "huggingface", "wikipedia", "reddit", "stackoverflow"],
+                        "enum": ["all", "wechat", "zhihu", "github", "juejin", "csdn", "medium", "substack", "arxiv", "huggingface", "wikipedia", "reddit", "stackoverflow", "v2ex"],
                         "default": "all",
-                        "description": "Search scope limitation: 'all' (entire web), 'wechat' (WeChat Official Accounts), 'zhihu' (Zhihu questions and articles), 'github' (GitHub repositories and issues), 'juejin' (Juejin tech posts), 'csdn' (CSDN blog posts), 'medium' (Medium articles), 'substack' (Substack newsletters), 'arxiv' (arXiv research papers), 'huggingface' (Hugging Face models, papers, blogs), 'wikipedia' (Wikipedia articles), 'reddit' (Reddit discussions), or 'stackoverflow' (Stack Overflow Q&A)"
+                        "description": "Search scope limitation: 'all' (entire web), 'wechat' (WeChat Official Accounts), 'zhihu' (Zhihu questions and articles), 'github' (GitHub repositories and issues), 'juejin' (Juejin tech posts), 'csdn' (CSDN blog posts), 'medium' (Medium articles), 'substack' (Substack newsletters), 'arxiv' (arXiv research papers), 'huggingface' (Hugging Face models, papers, blogs), 'wikipedia' (Wikipedia articles), 'reddit' (Reddit discussions), 'stackoverflow' (Stack Overflow Q&A), or 'v2ex' (V2EX discussions)"
                     },
                     "dedup": {
                         "type": "boolean",
@@ -867,6 +867,30 @@ pub fn get_available_tools() -> Vec<McpTool> {
                     }
                 },
                 "required": ["markdown"]
+            }),
+        },
+        McpTool {
+            name: "diff_content".to_string(),
+            description: "Computes line-level differences, change metrics (added/removed/unchanged lines, change percentage), and unified diff format between two versions of text or Markdown.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "old_text": {
+                        "type": "string",
+                        "description": "Original text or Markdown document version"
+                    },
+                    "new_text": {
+                        "type": "string",
+                        "description": "Updated text or Markdown document version"
+                    },
+                    "format": {
+                        "type": "string",
+                        "enum": ["markdown", "json"],
+                        "default": "markdown",
+                        "description": "Output format: 'markdown' (unified diff view) or 'json' (structured DiffReport object)"
+                    }
+                },
+                "required": ["old_text", "new_text"]
             }),
         }
     ]

@@ -132,6 +132,7 @@ impl McpServer {
                     "check_auth" => self.call_check_auth(&arguments).await,
                     "summarize_text" => self.call_summarize_text(&arguments).await,
                     "split_document" => self.call_split_document(&arguments).await,
+                    "diff_content" => self.call_diff_content(&arguments).await,
                     _ => McpToolCallResult::error(format!("Unknown tool: '{tool_name}'")),
                 };
 
@@ -816,6 +817,14 @@ impl McpServer {
                     clean.to_string()
                 } else {
                     format!("site:stackoverflow.com {clean}")
+                }
+            }
+            "v2ex" => {
+                let clean = query.trim();
+                if clean.starts_with("site:") {
+                    clean.to_string()
+                } else {
+                    format!("site:v2ex.com {clean}")
                 }
             }
             _ => query.to_string(),
@@ -1948,6 +1957,45 @@ impl McpServer {
         match serde_json::to_string_pretty(&sections) {
             Ok(json_str) => McpToolCallResult::success(json_str),
             Err(e) => McpToolCallResult::error(format!("Serialization error: {e}")),
+        }
+    }
+
+    async fn call_diff_content(&self, args: &Value) -> McpToolCallResult {
+        let old_text = match args.get("old_text").and_then(|v| v.as_str()) {
+            Some(t) => t,
+            None => return McpToolCallResult::error("Missing required parameter 'old_text'"),
+        };
+        let new_text = match args.get("new_text").and_then(|v| v.as_str()) {
+            Some(t) => t,
+            None => return McpToolCallResult::error("Missing required parameter 'new_text'"),
+        };
+
+        let format = args
+            .get("format")
+            .and_then(|v| v.as_str())
+            .unwrap_or("markdown");
+
+        let report = crate::diff::compute_diff(old_text, new_text);
+
+        if format == "json" {
+            match serde_json::to_string_pretty(&report) {
+                Ok(s) => McpToolCallResult::success(s),
+                Err(e) => McpToolCallResult::error(format!("Serialization error: {e}")),
+            }
+        } else {
+            let mut md = String::new();
+            md.push_str("# 🔄 文档版本差异与变更分析 (Content Diff Report)\n\n");
+            md.push_str(&format!(
+                "> 新增行数: `+{}` | 删除行数: `-{}` | 未变行数: `{}` | 变更比例: `{:.1}%`\n\n",
+                report.added_lines,
+                report.removed_lines,
+                report.unchanged_lines,
+                report.change_ratio
+            ));
+            md.push_str("```diff\n");
+            md.push_str(&report.unified_diff);
+            md.push_str("\n```");
+            McpToolCallResult::success(md)
         }
     }
 }

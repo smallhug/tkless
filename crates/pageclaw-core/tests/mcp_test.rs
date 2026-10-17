@@ -42,7 +42,7 @@ async fn test_mcp_protocol_lifecycle() {
     let tools_array = tools_val["tools"]
         .as_array()
         .expect("Tools should be an array");
-    assert_eq!(tools_array.len(), 17);
+    assert_eq!(tools_array.len(), 18);
 
     let tool_names: Vec<&str> = tools_array
         .iter()
@@ -65,6 +65,7 @@ async fn test_mcp_protocol_lifecycle() {
     assert!(tool_names.contains(&"check_auth"));
     assert!(tool_names.contains(&"summarize_text"));
     assert!(tool_names.contains(&"split_document"));
+    assert!(tool_names.contains(&"diff_content"));
 
     // Verify web_search schema contains scope, cdp_endpoint, schema
     let search_tool = tools_array
@@ -371,6 +372,34 @@ async fn test_mcp_protocol_lifecycle() {
     assert_eq!(sections_arr[0]["title"], "Chapter 1: Introduction");
     assert_eq!(sections_arr[1]["title"], "Subchapter 1.1");
     assert_eq!(sections_arr[2]["title"], "Chapter 2: Conclusion");
+
+    // 5o. Tool Call: diff_content
+    let diff_req = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 19,
+        "method": "tools/call",
+        "params": {
+            "name": "diff_content",
+            "arguments": {
+                "old_text": "Release 1.0\nBug fixes and stability.",
+                "new_text": "Release 2.0\nBug fixes and stability.\nNew feature added.",
+                "format": "json"
+            }
+        }
+    });
+    let diff_res = server
+        .handle_message(&diff_req.to_string())
+        .await
+        .expect("Should return response");
+    let diff_val = diff_res.result.expect("Diff result should be present");
+    let diff_text = diff_val["content"][0]["text"].as_str().unwrap();
+    let parsed_diff: serde_json::Value = serde_json::from_str(diff_text).unwrap();
+    assert_eq!(parsed_diff["added_lines"], 2);
+    assert_eq!(parsed_diff["removed_lines"], 1);
+    assert!(parsed_diff["unified_diff"]
+        .as_str()
+        .unwrap()
+        .contains("+Release 2.0"));
 
     // 5. Unknown Method Error
     let unknown_req = r#"{"jsonrpc":"2.0","id":4,"method":"unknown/method"}"#;

@@ -680,6 +680,8 @@ pub fn detect_platform_from_host(host: &str) -> Option<&'static str> {
         || is_subdomain_or_exact(&host_lower, "askubuntu.com")
     {
         Some("stackoverflow")
+    } else if is_subdomain_or_exact(&host_lower, "v2ex.com") {
+        Some("v2ex")
     } else {
         None
     }
@@ -1059,6 +1061,14 @@ mod tests {
             detect_platform_from_url("https://serverfault.com/questions/123"),
             Some("stackoverflow")
         );
+        assert_eq!(
+            detect_platform_from_url("https://v2ex.com/t/1098765"),
+            Some("v2ex")
+        );
+        assert_eq!(
+            detect_platform_from_url("https://www.v2ex.com/t/123"),
+            Some("v2ex")
+        );
 
         // Security check: spoofed / typosquatted domains MUST NOT leak cookies!
         assert_eq!(
@@ -1097,6 +1107,7 @@ mod tests {
             detect_platform_from_url("https://evilstackoverflow.com/questions/123"),
             None
         );
+        assert_eq!(detect_platform_from_url("https://evilv2ex.com/t/123"), None);
         assert_eq!(
             detect_platform_from_url("https://fake-bilibili.com/video/BV1"),
             None
