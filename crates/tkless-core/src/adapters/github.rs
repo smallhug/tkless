@@ -1,5 +1,5 @@
 use crate::adapters::{BoxFuture, PlatformAdapter};
-use crate::error::PageclawError;
+use crate::error::TklessError;
 use crate::markdown::MarkdownConverter;
 use crate::model::{ExtractionOptions, OutputFormat, PageDocument, PageMetadata};
 use crate::token::count_tokens;
@@ -137,7 +137,7 @@ impl GithubAdapter {
         fetcher: &crate::fetcher::Fetcher,
         url: &Url,
         options: &ExtractionOptions,
-    ) -> Result<PageDocument, PageclawError> {
+    ) -> Result<PageDocument, TklessError> {
         debug!(url = %url, "Executing GitHub adapter extraction");
 
         let resp = fetcher
@@ -160,7 +160,7 @@ impl GithubAdapter {
         raw_html: &str,
         url: &Url,
         options: &ExtractionOptions,
-    ) -> Result<PageDocument, PageclawError> {
+    ) -> Result<PageDocument, TklessError> {
         let route = Self::parse_route(url).unwrap_or(GithubRoute::Repo {
             owner: "GitHub".into(),
             repo: "Repository".into(),
@@ -198,7 +198,7 @@ impl GithubAdapter {
         repo: &str,
         url: &Url,
         options: &ExtractionOptions,
-    ) -> Result<PageDocument, PageclawError> {
+    ) -> Result<PageDocument, TklessError> {
         let doc = Html::parse_document(raw_html);
         let repo_title = format!("{owner}/{repo}");
 
@@ -287,7 +287,7 @@ impl GithubAdapter {
         is_pr: bool,
         url: &Url,
         options: &ExtractionOptions,
-    ) -> Result<PageDocument, PageclawError> {
+    ) -> Result<PageDocument, TklessError> {
         let doc = Html::parse_document(raw_html);
         let kind_label = if is_pr { "Pull Request" } else { "Issue" };
 
@@ -392,7 +392,7 @@ impl GithubAdapter {
         language: Option<&str>,
         since: Option<&str>,
         options: &ExtractionOptions,
-    ) -> Result<PageDocument, PageclawError> {
+    ) -> Result<PageDocument, TklessError> {
         let doc = Html::parse_document(raw_html);
         let mut repos = Vec::new();
 
@@ -552,7 +552,7 @@ impl PlatformAdapter for GithubAdapter {
         fetcher: &'a crate::fetcher::Fetcher,
         url: &'a Url,
         options: &'a ExtractionOptions,
-    ) -> BoxFuture<'a, Result<PageDocument, PageclawError>> {
+    ) -> BoxFuture<'a, Result<PageDocument, TklessError>> {
         Box::pin(self.do_extract(fetcher, url, options))
     }
 }

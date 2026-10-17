@@ -1,4 +1,4 @@
-use crate::error::PageclawError;
+use crate::error::TklessError;
 use crate::fetcher::Fetcher;
 use reqwest::header::{HeaderValue, COOKIE};
 use std::collections::HashMap;
@@ -38,7 +38,7 @@ pub struct DownloadOptions<'a> {
 pub async fn download_file(
     client: &reqwest::Client,
     options: DownloadOptions<'_>,
-) -> Result<u64, PageclawError> {
+) -> Result<u64, TklessError> {
     debug!(url = options.url, dest = %options.destination.display(), "Starting file download");
 
     let mut request = client.get(options.url).timeout(Duration::from_secs(1800)); // Allow up to 30 minutes for large media file transfers
@@ -56,7 +56,7 @@ pub async fn download_file(
     let mut response = request.send().await?;
     let status = response.status();
     if !status.is_success() {
-        return Err(PageclawError::AdapterError {
+        return Err(TklessError::AdapterError {
             platform: "downloader",
             message: format!("HTTP {} error while downloading {}", status, options.url),
         });
@@ -78,7 +78,7 @@ pub async fn download_file(
     let mut writer = BufWriter::new(file);
     let mut downloaded_bytes: u64 = 0;
 
-    let download_result: Result<(), PageclawError> = async {
+    let download_result: Result<(), TklessError> = async {
         while let Some(chunk) = response.chunk().await? {
             writer.write_all(&chunk)?;
             downloaded_bytes += chunk.len() as u64;
@@ -133,7 +133,7 @@ pub async fn download_and_rewrite_markdown_images(
     markdown: &str,
     assets_dir: &Path,
     _base_url: Option<&str>,
-) -> Result<String, PageclawError> {
+) -> Result<String, TklessError> {
     if !assets_dir.exists() {
         std::fs::create_dir_all(assets_dir)?;
     }

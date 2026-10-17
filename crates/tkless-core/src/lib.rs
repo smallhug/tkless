@@ -1,4 +1,4 @@
-//! pageclaw-core: High-performance, token-efficient web content extraction engine for AI agents.
+//! tkless-core: High-performance, token-efficient web content extraction engine for AI agents.
 
 #![recursion_limit = "256"]
 
@@ -45,7 +45,7 @@ pub use downloader::{
     download_and_rewrite_markdown_images, download_file, format_bytes, DownloadOptions,
     DownloadProgressReporter,
 };
-pub use error::{PageclawError, TklessError};
+pub use error::TklessError;
 pub use feed::{format_feed_markdown, is_feed_xml, parse_feed, FeedChannel, FeedItem};
 pub use mcp::McpServer;
 pub use model::{
@@ -83,9 +83,6 @@ pub struct TklessEngine {
     adapter_registry: AdapterRegistry,
 }
 
-/// Backward-compatible type alias for `TklessEngine`.
-pub type PageclawEngine = TklessEngine;
-
 impl Default for TklessEngine {
     fn default() -> Self {
         Self::new().expect("Failed to initialize default TklessEngine")
@@ -94,12 +91,12 @@ impl Default for TklessEngine {
 
 impl TklessEngine {
     /// Creates a new engine instance with default network options.
-    pub fn new() -> Result<Self, PageclawError> {
+    pub fn new() -> Result<Self, TklessError> {
         Self::with_options(FetchOptions::default())
     }
 
     /// Creates a new engine instance with custom network and request options.
-    pub fn with_options(fetch_options: FetchOptions) -> Result<Self, PageclawError> {
+    pub fn with_options(fetch_options: FetchOptions) -> Result<Self, TklessError> {
         Self::with_options_and_adapters(fetch_options, AdapterRegistry::default())
     }
 
@@ -107,7 +104,7 @@ impl TklessEngine {
     pub fn with_options_and_adapters(
         fetch_options: FetchOptions,
         adapter_registry: AdapterRegistry,
-    ) -> Result<Self, PageclawError> {
+    ) -> Result<Self, TklessError> {
         let fetcher = Fetcher::new(fetch_options)?;
         let markdown_converter = MarkdownConverter::new();
         Ok(Self {
@@ -133,7 +130,7 @@ impl TklessEngine {
         &self,
         url: &str,
         options: &ExtractionOptions,
-    ) -> Result<PageDocument, PageclawError> {
+    ) -> Result<PageDocument, TklessError> {
         let parsed_url = Url::parse(url)?;
         let fetch_start = std::time::Instant::now();
 
@@ -321,7 +318,7 @@ impl TklessEngine {
         parsed_url: &Url,
         options: &ExtractionOptions,
         cdp_endpoint: &str,
-    ) -> Result<PageDocument, PageclawError> {
+    ) -> Result<PageDocument, TklessError> {
         let cdp_opts = cdp::CdpOptions {
             endpoint: cdp_endpoint.to_string(),
             wait_ms: options.cdp_wait_ms,
@@ -346,7 +343,7 @@ impl TklessEngine {
         url: &str,
         options: &ExtractionOptions,
         cache: &DocumentCache,
-    ) -> Result<PageDocument, PageclawError> {
+    ) -> Result<PageDocument, TklessError> {
         let key = cache.generate_key(url, options);
 
         if let Some(entry) = cache.get_entry(&key) {
@@ -431,7 +428,7 @@ impl TklessEngine {
         raw_html: &str,
         base_url: Option<&str>,
         options: &ExtractionOptions,
-    ) -> Result<PageDocument, PageclawError> {
+    ) -> Result<PageDocument, TklessError> {
         let clean_start = std::time::Instant::now();
 
         // 0. Optional negative DOM pruning via remove_selector

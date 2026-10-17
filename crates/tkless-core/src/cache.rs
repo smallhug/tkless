@@ -1,4 +1,4 @@
-use crate::error::PageclawError;
+use crate::error::TklessError;
 use crate::model::{ExtractionOptions, PageDocument};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -151,7 +151,7 @@ impl DocumentCache {
         key: &str,
         doc: &PageDocument,
         ttl_secs: Option<u64>,
-    ) -> Result<(), PageclawError> {
+    ) -> Result<(), TklessError> {
         self.set_with_validators(key, doc, ttl_secs, None, None)
     }
 
@@ -163,7 +163,7 @@ impl DocumentCache {
         ttl_secs: Option<u64>,
         etag: Option<String>,
         last_modified: Option<String>,
-    ) -> Result<(), PageclawError> {
+    ) -> Result<(), TklessError> {
         let now = current_time_secs();
         let ttl = ttl_secs.unwrap_or(self.default_ttl_secs);
 
@@ -319,14 +319,14 @@ impl DocumentCache {
     }
 
     /// Clears all entries from both memory and disk.
-    pub fn clear(&self) -> Result<(), PageclawError> {
+    pub fn clear(&self) -> Result<(), TklessError> {
         if let Ok(mut mem) = self.memory.write() {
             mem.clear();
         }
 
         if let Some(ref dir) = self.cache_dir {
             if dir.is_dir() {
-                fs::remove_dir_all(dir).map_err(|e| PageclawError::CacheError(e.to_string()))?;
+                fs::remove_dir_all(dir).map_err(|e| TklessError::CacheError(e.to_string()))?;
                 let _ = fs::create_dir_all(dir);
             }
         }

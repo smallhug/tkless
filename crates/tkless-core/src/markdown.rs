@@ -1,4 +1,4 @@
-use crate::error::PageclawError;
+use crate::error::TklessError;
 use htmd::HtmlToMarkdown;
 use regex::Regex;
 use std::sync::LazyLock;
@@ -74,7 +74,7 @@ impl MarkdownConverter {
         html: &str,
         strip_images: bool,
         strip_links: bool,
-    ) -> Result<String, PageclawError> {
+    ) -> Result<String, TklessError> {
         let mut math_protector = MathPlaceholderProtector::new();
         let with_math = math_protector.protect(html);
         let preprocessed = normalize_code_language_tags(&with_math);
@@ -82,7 +82,7 @@ impl MarkdownConverter {
         let mut md = self
             .converter
             .convert(&preprocessed)
-            .map_err(|e| PageclawError::ConversionError(e.to_string()))?;
+            .map_err(|e| TklessError::ConversionError(e.to_string()))?;
 
         md = math_protector.restore(&md);
 

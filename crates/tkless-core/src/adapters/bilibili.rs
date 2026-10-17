@@ -1,6 +1,6 @@
 use crate::adapters::{BoxFuture, PlatformAdapter};
 use crate::downloader::{download_file, DownloadOptions, DownloadProgressReporter};
-use crate::error::PageclawError;
+use crate::error::TklessError;
 use crate::model::{
     CommentEntry, ConclusionChapter, ConclusionKeypoint, DanmakuEntry, ExtractedImage,
     ExtractionOptions, OutputFormat, PageDocument, PageMetadata, SubtitleLine, VideoConclusion,
@@ -181,8 +181,8 @@ impl BilibiliAdapter {
         fetcher: &crate::fetcher::Fetcher,
         url: &Url,
         options: &ExtractionOptions,
-    ) -> Result<PageDocument, PageclawError> {
-        let route = Self::parse_route(url, options).ok_or_else(|| PageclawError::AdapterError {
+    ) -> Result<PageDocument, TklessError> {
+        let route = Self::parse_route(url, options).ok_or_else(|| TklessError::AdapterError {
             platform: "bilibili",
             message: format!("Unsupported Bilibili URL route: {url}"),
         })?;
@@ -214,7 +214,7 @@ impl BilibiliAdapter {
     pub async fn fetch_video_details(
         fetcher: &crate::fetcher::Fetcher,
         bvid: &str,
-    ) -> Result<VideoViewData, PageclawError> {
+    ) -> Result<VideoViewData, TklessError> {
         let api_url = format!("https://api.bilibili.com/x/web-interface/view?bvid={bvid}");
 
         let resp: BiliResponse<VideoViewData> = fetcher
@@ -226,13 +226,13 @@ impl BilibiliAdapter {
             .await?;
 
         if resp.code != 0 {
-            return Err(PageclawError::AdapterError {
+            return Err(TklessError::AdapterError {
                 platform: "bilibili",
                 message: format!("API error (code={}): {}", resp.code, resp.message),
             });
         }
 
-        resp.data.ok_or_else(|| PageclawError::AdapterError {
+        resp.data.ok_or_else(|| TklessError::AdapterError {
             platform: "bilibili",
             message: "Empty data payload received for video view".to_string(),
         })
@@ -244,7 +244,7 @@ impl BilibiliAdapter {
         bvid: &str,
         cid: u64,
         view_data: &VideoViewData,
-    ) -> Result<Vec<SubtitleLine>, PageclawError> {
+    ) -> Result<Vec<SubtitleLine>, TklessError> {
         // 1. Try subtitles from view API
         let mut subtitle_list = view_data
             .subtitle
@@ -315,7 +315,7 @@ impl BilibiliAdapter {
         fetcher: &crate::fetcher::Fetcher,
         cid: u64,
         limit: Option<usize>,
-    ) -> Result<Vec<DanmakuEntry>, PageclawError> {
+    ) -> Result<Vec<DanmakuEntry>, TklessError> {
         let api_url = format!("https://comment.bilibili.com/{cid}.xml");
 
         let resp = fetcher
@@ -340,7 +340,7 @@ impl BilibiliAdapter {
         fetcher: &crate::fetcher::Fetcher,
         aid: u64,
         limit: Option<usize>,
-    ) -> Result<Vec<CommentEntry>, PageclawError> {
+    ) -> Result<Vec<CommentEntry>, TklessError> {
         let max_items = limit.unwrap_or(20);
         let mut comments = Vec::new();
         let mut page = 1u32;
@@ -362,7 +362,7 @@ impl BilibiliAdapter {
 
             if resp.code != 0 {
                 if comments.is_empty() {
-                    return Err(PageclawError::AdapterError {
+                    return Err(TklessError::AdapterError {
                         platform: "bilibili",
                         message: format!(
                             "Comments API error (code={}): {}",
@@ -412,7 +412,7 @@ impl BilibiliAdapter {
         bvid: &str,
         cid: u64,
         up_mid: u64,
-    ) -> Result<Option<VideoConclusion>, PageclawError> {
+    ) -> Result<Option<VideoConclusion>, TklessError> {
         let mixin_key = match get_wbi_mixin_key(fetcher.client()).await {
             Ok(k) => k,
             Err(e) => {
@@ -489,7 +489,7 @@ impl BilibiliAdapter {
         bvid: &str,
         cid: u64,
         quality: VideoQuality,
-    ) -> Result<PlayUrlData, PageclawError> {
+    ) -> Result<PlayUrlData, TklessError> {
         let qn = quality.qn();
         let api_url = format!(
             "https://api.bilibili.com/x/player/playurl?bvid={bvid}&cid={cid}&qn={qn}&fnval=0&fnver=0"
@@ -504,13 +504,13 @@ impl BilibiliAdapter {
             .await?;
 
         if resp.code != 0 {
-            return Err(PageclawError::AdapterError {
+            return Err(TklessError::AdapterError {
                 platform: "bilibili",
                 message: format!("PlayURL API error (code={}): {}", resp.code, resp.message),
             });
         }
 
-        resp.data.ok_or_else(|| PageclawError::AdapterError {
+        resp.data.ok_or_else(|| TklessError::AdapterError {
             platform: "bilibili",
             message: "Empty data payload received for playurl".to_string(),
         })
@@ -522,7 +522,7 @@ impl BilibiliAdapter {
         bvid: &str,
         dest_path: Option<&Path>,
         reporter: Option<&dyn DownloadProgressReporter>,
-    ) -> Result<PathBuf, PageclawError> {
+    ) -> Result<PathBuf, TklessError> {
         let details = Self::fetch_video_details(fetcher, bvid).await?;
         let cover_url = normalize_cover_url(&details.pic);
         let default_name = format!("{bvid}_cover.jpg");
@@ -555,7 +555,7 @@ impl BilibiliAdapter {
         quality: VideoQuality,
         dest_path: Option<&Path>,
         reporter: Option<&dyn DownloadProgressReporter>,
-    ) -> Result<PathBuf, PageclawError> {
+    ) -> Result<PathBuf, TklessError> {
         let details = Self::fetch_video_details(fetcher, bvid).await?;
 
         // Resolve target CID based on page_num (1-indexed)
@@ -566,7 +566,7 @@ impl BilibiliAdapter {
         } else if let Some(first_page) = details.pages.first() {
             first_page.cid
         } else {
-            return Err(PageclawError::AdapterError {
+            return Err(TklessError::AdapterError {
                 platform: "bilibili",
                 message: "No valid video stream CID found".to_string(),
             });
@@ -576,7 +576,7 @@ impl BilibiliAdapter {
         let durl_item = play_data
             .durl
             .first()
-            .ok_or_else(|| PageclawError::AdapterError {
+            .ok_or_else(|| TklessError::AdapterError {
                 platform: "bilibili",
                 message: "No stream download URL found in playurl response".to_string(),
             })?;
@@ -639,7 +639,7 @@ impl BilibiliAdapter {
         }
 
         if !downloaded {
-            return Err(last_err.unwrap_or_else(|| PageclawError::AdapterError {
+            return Err(last_err.unwrap_or_else(|| TklessError::AdapterError {
                 platform: "bilibili",
                 message: "All video stream download mirror URLs failed".to_string(),
             }));
@@ -654,7 +654,7 @@ impl BilibiliAdapter {
         bvid: &str,
         url: &Url,
         options: &ExtractionOptions,
-    ) -> Result<PageDocument, PageclawError> {
+    ) -> Result<PageDocument, TklessError> {
         let data = Self::fetch_video_details(fetcher, bvid).await?;
 
         let title = data.title.clone();
@@ -897,7 +897,7 @@ impl BilibiliAdapter {
         category_name: &str,
         url: &Url,
         options: &ExtractionOptions,
-    ) -> Result<PageDocument, PageclawError> {
+    ) -> Result<PageDocument, TklessError> {
         let api_url =
             format!("https://api.bilibili.com/x/web-interface/ranking/v2?rid={rid}&type=all");
 
@@ -918,7 +918,7 @@ impl BilibiliAdapter {
             return self.extract_popular(fetcher, url, options).await;
         }
 
-        let data = resp.data.ok_or_else(|| PageclawError::AdapterError {
+        let data = resp.data.ok_or_else(|| TklessError::AdapterError {
             platform: "bilibili",
             message: "Empty ranking list payload".to_string(),
         })?;
@@ -945,7 +945,7 @@ impl BilibiliAdapter {
         fetcher: &crate::fetcher::Fetcher,
         url: &Url,
         options: &ExtractionOptions,
-    ) -> Result<PageDocument, PageclawError> {
+    ) -> Result<PageDocument, TklessError> {
         let api_url = "https://api.bilibili.com/x/web-interface/popular?pn=1&ps=20";
 
         let resp: BiliResponse<PopularData> = fetcher
@@ -957,13 +957,13 @@ impl BilibiliAdapter {
             .await?;
 
         if resp.code != 0 {
-            return Err(PageclawError::AdapterError {
+            return Err(TklessError::AdapterError {
                 platform: "bilibili",
                 message: format!("Popular API error (code={}): {}", resp.code, resp.message),
             });
         }
 
-        let data = resp.data.ok_or_else(|| PageclawError::AdapterError {
+        let data = resp.data.ok_or_else(|| TklessError::AdapterError {
             platform: "bilibili",
             message: "Empty popular feed payload".to_string(),
         })?;
@@ -990,7 +990,7 @@ impl BilibiliAdapter {
         fetcher: &crate::fetcher::Fetcher,
         url: &Url,
         options: &ExtractionOptions,
-    ) -> Result<PageDocument, PageclawError> {
+    ) -> Result<PageDocument, TklessError> {
         let api_url = "https://api.bilibili.com/x/web-interface/index/top/feed/rcmd?ps=15";
 
         let resp: BiliResponse<RcmdData> = fetcher
@@ -1002,13 +1002,13 @@ impl BilibiliAdapter {
             .await?;
 
         if resp.code != 0 {
-            return Err(PageclawError::AdapterError {
+            return Err(TklessError::AdapterError {
                 platform: "bilibili",
                 message: format!("Rcmd API error (code={}): {}", resp.code, resp.message),
             });
         }
 
-        let data = resp.data.ok_or_else(|| PageclawError::AdapterError {
+        let data = resp.data.ok_or_else(|| TklessError::AdapterError {
             platform: "bilibili",
             message: "Empty recommendations feed payload".to_string(),
         })?;
@@ -1038,7 +1038,7 @@ impl BilibiliAdapter {
         order: Option<&str>,
         url: &Url,
         options: &ExtractionOptions,
-    ) -> Result<PageDocument, PageclawError> {
+    ) -> Result<PageDocument, TklessError> {
         let mut api_url =
             Url::parse("https://api.bilibili.com/x/web-interface/search/type").unwrap();
         api_url
@@ -1063,13 +1063,13 @@ impl BilibiliAdapter {
             .await?;
 
         if resp.code != 0 {
-            return Err(PageclawError::AdapterError {
+            return Err(TklessError::AdapterError {
                 platform: "bilibili",
                 message: format!("Search API error (code={}): {}", resp.code, resp.message),
             });
         }
 
-        let data = resp.data.ok_or_else(|| PageclawError::AdapterError {
+        let data = resp.data.ok_or_else(|| TklessError::AdapterError {
             platform: "bilibili",
             message: "Empty search response data".to_string(),
         })?;
@@ -1178,7 +1178,7 @@ impl BilibiliAdapter {
         url: &Url,
         options: &ExtractionOptions,
         include_coins: bool,
-    ) -> Result<PageDocument, PageclawError> {
+    ) -> Result<PageDocument, TklessError> {
         let mut metadata = PageMetadata {
             description: Some(format!("{}，共收录 {} 条视频条目", title, items.len())),
             canonical_url: Some(url.to_string()),
@@ -1265,7 +1265,7 @@ impl PlatformAdapter for BilibiliAdapter {
         fetcher: &'a crate::fetcher::Fetcher,
         url: &'a Url,
         options: &'a ExtractionOptions,
-    ) -> BoxFuture<'a, Result<PageDocument, PageclawError>> {
+    ) -> BoxFuture<'a, Result<PageDocument, TklessError>> {
         Box::pin(self.do_extract(fetcher, url, options))
     }
 }
@@ -1417,7 +1417,7 @@ pub fn format_subtitle_range(from: f64, to: f64) -> String {
     )
 }
 
-pub fn decode_xml_body(bytes: &[u8]) -> Result<String, PageclawError> {
+pub fn decode_xml_body(bytes: &[u8]) -> Result<String, TklessError> {
     if let Ok(s) = std::str::from_utf8(bytes) {
         if s.trim_start().starts_with('<') {
             return Ok(s.to_string());
@@ -1751,7 +1751,7 @@ pub fn compute_md5(input: &[u8]) -> String {
     result.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-pub async fn get_wbi_mixin_key(client: &reqwest::Client) -> Result<String, PageclawError> {
+pub async fn get_wbi_mixin_key(client: &reqwest::Client) -> Result<String, TklessError> {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -1777,7 +1777,7 @@ pub async fn get_wbi_mixin_key(client: &reqwest::Client) -> Result<String, Pagec
     let wbi_img = resp
         .data
         .and_then(|d| d.wbi_img)
-        .ok_or_else(|| PageclawError::AdapterError {
+        .ok_or_else(|| TklessError::AdapterError {
             platform: "bilibili",
             message: "Failed to extract wbi_img keys from nav endpoint".to_string(),
         })?;
@@ -1801,7 +1801,7 @@ pub async fn get_wbi_mixin_key(client: &reqwest::Client) -> Result<String, Pagec
     let raw_key = format!("{img_key}{sub_key}");
 
     if raw_key.len() < 64 {
-        return Err(PageclawError::AdapterError {
+        return Err(TklessError::AdapterError {
             platform: "bilibili",
             message: "Invalid WBI raw key length".to_string(),
         });

@@ -5,7 +5,7 @@
 //! without desktop React hydration barriers or login popups.
 
 use crate::adapters::{BoxFuture, PlatformAdapter};
-use crate::error::PageclawError;
+use crate::error::TklessError;
 use crate::model::{ExtractionOptions, OutputFormat, PageDocument, PageMetadata};
 use crate::token::count_tokens;
 use serde_json::Value;
@@ -53,7 +53,7 @@ impl RedditAdapter {
         fetcher: &crate::fetcher::Fetcher,
         url: &Url,
         options: &ExtractionOptions,
-    ) -> Result<PageDocument, PageclawError> {
+    ) -> Result<PageDocument, TklessError> {
         debug!(url = %url, "Executing Reddit adapter extraction");
 
         let json_url = Self::canonicalize_json_url(url).unwrap_or_else(|| url.clone());
@@ -62,7 +62,7 @@ impl RedditAdapter {
             .get(&json_url)
             .header(
                 "User-Agent",
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36 PageClaw/0.1",
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36 TkLess/0.1",
             )
             .send()
             .await?;
@@ -298,7 +298,7 @@ impl PlatformAdapter for RedditAdapter {
         fetcher: &'a crate::fetcher::Fetcher,
         url: &'a Url,
         options: &'a ExtractionOptions,
-    ) -> BoxFuture<'a, Result<PageDocument, PageclawError>> {
+    ) -> BoxFuture<'a, Result<PageDocument, TklessError>> {
         Box::pin(self.do_extract(fetcher, url, options))
     }
 }
@@ -350,12 +350,12 @@ mod tests {
                     "children": [
                         {
                             "data": {
-                                "title": "Announcing PageClaw 1.0",
+                                "title": "Announcing TkLess 1.0",
                                 "author": "rust_dev",
                                 "subreddit_name_prefixed": "r/rust",
                                 "score": 256,
                                 "upvote_ratio": 0.98,
-                                "selftext": "PageClaw is an ultra-fast web content extractor built in Rust."
+                                "selftext": "TkLess is an ultra-fast web content extractor built in Rust."
                             }
                         }
                     ]
@@ -378,17 +378,17 @@ mod tests {
         ]);
 
         let original_url =
-            Url::parse("https://www.reddit.com/r/rust/comments/123/pageclaw/").unwrap();
+            Url::parse("https://www.reddit.com/r/rust/comments/123/tkless/").unwrap();
         let doc = adapter
             .parse_json_payload(&payload, &original_url, &ExtractionOptions::default())
             .unwrap();
 
-        assert_eq!(doc.title.as_deref(), Some("Announcing PageClaw 1.0"));
+        assert_eq!(doc.title.as_deref(), Some("Announcing TkLess 1.0"));
         assert!(doc.content.contains("r/rust"));
         assert!(doc.content.contains("u/rust_dev"));
         assert!(doc
             .content
-            .contains("PageClaw is an ultra-fast web content extractor built in Rust."));
+            .contains("TkLess is an ultra-fast web content extractor built in Rust."));
         assert!(doc.content.contains("u/tokio_fan"));
         assert!(doc
             .content

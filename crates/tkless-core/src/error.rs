@@ -75,6 +75,3 @@ impl TklessError {
         }
     }
 }
-
-/// Backward-compatible type alias for `TklessError`.
-pub type PageclawError = TklessError;

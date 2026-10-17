@@ -1,5 +1,5 @@
 use crate::adapters::{BoxFuture, PlatformAdapter};
-use crate::error::PageclawError;
+use crate::error::TklessError;
 use crate::markdown::MarkdownConverter;
 use crate::model::{ExtractionOptions, OutputFormat, PageDocument, PageMetadata};
 use crate::token::count_tokens;
@@ -64,7 +64,7 @@ impl MediumAdapter {
         fetcher: &crate::fetcher::Fetcher,
         url: &Url,
         options: &ExtractionOptions,
-    ) -> Result<PageDocument, PageclawError> {
+    ) -> Result<PageDocument, TklessError> {
         debug!(url = %url, "Executing Medium adapter extraction");
 
         let resp = fetcher
@@ -90,7 +90,7 @@ impl MediumAdapter {
         raw_html: &str,
         url: &Url,
         options: &ExtractionOptions,
-    ) -> Result<PageDocument, PageclawError> {
+    ) -> Result<PageDocument, TklessError> {
         let doc = Html::parse_document(raw_html);
 
         // 1. Extract Title
@@ -293,7 +293,7 @@ impl PlatformAdapter for MediumAdapter {
         fetcher: &'a crate::fetcher::Fetcher,
         url: &'a Url,
         options: &'a ExtractionOptions,
-    ) -> BoxFuture<'a, Result<PageDocument, PageclawError>> {
+    ) -> BoxFuture<'a, Result<PageDocument, TklessError>> {
         Box::pin(self.do_extract(fetcher, url, options))
     }
 }

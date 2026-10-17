@@ -11,9 +11,9 @@ fn test_integration_pipeline_html_to_markdown() {
         <head>
             <meta charset="utf-8">
             <title>Rust Web Extraction for Agents</title>
-            <meta name="description" content="A demonstration of PageClaw cleaning and extraction.">
-            <meta name="author" content="PageClaw Team">
-            <meta property="og:title" content="PageClaw Guide">
+            <meta name="description" content="A demonstration of TkLess cleaning and extraction.">
+            <meta name="author" content="TkLess Team">
+            <meta property="og:title" content="TkLess Guide">
             <script type="application/ld+json">
             {
                 "@context": "https://schema.org",
@@ -29,7 +29,7 @@ fn test_integration_pipeline_html_to_markdown() {
             <main>
                 <article>
                     <h1>Rust Web Extraction for Agents</h1>
-                    <p>PageClaw prunes boilerplates and produces clean Markdown.</p>
+                    <p>TkLess prunes boilerplates and produces clean Markdown.</p>
                     <p>Here is an essential table:</p>
                     <table>
                         <thead>
@@ -77,14 +77,14 @@ fn test_integration_pipeline_html_to_markdown() {
 
     // 1. Verify title and metadata
     assert_eq!(doc.title.as_deref(), Some("Rust Web Extraction for Agents"));
-    assert_eq!(doc.metadata.author.as_deref(), Some("PageClaw Team"));
+    assert_eq!(doc.metadata.author.as_deref(), Some("TkLess Team"));
     assert_eq!(
         doc.metadata.description.as_deref(),
-        Some("A demonstration of PageClaw cleaning and extraction.")
+        Some("A demonstration of TkLess cleaning and extraction.")
     );
     assert_eq!(
         doc.metadata.open_graph.get("og:title").map(|s| s.as_str()),
-        Some("PageClaw Guide")
+        Some("TkLess Guide")
     );
 
     // 2. Verify JSON-LD extraction
@@ -98,7 +98,7 @@ fn test_integration_pipeline_html_to_markdown() {
         .contains("title: \"Rust Web Extraction for Agents\""));
     assert!(doc
         .content
-        .contains("PageClaw prunes boilerplates and produces clean Markdown."));
+        .contains("TkLess prunes boilerplates and produces clean Markdown."));
     assert!(doc.content.contains("| Language | Cold Start |"));
 
     // 4. Verify noise was eliminated
@@ -145,7 +145,7 @@ fn test_integration_token_budget_truncation() {
     assert!(doc.truncated);
     assert!(doc
         .content
-        .contains("[Content truncated by PageClaw: token limit reached]"));
+        .contains("[Content truncated by TkLess: token limit reached]"));
 }
 
 #[test]
@@ -406,12 +406,12 @@ fn test_integration_semantic_markdown_chunking() {
                 <p>Comprehensive overview of vector embeddings and retrieval augmentation.</p>
 
                 <h2>Architecture Overview</h2>
-                <p>PageClaw acts as the high-throughput web ingestion and cleaning layer.</p>
+                <p>TkLess acts as the high-throughput web ingestion and cleaning layer.</p>
 
                 <h3>Code Implementation</h3>
                 <p>Here is an essential code implementation snippet:</p>
                 <pre><code class="language-rust">fn main() {
-    println!("Hello PageClaw RAG!");
+    println!("Hello TkLess RAG!");
 }</code></pre>
 
                 <h2>Performance Benchmark</h2>
@@ -421,7 +421,7 @@ fn test_integration_semantic_markdown_chunking() {
                         <tr><th>Engine</th><th>Cold Start</th></tr>
                     </thead>
                     <tbody>
-                        <tr><td>PageClaw</td><td>&lt; 5ms</td></tr>
+                        <tr><td>TkLess</td><td>&lt; 5ms</td></tr>
                         <tr><td>Puppeteer</td><td>&gt; 800ms</td></tr>
                     </tbody>
                 </table>
@@ -464,8 +464,8 @@ fn test_integration_semantic_markdown_chunking() {
     // Verify code block was not broken in half
     assert!(
         c.content
-            .contains("```rust\nfn main() {\n    println!(\"Hello PageClaw RAG!\");\n}\n```")
-            || c.content.contains("println!(\"Hello PageClaw RAG!\");"),
+            .contains("```rust\nfn main() {\n    println!(\"Hello TkLess RAG!\");\n}\n```")
+            || c.content.contains("println!(\"Hello TkLess RAG!\");"),
         "Code fence must remain intact"
     );
 }
@@ -535,7 +535,7 @@ fn test_integration_extraction_metrics_telemetry() {
             <main>
                 <article>
                     <h1>Telemetry Benchmark Page</h1>
-                    <p>PageClaw prunes boilerplate and reports empirical token savings to LLM agents.</p>
+                    <p>TkLess prunes boilerplate and reports empirical token savings to LLM agents.</p>
                 </article>
             </main>
             <footer><p>Footer copyright boilerplate 2026...</p></footer>

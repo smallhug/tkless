@@ -1,5 +1,5 @@
 use crate::adapters::{BoxFuture, PlatformAdapter};
-use crate::error::PageclawError;
+use crate::error::TklessError;
 use crate::model::{ExtractionOptions, OutputFormat, PageDocument, PageMetadata};
 use crate::token::count_tokens;
 use scraper::{Html, Selector};
@@ -34,7 +34,7 @@ impl XiaohongshuAdapter {
         fetcher: &crate::fetcher::Fetcher,
         url: &Url,
         options: &ExtractionOptions,
-    ) -> Result<PageDocument, PageclawError> {
+    ) -> Result<PageDocument, TklessError> {
         debug!(url = %url, "Executing Xiaohongshu adapter extraction");
 
         let resp = fetcher
@@ -57,7 +57,7 @@ impl XiaohongshuAdapter {
         raw_html: &str,
         url: &Url,
         options: &ExtractionOptions,
-    ) -> Result<PageDocument, PageclawError> {
+    ) -> Result<PageDocument, TklessError> {
         let doc = Html::parse_document(raw_html);
 
         // 1. Try parsing window.__INITIAL_STATE__ state tree
@@ -123,7 +123,7 @@ impl XiaohongshuAdapter {
         images: Vec<String>,
         url: &Url,
         options: &ExtractionOptions,
-    ) -> Result<PageDocument, PageclawError> {
+    ) -> Result<PageDocument, TklessError> {
         let content = match options.format {
             OutputFormat::Html => {
                 let mut out = format!("<h1>{title}</h1>\n<p>作者: {author} | 点赞: {likes} | 收藏: {collects}</p>\n<p>{content_text}</p>\n");
@@ -222,7 +222,7 @@ impl PlatformAdapter for XiaohongshuAdapter {
         fetcher: &'a crate::fetcher::Fetcher,
         url: &'a Url,
         options: &'a ExtractionOptions,
-    ) -> BoxFuture<'a, Result<PageDocument, PageclawError>> {
+    ) -> BoxFuture<'a, Result<PageDocument, TklessError>> {
         Box::pin(self.do_extract(fetcher, url, options))
     }
 }

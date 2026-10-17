@@ -146,7 +146,7 @@ async fn test_mcp_protocol_lifecycle() {
     assert_eq!(call_val["isError"], true);
 
     // 5b. Tool Call: clean_html
-    let clean_req = r#"{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"clean_html","arguments":{"html":"<!DOCTYPE html><html><head><title>PageClaw Clean Test</title></head><body><article><h1>PageClaw Clean Test</h1><p>Content for Agent</p></article><aside class=\"advertisement\"><p>Junk Advertisement</p></aside><script>console.log(\"bad\");</script></body></html>","frontmatter":true}}}"#;
+    let clean_req = r#"{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"clean_html","arguments":{"html":"<!DOCTYPE html><html><head><title>TkLess Clean Test</title></head><body><article><h1>TkLess Clean Test</h1><p>Content for Agent</p></article><aside class=\"advertisement\"><p>Junk Advertisement</p></aside><script>console.log(\"bad\");</script></body></html>","frontmatter":true}}}"#;
     let clean_res = server
         .handle_message(clean_req)
         .await
@@ -154,7 +154,7 @@ async fn test_mcp_protocol_lifecycle() {
     let clean_val = clean_res.result.expect("Clean result should be present");
     assert_ne!(clean_val["isError"], true);
     let text = clean_val["content"][0]["text"].as_str().unwrap();
-    assert!(text.contains("PageClaw Clean Test"));
+    assert!(text.contains("TkLess Clean Test"));
     assert!(text.contains("Content for Agent"));
     assert!(!text.contains("Junk Advertisement"));
     assert!(!text.contains("console.log"));
@@ -207,7 +207,7 @@ async fn test_mcp_protocol_lifecycle() {
     assert!(!table_text.contains("Unwanted article text"));
 
     // 5g. Tool Call: compare_similarity
-    let sim_req = r#"{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"compare_similarity","arguments":{"text1":"PageClaw is a high-performance, token-efficient web content extraction engine designed specifically for Large Language Models and AI Agents. It removes navigation bars, scripts, advertisements, and boilerplate using heuristic algorithms, converting the core content into LLM-optimized Markdown. Native adapters for Bilibili, WeChat, Zhihu, and GitHub are supported out of the box with zero overhead.","text2":"PageClaw is a high-performance, token-efficient web content extraction engine designed specifically for Large Language Models and AI Agents. It removes navigation bars, scripts, advertisements, and boilerplate using heuristic algorithms, converting the core content into LLM-optimized Markdown. Native adapters for Bilibili, WeChat, Zhihu, and GitHub are supported out of the box with low memory."}}}"#;
+    let sim_req = r#"{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"compare_similarity","arguments":{"text1":"TkLess is a high-performance, token-efficient web content extraction engine designed specifically for Large Language Models and AI Agents. It removes navigation bars, scripts, advertisements, and boilerplate using heuristic algorithms, converting the core content into LLM-optimized Markdown. Native adapters for Bilibili, WeChat, Zhihu, and GitHub are supported out of the box with zero overhead. By eliminating aggressive noise, TkLess delivers significant token savings across production AI pipelines.","text2":"TkLess is a high-performance, token-efficient web content extraction engine designed specifically for Large Language Models and AI Agents. It removes navigation bars, scripts, advertisements, and boilerplate using heuristic algorithms, converting the core content into LLM-optimized Markdown. Native adapters for Bilibili, WeChat, Zhihu, and GitHub are supported out of the box with zero overhead. By eliminating aggressive noise, TkLess delivers significant token savings across production AI pipelines. Reposted with permission."}}}"#;
     let sim_res = server
         .handle_message(sim_req)
         .await
@@ -311,7 +311,7 @@ async fn test_mcp_protocol_lifecycle() {
         "params": {
             "name": "clean_html",
             "arguments": {
-                "html": "<article><h1>Rust AI Engineering</h1><p>Rust provides zero-cost abstractions, strong memory safety, and thread concurrency.</p><p>PageClaw delivers sub-millisecond local web content extraction for intelligent AI agents.</p><p>Extractive summarization distills key takeaway bullet points without external model API calls.</p></article>",
+                "html": "<article><h1>Rust AI Engineering</h1><p>Rust provides zero-cost abstractions, strong memory safety, and thread concurrency.</p><p>TkLess delivers sub-millisecond local web content extraction for intelligent AI agents.</p><p>Extractive summarization distills key takeaway bullet points without external model API calls.</p></article>",
                 "summarize": true
             }
         }
@@ -333,7 +333,7 @@ async fn test_mcp_protocol_lifecycle() {
         "params": {
             "name": "summarize_text",
             "arguments": {
-                "text": "Artificial Intelligence is transforming engineering workflows across modern development environments. PageClaw provides an ultra-fast token-efficient web content extraction engine designed specifically for LLMs. By stripping aggressive advertisements and noisy navigation elements, PageClaw reduces LLM context token consumption by up to 90%.",
+                "text": "Artificial Intelligence is transforming engineering workflows across modern development environments. TkLess provides an ultra-fast token-efficient web content extraction engine designed specifically for LLMs. By stripping aggressive advertisements and noisy navigation elements, TkLess reduces LLM context token consumption by up to 90%.",
                 "max_bullets": 2,
                 "format": "markdown"
             }
@@ -545,7 +545,7 @@ async fn test_mcp_protocol_lifecycle() {
     let parsed_sum: serde_json::Value = serde_json::from_str(sum_content_text).unwrap();
     assert!(parsed_sum.as_array().unwrap().len() <= 2);
 
-    // 5u. Tool Call: diff_documents with tkless_ prefix (also tests backward-compatible pageclaw_ prefix)
+    // 5u. Tool Call: diff_documents with tkless_ prefix (also tests backward-compatible tkless_ prefix)
     let diff_doc_req = serde_json::json!({
         "jsonrpc": "2.0",
         "id": 25,

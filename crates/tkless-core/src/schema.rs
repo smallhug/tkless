@@ -11,7 +11,7 @@ use serde_json::{Map, Value};
 use std::collections::HashMap;
 use url::Url;
 
-use crate::error::PageclawError;
+use crate::error::TklessError;
 
 /// Definition of a single field extraction rule.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -65,19 +65,19 @@ pub struct ExtractionSchema {
 
 impl ExtractionSchema {
     /// Parses a schema from either a JSON string or a file path.
-    pub fn parse(input: &str) -> Result<Self, PageclawError> {
+    pub fn parse(input: &str) -> Result<Self, TklessError> {
         let trimmed = input.trim();
         // If it starts with '{', parse directly as inline JSON
         if trimmed.starts_with('{') {
             serde_json::from_str(trimmed)
-                .map_err(|e| PageclawError::SchemaError(format!("解析 JSON 提取 Schema 失败: {e}")))
+                .map_err(|e| TklessError::SchemaError(format!("解析 JSON 提取 Schema 失败: {e}")))
         } else {
             // Otherwise treat as a file path
             let content = std::fs::read_to_string(trimmed).map_err(|e| {
-                PageclawError::SchemaError(format!("读取 Schema 文件 '{trimmed}' 失败: {e}"))
+                TklessError::SchemaError(format!("读取 Schema 文件 '{trimmed}' 失败: {e}"))
             })?;
             serde_json::from_str(&content)
-                .map_err(|e| PageclawError::SchemaError(format!("解析 Schema 文件内容失败: {e}")))
+                .map_err(|e| TklessError::SchemaError(format!("解析 Schema 文件内容失败: {e}")))
         }
     }
 }
@@ -87,14 +87,14 @@ pub fn extract_entities(
     html: &str,
     schema: &ExtractionSchema,
     base_url: Option<&str>,
-) -> Result<Value, PageclawError> {
+) -> Result<Value, TklessError> {
     let doc = Html::parse_document(html);
     let parsed_base = base_url.and_then(|u| Url::parse(u).ok());
 
     // 1. Repeating list items mode
     if let Some(ref items_sel) = schema.items_selector {
         let selector = Selector::parse(items_sel).map_err(|e| {
-            PageclawError::SchemaError(format!("无效的 items_selector '{items_sel}': {e:?}"))
+            TklessError::SchemaError(format!("无效的 items_selector '{items_sel}': {e:?}"))
         })?;
 
         let mut items = Vec::new();
@@ -116,7 +116,7 @@ fn extract_fields_from_element(
     container: &ElementRef,
     fields: &HashMap<String, FieldDef>,
     base_url: Option<&Url>,
-) -> Result<Value, PageclawError> {
+) -> Result<Value, TklessError> {
     let mut map = Map::new();
 
     for (field_name, field_def) in fields {
@@ -222,13 +222,13 @@ fn extract_single_field(
     detail: &FieldDetail,
     multiple: bool,
     base_url: Option<&Url>,
-) -> Result<Value, PageclawError> {
+) -> Result<Value, TklessError> {
     if detail.selector.is_empty() {
         return Ok(detail.default.clone().unwrap_or(Value::Null));
     }
 
     let selector = Selector::parse(&detail.selector).map_err(|e| {
-        PageclawError::SchemaError(format!("无效的 CSS 选择器 '{}': {e:?}", detail.selector))
+        TklessError::SchemaError(format!("无效的 CSS 选择器 '{}': {e:?}", detail.selector))
     })?;
 
     // Nested object schema
@@ -598,7 +598,7 @@ pub fn scaffold_dom_skeleton(html: &str) -> ScaffoldReport {
 
     summary.push_str("\n#### 建议使用的 Schema 模版 (Ready-to-use JSON Schema):\n\n```json\n");
     summary.push_str(&schema_json);
-    summary.push_str("\n```\n\n> 💡 提示: 可直接通过 `pageclaw <URL> --schema '<JSON>'` 或 MCP `fetch_webpage(..., schema=...)` 极速抽取纯净结构化数据。");
+    summary.push_str("\n```\n\n> 💡 提示: 可直接通过 `tkless <URL> --schema '<JSON>'` 或 MCP `fetch_webpage(..., schema=...)` 极速抽取纯净结构化数据。");
 
     ScaffoldReport {
         suggested_items_selector,

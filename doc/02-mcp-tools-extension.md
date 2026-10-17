@@ -36,7 +36,7 @@ TkLess 内置原生轻量级 MCP 服务端（位于 `crates/tkless-core/src/mcp`
 ```
 
 > 💡 **前缀自适应 (Prefix-Agnostic Dispatch)**：
-> 服务端对所有工具调用均支持前缀自适应处理。无论是调用 `export_tables` 还是 `tkless_export_tables`（亦兼容历史 `pageclaw_export_tables` 前缀），服务端内部均会自动归一化分发，无缝兼容各类 MCP 宿主。
+> 服务端对所有工具调用均支持前缀自适应处理。无论是调用 `export_tables` 还是 `tkless_export_tables`（亦兼容历史 `tkless_export_tables` 前缀），服务端内部均会自动归一化分发，无缝兼容各类 MCP 宿主。
 
 ---
 

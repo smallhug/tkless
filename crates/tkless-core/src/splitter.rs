@@ -3,7 +3,7 @@
 //! Decomposes monolithic Markdown documents into modular sections split by heading hierarchy
 //! (`#` or `##`), and optionally writes them into a structured directory with an `index.md` Table of Contents.
 
-use crate::error::PageclawError;
+use crate::error::TklessError;
 use crate::token::count_tokens;
 use serde::{Deserialize, Serialize};
 use std::fs::{self, File};
@@ -112,8 +112,8 @@ pub fn export_sections_to_dir(
     sections: &[DocumentSection],
     dir: &Path,
     doc_title: Option<&str>,
-) -> Result<Vec<String>, PageclawError> {
-    fs::create_dir_all(dir).map_err(PageclawError::Io)?;
+) -> Result<Vec<String>, TklessError> {
+    fs::create_dir_all(dir).map_err(TklessError::Io)?;
 
     let mut written_files = Vec::new();
     let title_str = doc_title.unwrap_or("Document Index");
@@ -122,10 +122,10 @@ pub fn export_sections_to_dir(
     for sec in sections {
         let filename = format!("{:02}-{}.md", sec.index, sec.slug);
         let file_path = dir.join(&filename);
-        let mut file = File::create(&file_path).map_err(PageclawError::Io)?;
+        let mut file = File::create(&file_path).map_err(TklessError::Io)?;
         file.write_all(sec.content.as_bytes())
-            .map_err(PageclawError::Io)?;
-        file.write_all(b"\n").map_err(PageclawError::Io)?;
+            .map_err(TklessError::Io)?;
+        file.write_all(b"\n").map_err(TklessError::Io)?;
         written_files.push(filename);
     }
 
@@ -148,11 +148,11 @@ pub fn export_sections_to_dir(
     }
 
     let index_path = dir.join("index.md");
-    let mut index_file = File::create(&index_path).map_err(PageclawError::Io)?;
+    let mut index_file = File::create(&index_path).map_err(TklessError::Io)?;
     index_file
         .write_all(index_md.as_bytes())
-        .map_err(PageclawError::Io)?;
-    index_file.write_all(b"\n").map_err(PageclawError::Io)?;
+        .map_err(TklessError::Io)?;
+    index_file.write_all(b"\n").map_err(TklessError::Io)?;
 
     written_files.push("index.md".to_string());
     Ok(written_files)
@@ -224,7 +224,7 @@ Zero-cost abstractions ensure high throughput.
         let md = "# Chapter 1\nContent 1\n# Chapter 2\nContent 2";
         let sections = split_markdown_by_headings(md, 1);
         let temp_dir = std::env::temp_dir().join(format!(
-            "pageclaw_test_split_{}",
+            "tkless_test_split_{}",
             std::time::SystemTime::now().elapsed().unwrap().as_nanos()
         ));
 

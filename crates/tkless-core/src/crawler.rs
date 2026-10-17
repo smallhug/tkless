@@ -1,6 +1,6 @@
-use crate::error::PageclawError;
+use crate::error::TklessError;
 use crate::model::{ExtractionOptions, OutputFormat};
-use crate::PageclawEngine;
+use crate::TklessEngine;
 use scraper::{Html, Selector};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashSet, VecDeque};
@@ -79,11 +79,11 @@ pub struct SiteCrawlReport {
 /// Executes a breadth-first deep site crawl starting from `seed_url`,
 /// extracting and cleaning Markdown content for each discovered page.
 pub async fn crawl_site(
-    engine: &PageclawEngine,
+    engine: &TklessEngine,
     seed_url: &str,
     crawl_options: &CrawlOptions,
     extraction_options: &ExtractionOptions,
-) -> Result<SiteCrawlReport, PageclawError> {
+) -> Result<SiteCrawlReport, TklessError> {
     crawl_site_with_progress::<fn(usize, usize, &str)>(
         engine,
         seed_url,
@@ -96,12 +96,12 @@ pub async fn crawl_site(
 
 /// Executes deep site crawling with an optional real-time progress callback `F(crawled_count, max_pages, current_url)`.
 pub async fn crawl_site_with_progress<F>(
-    engine: &PageclawEngine,
+    engine: &TklessEngine,
     seed_url: &str,
     crawl_options: &CrawlOptions,
     extraction_options: &ExtractionOptions,
     mut on_progress: Option<F>,
-) -> Result<SiteCrawlReport, PageclawError>
+) -> Result<SiteCrawlReport, TklessError>
 where
     F: FnMut(usize, usize, &str) + Send,
 {

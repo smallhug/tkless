@@ -1,4 +1,4 @@
-use crate::error::PageclawError;
+use crate::error::TklessError;
 use crate::model::{FetchOptions, OnTooLarge};
 use reqwest::header::{
     HeaderMap, HeaderName, HeaderValue, ACCEPT, ACCEPT_LANGUAGE, COOKIE, USER_AGENT,
@@ -30,7 +30,7 @@ pub struct Fetcher {
 
 impl Fetcher {
     /// Create a new fetcher instance with custom options.
-    pub fn new(options: FetchOptions) -> Result<Self, PageclawError> {
+    pub fn new(options: FetchOptions) -> Result<Self, TklessError> {
         let mut headers = HeaderMap::new();
 
         let default_desktop_ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36 TkLess/0.1";
@@ -48,7 +48,7 @@ impl Fetcher {
         };
         headers.insert(
             USER_AGENT,
-            HeaderValue::from_str(ua).map_err(|e| PageclawError::InvalidArgument(e.to_string()))?,
+            HeaderValue::from_str(ua).map_err(|e| TklessError::InvalidArgument(e.to_string()))?,
         );
         headers.insert(
             ACCEPT,
@@ -186,7 +186,7 @@ impl Fetcher {
 
     /// Fetch a webpage by URL with retry backoff, full-chain SSRF validation across redirects,
     /// and decode its content into a clean string.
-    pub async fn fetch(&self, target_url: &str) -> Result<FetchedResponse, PageclawError> {
+    pub async fn fetch(&self, target_url: &str) -> Result<FetchedResponse, TklessError> {
         self.fetch_with_revalidation(target_url, None, None).await
     }
 
@@ -197,7 +197,7 @@ impl Fetcher {
         target_url: &str,
         etag: Option<&str>,
         last_modified: Option<&str>,
-    ) -> Result<FetchedResponse, PageclawError> {
+    ) -> Result<FetchedResponse, TklessError> {
         let mut current_url = Url::parse(target_url)?;
         let mut redirect_count = 0;
         const MAX_REDIRECTS: usize = 10;
@@ -259,7 +259,7 @@ impl Fetcher {
                             tokio::time::sleep(delay).await;
                             continue;
                         }
-                        return Err(PageclawError::Network(err));
+                        return Err(TklessError::Network(err));
                     }
                     Err(_) => {
                         if attempt < self.options.retries {
@@ -277,7 +277,7 @@ impl Fetcher {
                             tokio::time::sleep(delay).await;
                             continue;
                         }
-                        return Err(PageclawError::ConnectionTimeout(format!(
+                        return Err(TklessError::ConnectionTimeout(format!(
                             "Connection handshake to '{current_url}' timed out after {:?}",
                             connect_timeout
                         )));
@@ -319,14 +319,14 @@ impl Fetcher {
                 if let Some(loc_header) = resp.headers().get(reqwest::header::LOCATION) {
                     if let Ok(loc_str) = loc_header.to_str() {
                         let next_url = current_url.join(loc_str.trim()).map_err(|e| {
-                            PageclawError::InvalidArgument(format!(
+                            TklessError::InvalidArgument(format!(
                                 "Malformed redirect Location header '{loc_str}': {e}"
                             ))
                         })?;
 
                         redirect_count += 1;
                         if redirect_count > MAX_REDIRECTS {
-                            return Err(PageclawError::InvalidArgument(format!(
+                            return Err(TklessError::InvalidArgument(format!(
                                 "Too many redirects (exceeded maximum limit of {MAX_REDIRECTS})"
                             )));
                         }
@@ -353,7 +353,7 @@ impl Fetcher {
 
         if !self.options.allow_http_errors && (status.is_client_error() || status.is_server_error())
         {
-            return Err(PageclawError::HttpStatusError {
+            return Err(TklessError::HttpStatusError {
                 status: status_u16,
                 url: final_url,
             });
@@ -385,7 +385,7 @@ impl Fetcher {
             if raw_bytes.len() + chunk.len() > self.options.max_bytes {
                 match self.options.on_too_large {
                     OnTooLarge::Error => {
-                        return Err(PageclawError::ResponseTooLarge {
+                        return Err(TklessError::ResponseTooLarge {
                             limit: self.options.max_bytes,
                             received: raw_bytes.len() + chunk.len(),
                         });
@@ -421,7 +421,7 @@ impl Fetcher {
     }
 
     /// Validates that target URL does not point to internal/loopback/cloud-metadata addresses (SSRF guard).
-    pub async fn validate_ssrf(&self, url: &Url) -> Result<(), PageclawError> {
+    pub async fn validate_ssrf(&self, url: &Url) -> Result<(), TklessError> {
         if self.options.allow_private_addresses {
             return Ok(());
         }
@@ -433,7 +433,7 @@ impl Fetcher {
 
         let host_lower = host.to_ascii_lowercase();
         if host_lower == "localhost" || host_lower.ends_with(".local") {
-            return Err(PageclawError::SsrfBlocked(format!(
+            return Err(TklessError::SsrfBlocked(format!(
                 "Access to '{host}' is restricted"
             )));
         }
@@ -441,7 +441,7 @@ impl Fetcher {
         // Direct IP literal check
         if let Ok(ip) = host.parse::<std::net::IpAddr>() {
             if is_private_ip(ip) {
-                return Err(PageclawError::SsrfBlocked(format!(
+                return Err(TklessError::SsrfBlocked(format!(
                     "Access to private/loopback IP {ip} is restricted"
                 )));
             }
@@ -454,7 +454,7 @@ impl Fetcher {
         if let Ok(addrs) = tokio::net::lookup_host(&host_with_port).await {
             for addr in addrs {
                 if is_private_ip(addr.ip()) {
-                    return Err(PageclawError::SsrfBlocked(format!(
+                    return Err(TklessError::SsrfBlocked(format!(
                         "Host '{host}' resolved to restricted private IP {}",
                         addr.ip()
                     )));
@@ -702,9 +702,9 @@ pub fn detect_platform_from_url(url_str: &str) -> Option<&'static str> {
 pub fn load_cookie_from_file_for_url(
     path: &Path,
     target_url: Option<&str>,
-) -> Result<String, PageclawError> {
+) -> Result<String, TklessError> {
     let content = std::fs::read_to_string(path).map_err(|e| {
-        PageclawError::InvalidArgument(format!("Cannot read cookie file '{}': {e}", path.display()))
+        TklessError::InvalidArgument(format!("Cannot read cookie file '{}': {e}", path.display()))
     })?;
 
     let platform = target_url.and_then(detect_platform_from_url);
@@ -713,7 +713,7 @@ pub fn load_cookie_from_file_for_url(
 
 /// Loads and parses cookie credentials from a file supporting multi-platform prefixes,
 /// Netscape format, and standard HTTP header format.
-pub fn load_cookie_from_file(path: &Path) -> Result<String, PageclawError> {
+pub fn load_cookie_from_file(path: &Path) -> Result<String, TklessError> {
     load_cookie_from_file_for_url(path, None)
 }
 
@@ -723,7 +723,7 @@ pub fn save_platform_cookies_to_file(
     path: &Path,
     platform: &str,
     new_cookie: &str,
-) -> Result<(), PageclawError> {
+) -> Result<(), TklessError> {
     let clean_platform = platform.trim().to_lowercase();
     let clean_cookie = new_cookie.trim();
 
@@ -788,7 +788,7 @@ pub fn save_platform_cookies_to_file(
         out.push_str(&format!("{p}: {c}\n"));
     }
 
-    std::fs::write(path, out.trim_end()).map_err(PageclawError::Io)?;
+    std::fs::write(path, out.trim_end()).map_err(TklessError::Io)?;
     Ok(())
 }
 
@@ -1131,7 +1131,7 @@ mod tests {
     #[test]
     fn test_save_platform_cookies_prevents_overwrite() {
         let temp_dir = std::env::temp_dir().join(format!(
-            "pageclaw_test_{}",
+            "tkless_test_{}",
             std::time::SystemTime::now().elapsed().unwrap().as_nanos()
         ));
         let cookie_file = temp_dir.join("test_cookies.txt");
@@ -1179,7 +1179,7 @@ mod tests {
     #[test]
     fn test_load_cookie_for_url_and_platform_isolation() {
         let multi_content = r#"
-            # PageClaw Credentials
+            # TkLess Credentials
             bilibili: SESSDATA=bili_secret; bili_jct=bili_csrf
             zhihu: d_c0="zhihu_device"; z_c0="zhihu_auth"
             wechat: wx_token=wx_secret_999
@@ -1327,7 +1327,7 @@ mod tests {
         let res1 = fetcher.fetch(&target_url).await;
         assert!(res1.is_err());
         match res1 {
-            Err(PageclawError::SsrfBlocked(msg)) => {
+            Err(TklessError::SsrfBlocked(msg)) => {
                 assert!(msg.contains("restricted"));
             }
             _ => panic!("Expected SsrfBlocked error on first hop"),
@@ -1370,7 +1370,7 @@ mod tests {
     #[test]
     fn test_fetcher_resolve_cookie_for_url_host_scoped() {
         let temp_dir = std::env::temp_dir().join(format!(
-            "pageclaw_f5_{}",
+            "tkless_f5_{}",
             std::time::SystemTime::now().elapsed().unwrap().as_nanos()
         ));
         let cookie_file = temp_dir.join("cookies.txt");

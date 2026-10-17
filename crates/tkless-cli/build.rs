@@ -8,7 +8,6 @@ fn main() {
         .unwrap_or_else(|_| "2026-10-15".to_string());
 
     println!("cargo:rustc-env=TKLESS_BUILD_DATE={build_date}");
-    println!("cargo:rustc-env=PAGECLAW_BUILD_DATE={build_date}");
 
     #[cfg(windows)]
     {

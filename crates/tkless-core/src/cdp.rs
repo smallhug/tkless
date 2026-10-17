@@ -14,7 +14,7 @@ use tokio_tungstenite::tungstenite::Message;
 use tracing::debug;
 use url::Url;
 
-use crate::error::PageclawError;
+use crate::error::TklessError;
 
 /// Options controlling CDP browser interaction.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -66,7 +66,7 @@ fn normalize_cdp_endpoint(endpoint: &str) -> (String, bool) {
 }
 
 /// Fetches rendered HTML for a given URL via Chrome DevTools Protocol.
-pub async fn fetch_html_via_cdp(url: &str, options: &CdpOptions) -> Result<String, PageclawError> {
+pub async fn fetch_html_via_cdp(url: &str, options: &CdpOptions) -> Result<String, TklessError> {
     let (base_endpoint, is_direct_ws) = normalize_cdp_endpoint(&options.endpoint);
     let total_timeout = Duration::from_millis(options.timeout_ms.unwrap_or(30_000));
 
@@ -80,7 +80,7 @@ pub async fn fetch_html_via_cdp(url: &str, options: &CdpOptions) -> Result<Strin
                 .connect_timeout(req_timeout)
                 .timeout(req_timeout)
                 .build()
-                .map_err(|e| PageclawError::CdpError(format!("创建 HTTP 客户端失败: {e}")))?;
+                .map_err(|e| TklessError::CdpError(format!("创建 HTTP 客户端失败: {e}")))?;
 
             let new_target_url = format!("{}/json/new?{}", base_endpoint, urlencoding(url));
             debug!(endpoint = %new_target_url, "通过 CDP HTTP 接口创建新页面 Tab");
@@ -90,13 +90,13 @@ pub async fn fetch_html_via_cdp(url: &str, options: &CdpOptions) -> Result<Strin
                 _ => client.get(&new_target_url).send().await,
             }
             .map_err(|err| {
-                PageclawError::CdpError(format!(
+                TklessError::CdpError(format!(
                     "无法连接到 Chrome CDP 端点 '{base_endpoint}': {err}。请确保已通过 `google-chrome --remote-debugging-port=9222` 或 `msedge --remote-debugging-port=9222` 启动浏览器远程调试。"
                 ))
             })?;
 
             if !resp.status().is_success() {
-                return Err(PageclawError::CdpError(format!(
+                return Err(TklessError::CdpError(format!(
                     "CDP 端点返回错误状态码 {}: {}",
                     resp.status(),
                     base_endpoint
@@ -104,11 +104,11 @@ pub async fn fetch_html_via_cdp(url: &str, options: &CdpOptions) -> Result<Strin
             }
 
             let target: DevToolsTarget = resp.json().await.map_err(|err| {
-                PageclawError::CdpError(format!("解析 CDP 目标元数据失败: {err}"))
+                TklessError::CdpError(format!("解析 CDP 目标元数据失败: {err}"))
             })?;
 
             let ws_url = target.web_socket_debugger_url.ok_or_else(|| {
-                PageclawError::CdpError("CDP 目标未返回有效的 webSocketDebuggerUrl".to_string())
+                TklessError::CdpError("CDP 目标未返回有效的 webSocketDebuggerUrl".to_string())
             })?;
 
             let target_id = target.id.clone();
@@ -123,7 +123,7 @@ pub async fn fetch_html_via_cdp(url: &str, options: &CdpOptions) -> Result<Strin
     })
     .await
     .map_err(|_| {
-        PageclawError::ConnectionTimeout(format!(
+        TklessError::ConnectionTimeout(format!(
             "CDP 页面加载超时 ({}ms): {url}",
             options.timeout_ms.unwrap_or(30_000)
         ))
@@ -136,11 +136,11 @@ async fn connect_and_extract_html(
     target_url: &str,
     options: &CdpOptions,
     _http_base: Option<&str>,
-) -> Result<String, PageclawError> {
+) -> Result<String, TklessError> {
     debug!(ws_url = %ws_url, "连接 CDP WebSocket 调试会话");
 
     let (mut ws_stream, _) = connect_async(ws_url).await.map_err(|err| {
-        PageclawError::CdpError(format!("无法建立 CDP WebSocket 连接 ({ws_url}): {err}"))
+        TklessError::CdpError(format!("无法建立 CDP WebSocket 连接 ({ws_url}): {err}"))
     })?;
 
     let mut message_id = 1u64;
@@ -263,12 +263,12 @@ async fn connect_and_extract_html(
                 }
             }
         }
-        Err(PageclawError::CdpError(
+        Err(TklessError::CdpError(
             "未能从 CDP Runtime.evaluate 获取 outerHTML".to_string(),
         ))
     })
     .await
-    .map_err(|_| PageclawError::ConnectionTimeout("CDP Runtime.evaluate 执行超时".to_string()))??;
+    .map_err(|_| TklessError::ConnectionTimeout("CDP Runtime.evaluate 执行超时".to_string()))??;
 
     Ok(html)
 }
@@ -279,7 +279,7 @@ async fn send_cdp_cmd<S: SinkExt<Message> + Unpin>(
     id: u64,
     method: &str,
     params: Value,
-) -> Result<(), PageclawError>
+) -> Result<(), TklessError>
 where
     <S as futures_util::Sink<Message>>::Error: std::fmt::Display,
 {
@@ -291,7 +291,7 @@ where
     let text = payload.to_string();
     ws.send(Message::Text(text.into()))
         .await
-        .map_err(|err| PageclawError::CdpError(format!("发送 CDP 指令失败 ({method}): {err}")))?;
+        .map_err(|err| TklessError::CdpError(format!("发送 CDP 指令失败 ({method}): {err}")))?;
     Ok(())
 }
 
@@ -301,7 +301,7 @@ pub async fn capture_screenshot_via_cdp(
     url: &str,
     options: &CdpOptions,
     format: Option<&str>,
-) -> Result<Vec<u8>, PageclawError> {
+) -> Result<Vec<u8>, TklessError> {
     let (base_endpoint, is_direct_ws) = normalize_cdp_endpoint(&options.endpoint);
     let total_timeout = Duration::from_millis(options.timeout_ms.unwrap_or(30_000));
 
@@ -314,7 +314,7 @@ pub async fn capture_screenshot_via_cdp(
                 .connect_timeout(req_timeout)
                 .timeout(req_timeout)
                 .build()
-                .map_err(|e| PageclawError::CdpError(format!("创建 HTTP 客户端失败: {e}")))?;
+                .map_err(|e| TklessError::CdpError(format!("创建 HTTP 客户端失败: {e}")))?;
 
             let new_target_url = format!("{}/json/new?{}", base_endpoint, urlencoding(url));
             debug!(endpoint = %new_target_url, "通过 CDP HTTP 接口创建新页面 Tab (截图)");
@@ -324,13 +324,13 @@ pub async fn capture_screenshot_via_cdp(
                 _ => client.get(&new_target_url).send().await,
             }
             .map_err(|err| {
-                PageclawError::CdpError(format!(
+                TklessError::CdpError(format!(
                     "无法连接到 Chrome CDP 端点 '{base_endpoint}': {err}。请确保已通过 `google-chrome --remote-debugging-port=9222` 或 `msedge --remote-debugging-port=9222` 启动浏览器远程调试。"
                 ))
             })?;
 
             if !resp.status().is_success() {
-                return Err(PageclawError::CdpError(format!(
+                return Err(TklessError::CdpError(format!(
                     "CDP 端点返回错误状态码 {}: {}",
                     resp.status(),
                     base_endpoint
@@ -338,11 +338,11 @@ pub async fn capture_screenshot_via_cdp(
             }
 
             let target: DevToolsTarget = resp.json().await.map_err(|err| {
-                PageclawError::CdpError(format!("解析 CDP 目标元数据失败: {err}"))
+                TklessError::CdpError(format!("解析 CDP 目标元数据失败: {err}"))
             })?;
 
             let ws_url = target.web_socket_debugger_url.ok_or_else(|| {
-                PageclawError::CdpError("CDP 目标未返回有效的 webSocketDebuggerUrl".to_string())
+                TklessError::CdpError("CDP 目标未返回有效的 webSocketDebuggerUrl".to_string())
             })?;
 
             let target_id = target.id.clone();
@@ -356,7 +356,7 @@ pub async fn capture_screenshot_via_cdp(
     })
     .await
     .map_err(|_| {
-        PageclawError::ConnectionTimeout(format!(
+        TklessError::ConnectionTimeout(format!(
             "CDP 页面加载与截图超时 ({}ms): {url}",
             options.timeout_ms.unwrap_or(30_000)
         ))
@@ -369,11 +369,11 @@ async fn connect_and_capture_screenshot(
     target_url: &str,
     options: &CdpOptions,
     format: Option<&str>,
-) -> Result<Vec<u8>, PageclawError> {
+) -> Result<Vec<u8>, TklessError> {
     debug!(ws_url = %ws_url, "连接 CDP WebSocket 截取屏幕快照");
 
     let (mut ws_stream, _) = connect_async(ws_url).await.map_err(|err| {
-        PageclawError::CdpError(format!("无法建立 CDP WebSocket 连接 ({ws_url}): {err}"))
+        TklessError::CdpError(format!("无法建立 CDP WebSocket 连接 ({ws_url}): {err}"))
     })?;
 
     let mut message_id = 1u64;
@@ -461,17 +461,17 @@ async fn connect_and_capture_screenshot(
                 }
             }
         }
-        Err(PageclawError::CdpError(
+        Err(TklessError::CdpError(
             "未能从 CDP Page.captureScreenshot 获取图像数据".to_string(),
         ))
     })
     .await
     .map_err(|_| {
-        PageclawError::ConnectionTimeout("CDP Page.captureScreenshot 执行超时".to_string())
+        TklessError::ConnectionTimeout("CDP Page.captureScreenshot 执行超时".to_string())
     })??;
 
     decode_base64(&b64_str)
-        .ok_or_else(|| PageclawError::CdpError("解析 CDP 截图 Base64 数据失败".to_string()))
+        .ok_or_else(|| TklessError::CdpError("解析 CDP 截图 Base64 数据失败".to_string()))
 }
 
 /// Decodes standard base64 string into raw binary bytes.
@@ -581,7 +581,7 @@ pub fn is_anti_scraping_challenge(html: &str, status: u16) -> bool {
 
 /// Resolves effective Chrome DevTools Protocol endpoint:
 /// 1. Explicitly configured parameter
-/// 2. `TKLESS_CDP_ENDPOINT`, `PAGECLAW_CDP_ENDPOINT`, or `CDP_ENDPOINT` environment variables
+/// 2. `TKLESS_CDP_ENDPOINT`, `TKLESS_CDP_ENDPOINT`, or `CDP_ENDPOINT` environment variables
 /// 3. Default fallback "http://127.0.0.1:9222" if auto-cdp requested
 pub fn resolve_cdp_endpoint(configured: Option<&str>, auto_cdp: bool) -> Option<String> {
     if let Some(endpoint) = configured {
@@ -598,7 +598,7 @@ pub fn resolve_cdp_endpoint(configured: Option<&str>, auto_cdp: bool) -> Option<
         }
     }
 
-    if let Ok(env_ep) = std::env::var("PAGECLAW_CDP_ENDPOINT") {
+    if let Ok(env_ep) = std::env::var("TKLESS_CDP_ENDPOINT") {
         let trimmed = env_ep.trim();
         if !trimmed.is_empty() {
             return Some(trimmed.to_string());

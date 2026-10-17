@@ -5,7 +5,7 @@
 //! subjects/categories, publication dates, and direct PDF links.
 
 use crate::adapters::{BoxFuture, PlatformAdapter};
-use crate::error::PageclawError;
+use crate::error::TklessError;
 use crate::markdown::MarkdownConverter;
 use crate::model::{ExtractionOptions, OutputFormat, PageDocument, PageMetadata};
 use crate::token::count_tokens;
@@ -63,15 +63,15 @@ impl ArxivAdapter {
         fetcher: &crate::fetcher::Fetcher,
         url: &Url,
         options: &ExtractionOptions,
-    ) -> Result<PageDocument, PageclawError> {
+    ) -> Result<PageDocument, TklessError> {
         debug!(url = %url, "Executing ArXiv adapter extraction");
 
         let arxiv_id = Self::extract_arxiv_id(url)
-            .ok_or_else(|| PageclawError::InvalidArgument(format!("Invalid ArXiv URL: {url}")))?;
+            .ok_or_else(|| TklessError::InvalidArgument(format!("Invalid ArXiv URL: {url}")))?;
 
         // Canonicalize to abstract URL for structured metadata
         let abs_url = Url::parse(&format!("https://arxiv.org/abs/{arxiv_id}"))
-            .map_err(|e| PageclawError::InvalidArgument(e.to_string()))?;
+            .map_err(|e| TklessError::InvalidArgument(e.to_string()))?;
 
         let resp = fetcher
             .get(&abs_url)
@@ -92,7 +92,7 @@ impl ArxivAdapter {
         original_url: &Url,
         arxiv_id: &str,
         options: &ExtractionOptions,
-    ) -> Result<PageDocument, PageclawError> {
+    ) -> Result<PageDocument, TklessError> {
         let doc = Html::parse_document(raw_html);
 
         // 1. Extract Title (stripping "Title:" or "[Title]" prefix)
@@ -283,7 +283,7 @@ impl PlatformAdapter for ArxivAdapter {
         fetcher: &'a crate::fetcher::Fetcher,
         url: &'a Url,
         options: &'a ExtractionOptions,
-    ) -> BoxFuture<'a, Result<PageDocument, PageclawError>> {
+    ) -> BoxFuture<'a, Result<PageDocument, TklessError>> {
         Box::pin(self.do_extract(fetcher, url, options))
     }
 }

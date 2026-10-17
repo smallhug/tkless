@@ -32,7 +32,7 @@ pub use wikipedia::WikipediaAdapter;
 pub use xiaohongshu::XiaohongshuAdapter;
 pub use zhihu::ZhihuAdapter;
 
-use crate::error::PageclawError;
+use crate::error::TklessError;
 use crate::model::{ExtractionOptions, PageDocument};
 use std::future::Future;
 use std::pin::Pin;
@@ -56,7 +56,7 @@ pub trait PlatformAdapter: Send + Sync {
         fetcher: &'a crate::fetcher::Fetcher,
         url: &'a Url,
         options: &'a ExtractionOptions,
-    ) -> BoxFuture<'a, Result<PageDocument, PageclawError>>;
+    ) -> BoxFuture<'a, Result<PageDocument, TklessError>>;
 }
 
 /// Registry managing active platform adapters.
@@ -132,8 +132,8 @@ mod tests {
             _fetcher: &'a crate::fetcher::Fetcher,
             _url: &'a Url,
             _options: &'a ExtractionOptions,
-        ) -> BoxFuture<'a, Result<PageDocument, PageclawError>> {
-            Box::pin(async { Err(PageclawError::InvalidArgument("test".into())) })
+        ) -> BoxFuture<'a, Result<PageDocument, TklessError>> {
+            Box::pin(async { Err(TklessError::InvalidArgument("test".into())) })
         }
     }
 
