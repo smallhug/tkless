@@ -42,7 +42,7 @@ async fn test_mcp_protocol_lifecycle() {
     let tools_array = tools_val["tools"]
         .as_array()
         .expect("Tools should be an array");
-    assert_eq!(tools_array.len(), 15);
+    assert_eq!(tools_array.len(), 16);
 
     let tool_names: Vec<&str> = tools_array
         .iter()
@@ -63,6 +63,7 @@ async fn test_mcp_protocol_lifecycle() {
     assert!(tool_names.contains(&"fetch_feed"));
     assert!(tool_names.contains(&"inspect_links"));
     assert!(tool_names.contains(&"check_auth"));
+    assert!(tool_names.contains(&"summarize_text"));
 
     // Verify web_search schema contains scope, cdp_endpoint, schema
     let search_tool = tools_array
@@ -318,6 +319,31 @@ async fn test_mcp_protocol_lifecycle() {
     let sum_text = sum_val["content"][0]["text"].as_str().unwrap();
     assert!(sum_text.contains("核心要点速览 (Key Takeaways)"));
     assert!(sum_text.contains("- "));
+
+    // 5m. Tool Call: summarize_text
+    let standalone_sum_req = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 17,
+        "method": "tools/call",
+        "params": {
+            "name": "summarize_text",
+            "arguments": {
+                "text": "Artificial Intelligence is transforming engineering workflows across modern development environments. PageClaw provides an ultra-fast token-efficient web content extraction engine designed specifically for LLMs. By stripping aggressive advertisements and noisy navigation elements, PageClaw reduces LLM context token consumption by up to 90%.",
+                "max_bullets": 2,
+                "format": "markdown"
+            }
+        }
+    });
+    let standalone_sum_res = server
+        .handle_message(&standalone_sum_req.to_string())
+        .await
+        .expect("Should return response");
+    let standalone_sum_val = standalone_sum_res
+        .result
+        .expect("Summarize text result should be present");
+    let standalone_sum_text = standalone_sum_val["content"][0]["text"].as_str().unwrap();
+    assert!(standalone_sum_text.contains("核心要点速览 (Key Takeaways)"));
+    assert!(standalone_sum_text.contains("- "));
 
     // 5. Unknown Method Error
     let unknown_req = r#"{"jsonrpc":"2.0","id":4,"method":"unknown/method"}"#;

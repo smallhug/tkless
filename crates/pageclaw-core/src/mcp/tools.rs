@@ -364,9 +364,9 @@ pub fn get_available_tools() -> Vec<McpTool> {
                     },
                     "scope": {
                         "type": "string",
-                        "enum": ["all", "wechat", "zhihu", "github", "juejin", "csdn", "medium", "substack", "arxiv", "huggingface", "wikipedia", "reddit"],
+                        "enum": ["all", "wechat", "zhihu", "github", "juejin", "csdn", "medium", "substack", "arxiv", "huggingface", "wikipedia", "reddit", "stackoverflow"],
                         "default": "all",
-                        "description": "Search scope limitation: 'all' (entire web), 'wechat' (WeChat Official Accounts), 'zhihu' (Zhihu questions and articles), 'github' (GitHub repositories and issues), 'juejin' (Juejin tech posts), 'csdn' (CSDN blog posts), 'medium' (Medium articles), 'substack' (Substack newsletters), 'arxiv' (arXiv research papers), 'huggingface' (Hugging Face models, papers, blogs), 'wikipedia' (Wikipedia articles), or 'reddit' (Reddit discussions)"
+                        "description": "Search scope limitation: 'all' (entire web), 'wechat' (WeChat Official Accounts), 'zhihu' (Zhihu questions and articles), 'github' (GitHub repositories and issues), 'juejin' (Juejin tech posts), 'csdn' (CSDN blog posts), 'medium' (Medium articles), 'substack' (Substack newsletters), 'arxiv' (arXiv research papers), 'huggingface' (Hugging Face models, papers, blogs), 'wikipedia' (Wikipedia articles), 'reddit' (Reddit discussions), or 'stackoverflow' (Stack Overflow Q&A)"
                     },
                     "dedup": {
                         "type": "boolean",
@@ -813,6 +813,31 @@ pub fn get_available_tools() -> Vec<McpTool> {
                     }
                 },
                 "required": ["platform"]
+            }),
+        },
+        McpTool {
+            name: "summarize_text".to_string(),
+            description: "Locally distills salient key takeaway bullet points (TL;DR) from arbitrary text or Markdown using term frequency and positional heuristics without requiring external LLM API calls.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "text": {
+                        "type": "string",
+                        "description": "Raw text or Markdown content to extract key takeaways from"
+                    },
+                    "max_bullets": {
+                        "type": "integer",
+                        "default": 3,
+                        "description": "Maximum number of key takeaway bullet points to extract (default: 3, range: 1-10)"
+                    },
+                    "format": {
+                        "type": "string",
+                        "enum": ["markdown", "json"],
+                        "default": "markdown",
+                        "description": "Output format: 'markdown' (formatted bullet points) or 'json' (array of strings)"
+                    }
+                },
+                "required": ["text"]
             }),
         }
     ]

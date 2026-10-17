@@ -437,6 +437,13 @@ async fn run(args: CliArgs) -> Result<()> {
             } else {
                 format!("site:reddit.com {clean}")
             }
+        } else if search_args.so {
+            let clean = search_args.query.trim();
+            if clean.starts_with("site:") {
+                clean.to_string()
+            } else {
+                format!("site:stackoverflow.com {clean}")
+            }
         } else {
             search_args.query.clone()
         };

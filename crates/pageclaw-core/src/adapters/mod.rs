@@ -6,6 +6,7 @@ pub mod huggingface;
 pub mod juejin;
 pub mod medium;
 pub mod reddit;
+pub mod stackoverflow;
 pub mod substack;
 pub mod wechat;
 pub mod wikipedia;
@@ -20,6 +21,7 @@ pub use huggingface::HuggingfaceAdapter;
 pub use juejin::JuejinAdapter;
 pub use medium::MediumAdapter;
 pub use reddit::RedditAdapter;
+pub use stackoverflow::StackoverflowAdapter;
 pub use substack::SubstackAdapter;
 pub use wechat::WechatAdapter;
 pub use wikipedia::WikipediaAdapter;
@@ -89,6 +91,7 @@ impl AdapterRegistry {
         registry.register(Arc::new(HuggingfaceAdapter::new()));
         registry.register(Arc::new(WikipediaAdapter::new()));
         registry.register(Arc::new(RedditAdapter::new()));
+        registry.register(Arc::new(StackoverflowAdapter::new()));
         registry
     }
 
