@@ -272,6 +272,7 @@ pub struct PageMetadata {
     pub published_time: Option<String>,
     pub cover_image: Option<String>,
     pub favicon: Option<String>,
+    pub language: Option<String>,
     pub open_graph: HashMap<String, String>,
     pub twitter_card: HashMap<String, String>,
 }

@@ -19,6 +19,12 @@ static TD_SELECTOR: LazyLock<Selector> = LazyLock::new(|| Selector::parse("td, t
 static THEAD_SELECTOR: LazyLock<Selector> = LazyLock::new(|| Selector::parse("thead").unwrap());
 static FAVICON_SELECTOR: LazyLock<Selector> =
     LazyLock::new(|| Selector::parse("link[rel*='icon'], link[rel='apple-touch-icon']").unwrap());
+static HTML_LANG_SELECTOR: LazyLock<Selector> =
+    LazyLock::new(|| Selector::parse("html[lang]").unwrap());
+static CONTENT_LANG_SELECTOR: LazyLock<Selector> = LazyLock::new(|| {
+    Selector::parse("meta[http-equiv='content-language'], meta[http-equiv='Content-Language']")
+        .unwrap()
+});
 
 /// Extracts metadata and structured data (JSON-LD, OpenGraph, Twitter Card) from HTML.
 pub fn extract_metadata(doc: &Html) -> PageMetadata {
@@ -104,7 +110,71 @@ pub fn extract_metadata(doc: &Html) -> PageMetadata {
     metadata.open_graph = og;
     metadata.twitter_card = twitter;
 
+    // 6. Language detection: html[lang] -> meta[http-equiv="content-language"] -> script heuristics
+    let mut language = doc
+        .select(&HTML_LANG_SELECTOR)
+        .next()
+        .and_then(|el| el.value().attr("lang").map(|s| s.trim().to_string()))
+        .filter(|s| !s.is_empty());
+
+    if language.is_none() {
+        if let Some(el) = doc.select(&CONTENT_LANG_SELECTOR).next() {
+            if let Some(content) = el.value().attr("content") {
+                let trimmed = content.trim();
+                if !trimmed.is_empty() {
+                    language = Some(trimmed.to_string());
+                }
+            }
+        }
+    }
+
+    if language.is_none() {
+        let sample_text = doc
+            .root_element()
+            .text()
+            .take(50)
+            .collect::<Vec<_>>()
+            .join(" ");
+        language = detect_text_language(&sample_text).map(|s| s.to_string());
+    }
+
+    metadata.language = language;
+
     metadata
+}
+
+/// Statistically detects the primary natural language of a text sample based on Unicode script blocks.
+pub fn detect_text_language(text: &str) -> Option<&'static str> {
+    let mut cjk = 0;
+    let mut latin = 0;
+    let mut cyrillic = 0;
+    let mut kana = 0;
+    let mut hangul = 0;
+
+    for ch in text.chars() {
+        match ch {
+            '\u{3040}'..='\u{30FF}' => kana += 1,
+            '\u{AC00}'..='\u{D7AF}' => hangul += 1,
+            '\u{4E00}'..='\u{9FFF}' => cjk += 1,
+            'a'..='z' | 'A'..='Z' => latin += 1,
+            '\u{0400}'..='\u{04FF}' => cyrillic += 1,
+            _ => {}
+        }
+    }
+
+    if kana > 5 {
+        Some("ja")
+    } else if hangul > 5 {
+        Some("ko")
+    } else if cjk > 10 && cjk > latin / 2 {
+        Some("zh-CN")
+    } else if cyrillic > 10 && cyrillic > latin {
+        Some("ru")
+    } else if latin > 15 {
+        Some("en")
+    } else {
+        None
+    }
 }
 
 /// Extracts all JSON-LD blocks (<script type="application/ld+json">) and normalizes into JSON values.
@@ -524,5 +594,33 @@ mod tests {
         let formatted =
             ExtractedTable::format_tables(&tables, crate::model::TableExportFormat::Csv);
         assert!(formatted.contains("Alice,Engineer,95"));
+    }
+
+    #[test]
+    fn test_detect_text_language() {
+        assert_eq!(
+            detect_text_language(
+                "PageClaw is an ultra-fast web content extraction engine built with Rust."
+            ),
+            Some("en")
+        );
+        assert_eq!(
+            detect_text_language("PageClaw 是专为大语言模型和智能体设计的超轻量网页内容提取引擎。"),
+            Some("zh-CN")
+        );
+        assert_eq!(
+            detect_text_language("こんにちは世界、Rustプログラミング言語の高性能エンジンです。"),
+            Some("ja")
+        );
+        assert_eq!(
+            detect_text_language("안녕하세요 세계, 고성능 웹 콘텐츠 추출 엔진입니다."),
+            Some("ko")
+        );
+        assert_eq!(
+            detect_text_language(
+                "Привет мир, высокопроизводительный движок для извлечения контента."
+            ),
+            Some("ru")
+        );
     }
 }
