@@ -661,6 +661,8 @@ pub fn detect_platform_from_host(host: &str) -> Option<&'static str> {
         Some("medium")
     } else if is_subdomain_or_exact(&host_lower, "substack.com") {
         Some("substack")
+    } else if is_subdomain_or_exact(&host_lower, "arxiv.org") {
+        Some("arxiv")
     } else {
         None
     }
@@ -1002,6 +1004,10 @@ mod tests {
             detect_platform_from_url("https://newsletter.substack.com/p/my-post"),
             Some("substack")
         );
+        assert_eq!(
+            detect_platform_from_url("https://arxiv.org/abs/2401.12345"),
+            Some("arxiv")
+        );
 
         // Security check: spoofed / typosquatted domains MUST NOT leak cookies!
         assert_eq!(
@@ -1018,6 +1024,10 @@ mod tests {
         );
         assert_eq!(
             detect_platform_from_url("https://evilsubstack.com/post"),
+            None
+        );
+        assert_eq!(
+            detect_platform_from_url("https://evilarxiv.org/abs/2401.12345"),
             None
         );
         assert_eq!(

@@ -144,32 +144,53 @@ fn normalize_field_def(def: &FieldDef) -> (FieldDetail, bool) {
                 (trimmed, false)
             };
 
-            // Check for type pipe e.g. ".price | number" or "div@data-json | json"
-            let (without_pipe, explicit_type) =
-                if let Some((left, right)) = unbracketed.rsplit_once('|') {
-                    let t = right.trim().to_ascii_lowercase();
-                    if t == "number"
-                        || t == "float"
-                        || t == "int"
-                        || t == "integer"
-                        || t == "bool"
-                        || t == "boolean"
-                        || t == "json"
-                        || t == "string"
-                    {
-                        (left.trim(), Some(t))
+            // Check for type pipe and default fallback e.g. ".price | int | default: 0"
+            let mut parts = unbracketed
+                .split('|')
+                .map(|p| p.trim())
+                .filter(|p| !p.is_empty());
+            let base_part = parts.next().unwrap_or(unbracketed);
+            let mut explicit_type = None;
+            let mut default_val = None;
+
+            for pipe in parts {
+                let lower = pipe.to_ascii_lowercase();
+                if lower == "number"
+                    || lower == "float"
+                    || lower == "int"
+                    || lower == "integer"
+                    || lower == "bool"
+                    || lower == "boolean"
+                    || lower == "json"
+                    || lower == "string"
+                {
+                    explicit_type = Some(lower);
+                } else if let Some(rest) = pipe
+                    .strip_prefix("default:")
+                    .or_else(|| pipe.strip_prefix("default ="))
+                {
+                    let d_str = rest.trim().trim_matches('\'').trim_matches('"');
+                    if let Ok(num) = d_str.parse::<i64>() {
+                        default_val = Some(Value::Number(num.into()));
+                    } else if let Ok(f) = d_str.parse::<f64>() {
+                        if let Some(n) = serde_json::Number::from_f64(f) {
+                            default_val = Some(Value::Number(n));
+                        }
+                    } else if d_str.eq_ignore_ascii_case("true") {
+                        default_val = Some(Value::Bool(true));
+                    } else if d_str.eq_ignore_ascii_case("false") {
+                        default_val = Some(Value::Bool(false));
                     } else {
-                        (unbracketed, None)
+                        default_val = Some(Value::String(d_str.to_string()));
                     }
-                } else {
-                    (unbracketed, None)
-                };
+                }
+            }
 
             // Check for attribute shortcut e.g. "a.link @href" or "img @src"
-            let (css_sel, attr) = if let Some((css, attr)) = without_pipe.split_once('@') {
+            let (css_sel, attr) = if let Some((css, attr)) = base_part.split_once('@') {
                 (css.trim().to_string(), Some(attr.trim().to_string()))
             } else {
-                (without_pipe.trim().to_string(), None)
+                (base_part.trim().to_string(), None)
             };
 
             let extract = if attr.is_some() {
@@ -186,7 +207,7 @@ fn normalize_field_def(def: &FieldDef) -> (FieldDetail, bool) {
                     regex: None,
                     multiple: is_array,
                     fields: None,
-                    default: None,
+                    default: default_val,
                     field_type: explicit_type,
                 },
                 is_array,
@@ -237,7 +258,11 @@ fn extract_single_field(
         Ok(Value::Array(list))
     } else if let Some(elem) = container.select(&selector).next() {
         if let Some(val) = extract_leaf_value(&elem, detail, base_url) {
-            Ok(cast_value_type(val, detail.field_type.as_deref()))
+            if val.trim().is_empty() && detail.default.is_some() {
+                Ok(detail.default.clone().unwrap())
+            } else {
+                Ok(cast_value_type(val, detail.field_type.as_deref()))
+            }
         } else {
             Ok(detail.default.clone().unwrap_or(Value::Null))
         }
@@ -789,5 +814,34 @@ mod tests {
         // Verify embedded json parsing
         assert_eq!(entity["metadata"]["brand"], "KeyChron");
         assert_eq!(entity["metadata"]["wireless"], true);
+    }
+
+    #[test]
+    fn test_schema_default_pipe_syntax() {
+        let html = r#"
+        <div class="user-card">
+            <h1 class="name">Alice</h1>
+            <span class="role"></span>
+        </div>
+        "#;
+
+        let schema_json = r#"
+        {
+            "fields": {
+                "name": "h1.name",
+                "role": "span.role | default: 'Guest'",
+                "missing_score": ".score | int | default: 100",
+                "is_verified": ".verified | bool | default: false"
+            }
+        }
+        "#;
+
+        let schema = ExtractionSchema::parse(schema_json).unwrap();
+        let entity = extract_entities(html, &schema, None).unwrap();
+
+        assert_eq!(entity["name"], "Alice");
+        assert_eq!(entity["role"], "Guest");
+        assert_eq!(entity["missing_score"], 100);
+        assert_eq!(entity["is_verified"], false);
     }
 }

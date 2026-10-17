@@ -359,9 +359,9 @@ pub fn get_available_tools() -> Vec<McpTool> {
                     },
                     "scope": {
                         "type": "string",
-                        "enum": ["all", "wechat", "zhihu", "github", "juejin", "csdn", "medium", "substack"],
+                        "enum": ["all", "wechat", "zhihu", "github", "juejin", "csdn", "medium", "substack", "arxiv"],
                         "default": "all",
-                        "description": "Search scope limitation: 'all' (entire web), 'wechat' (WeChat Official Accounts), 'zhihu' (Zhihu questions and articles), 'github' (GitHub repositories and issues), 'juejin' (Juejin tech posts), 'csdn' (CSDN blog posts), 'medium' (Medium articles), or 'substack' (Substack newsletters)"
+                        "description": "Search scope limitation: 'all' (entire web), 'wechat' (WeChat Official Accounts), 'zhihu' (Zhihu questions and articles), 'github' (GitHub repositories and issues), 'juejin' (Juejin tech posts), 'csdn' (CSDN blog posts), 'medium' (Medium articles), 'substack' (Substack newsletters), or 'arxiv' (arXiv research papers)"
                     },
                     "dedup": {
                         "type": "boolean",
@@ -719,6 +719,33 @@ pub fn get_available_tools() -> Vec<McpTool> {
                     "cache_dir": {
                         "type": "string",
                         "description": "Optional custom cache directory path override"
+                    }
+                }
+            }),
+        },
+        McpTool {
+            name: "fetch_feed".to_string(),
+            description: "Fetches and parses an RSS 2.0 or Atom 1.0 XML syndication feed URL (or raw XML string) into structured JSON or clean Markdown reading list.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "url": {
+                        "type": "string",
+                        "description": "Feed URL to fetch (e.g. 'https://blog.rust-lang.org/feed.xml')"
+                    },
+                    "xml": {
+                        "type": "string",
+                        "description": "Optional raw RSS/Atom XML string to parse directly without network requests"
+                    },
+                    "format": {
+                        "type": "string",
+                        "enum": ["markdown", "json"],
+                        "default": "markdown",
+                        "description": "Output presentation format: 'markdown' (GFM article reading list) or 'json' (structured FeedChannel object)"
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Optional maximum number of feed items to return"
                     }
                 }
             }),

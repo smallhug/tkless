@@ -1,3 +1,4 @@
+pub mod arxiv;
 pub mod bilibili;
 pub mod csdn;
 pub mod github;
@@ -8,6 +9,7 @@ pub mod wechat;
 pub mod xiaohongshu;
 pub mod zhihu;
 
+pub use arxiv::ArxivAdapter;
 pub use bilibili::BilibiliAdapter;
 pub use csdn::CsdnAdapter;
 pub use github::GithubAdapter;
@@ -77,6 +79,7 @@ impl AdapterRegistry {
         registry.register(Arc::new(CsdnAdapter::new()));
         registry.register(Arc::new(MediumAdapter::new()));
         registry.register(Arc::new(SubstackAdapter::new()));
+        registry.register(Arc::new(ArxivAdapter::new()));
         registry
     }
 

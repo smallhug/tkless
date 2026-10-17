@@ -127,6 +127,7 @@ impl McpServer {
                     "scaffold_schema" => self.call_scaffold_schema(&arguments).await,
                     "compare_similarity" => self.call_compare_similarity(&arguments).await,
                     "manage_cache" => self.call_manage_cache(&arguments).await,
+                    "fetch_feed" => self.call_fetch_feed(&arguments).await,
                     _ => McpToolCallResult::error(format!("Unknown tool: '{tool_name}'")),
                 };
 
@@ -766,6 +767,14 @@ impl McpServer {
                     clean.to_string()
                 } else {
                     format!("site:substack.com {clean}")
+                }
+            }
+            "arxiv" => {
+                let clean = query.trim();
+                if clean.starts_with("site:") {
+                    clean.to_string()
+                } else {
+                    format!("site:arxiv.org {clean}")
                 }
             }
             _ => query.to_string(),
@@ -1484,6 +1493,53 @@ impl McpServer {
                     Err(e) => McpToolCallResult::error(format!("Serialization error: {e}")),
                 }
             }
+        }
+    }
+
+    async fn call_fetch_feed(&self, args: &Value) -> McpToolCallResult {
+        let channel = if let Some(raw_xml) = args.get("xml").and_then(|v| v.as_str()) {
+            crate::feed::parse_feed(raw_xml)
+        } else if let Some(url) = args.get("url").and_then(|v| v.as_str()) {
+            let parsed_url = match url::Url::parse(url) {
+                Ok(u) => u,
+                Err(e) => return McpToolCallResult::error(format!("Invalid URL: {e}")),
+            };
+            if let Err(e) = self.engine.fetcher().validate_ssrf(&parsed_url).await {
+                return McpToolCallResult::error(format!("SSRF blocked: {e}"));
+            }
+            match self.engine.fetcher().fetch(url).await {
+                Ok(resp) => crate::feed::parse_feed(&resp.html),
+                Err(e) => return McpToolCallResult::error(format!("Failed to fetch feed: {e}")),
+            }
+        } else {
+            return McpToolCallResult::error(
+                "Either 'url' or 'xml' parameter must be provided to fetch_feed",
+            );
+        };
+
+        let mut feed_channel = match channel {
+            Ok(c) => c,
+            Err(e) => {
+                return McpToolCallResult::error(format!("Failed to parse syndication feed: {e}"))
+            }
+        };
+
+        if let Some(limit) = args.get("limit").and_then(|v| v.as_u64()) {
+            feed_channel.items.truncate(limit as usize);
+        }
+
+        let format = args
+            .get("format")
+            .and_then(|v| v.as_str())
+            .unwrap_or("markdown");
+        match format {
+            "json" => match serde_json::to_string_pretty(&feed_channel) {
+                Ok(json_str) => McpToolCallResult::success(json_str),
+                Err(e) => {
+                    McpToolCallResult::error(format!("Failed to serialize feed to JSON: {e}"))
+                }
+            },
+            _ => McpToolCallResult::success(crate::feed::format_feed_markdown(&feed_channel)),
         }
     }
 }
