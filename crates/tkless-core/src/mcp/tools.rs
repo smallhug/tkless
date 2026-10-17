@@ -25,8 +25,8 @@ pub fn get_tool_catalog() -> Vec<ToolCatalogEntry> {
         ToolCatalogEntry {
             name: "web_search",
             category: "search",
-            summary: "Performs full-web search via Bing without API keys, with optional fetch-content.",
-            keywords: &["search", "bing", "query", "find", "web"],
+            summary: "Performs full-web search via multi-engine (Bing + DuckDuckGo) without API keys, with optional fetch-content.",
+            keywords: &["search", "bing", "duckduckgo", "ddg", "query", "find", "web"],
             is_core: true,
         },
         // Specialized Content tools
@@ -400,7 +400,7 @@ pub fn get_available_tools() -> Vec<McpTool> {
         },
         McpTool {
             name: "web_search".to_string(),
-            description: "Web search via Bing with optional instant content fetching.".to_string(),
+            description: "Web search via multi-engine (Bing + DuckDuckGo concurrent with deduplication) with optional instant content fetching.".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -408,9 +408,9 @@ pub fn get_available_tools() -> Vec<McpTool> {
                     "limit": { "type": "integer", "default": 5, "description": "Max results count (1-20)" },
                     "engine": {
                         "type": "string",
-                        "enum": ["bing"],
-                        "default": "bing",
-                        "description": "Search engine provider"
+                        "enum": ["all", "bing", "duckduckgo"],
+                        "default": "all",
+                        "description": "Search engine provider: all (concurrent Bing + DuckDuckGo with deduplication), bing, duckduckgo"
                     },
                     "scope": {
                         "type": "string",

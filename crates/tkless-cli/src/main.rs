@@ -1487,7 +1487,7 @@ async fn run_shell(engine: &TklessEngine, base_options: &ExtractionOptions) -> R
                         engine.client(),
                         &query,
                         5,
-                        tkless_core::model::SearchEngineKind::Bing,
+                        tkless_core::model::SearchEngineKind::All,
                     )
                     .await
                     {
