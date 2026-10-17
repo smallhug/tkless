@@ -503,13 +503,27 @@ impl ExtractedTable {
         // 1. Column names and type inference
         let mut col_names = Vec::new();
         let mut col_types = Vec::new();
+        let mut seen_col_names = std::collections::HashSet::new();
 
         for i in 0..num_cols {
             let raw_header = self.headers.get(i).map(|s| s.as_str()).unwrap_or("");
-            let col_id = if raw_header.trim().is_empty() {
+            let base_col_id = if raw_header.trim().is_empty() {
                 format!("col_{}", i + 1)
             } else {
                 sanitize_sql_identifier(raw_header)
+            };
+
+            let col_id = if seen_col_names.insert(base_col_id.clone()) {
+                base_col_id
+            } else {
+                let mut suffix = 1;
+                loop {
+                    let candidate = format!("{base_col_id}_{suffix}");
+                    if seen_col_names.insert(candidate.clone()) {
+                        break candidate;
+                    }
+                    suffix += 1;
+                }
             };
             col_names.push(col_id);
 

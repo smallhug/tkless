@@ -84,9 +84,19 @@ pub async fn web_search_and_fetch(
     let mut page_options = base_options.clone();
     page_options.max_tokens = Some(per_page_tokens);
 
+    // Pre-filter duplicate URLs before parallel network fetching
+    let mut seen_fetch_urls = std::collections::HashSet::new();
+    let mut unique_results = Vec::new();
+    for item in search_results {
+        let norm = item.url.trim().to_lowercase();
+        if seen_fetch_urls.insert(norm) {
+            unique_results.push(item);
+        }
+    }
+
     let mut join_set = tokio::task::JoinSet::new();
 
-    for (idx, item) in search_results.into_iter().enumerate() {
+    for (idx, item) in unique_results.into_iter().enumerate() {
         let rank = idx + 1;
         let item_url = item.url.clone();
         let item_title = item.title.clone();

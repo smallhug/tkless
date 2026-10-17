@@ -1,5 +1,5 @@
 use crate::error::TklessError;
-use crate::model::{ExtractionOptions, OutputFormat};
+use crate::model::ExtractionOptions;
 use crate::TklessEngine;
 use scraper::{Html, Selector};
 use serde::{Deserialize, Serialize};
@@ -190,11 +190,41 @@ where
 
         debug!(url = %url_str, depth = depth, rank = rank, "Crawling page");
 
-        let fetch_res = eng.process_url(&url_str, &opts).await;
+        let raw_html_res = if let Some(ref cdp_endpoint) = opts.cdp_endpoint {
+            let parsed = match Url::parse(&url_str) {
+                Ok(u) => u,
+                Err(e) => {
+                    debug!(url = %url_str, error = %e, "Invalid URL during crawl");
+                    continue;
+                }
+            };
+            if let Err(e) = eng.fetcher().validate_ssrf(&parsed).await {
+                debug!(url = %url_str, error = %e, "SSRF blocked during crawl");
+                continue;
+            }
+            let cdp_opts = crate::cdp::CdpOptions {
+                endpoint: cdp_endpoint.clone(),
+                wait_ms: opts.cdp_wait_ms.or(Some(1000)),
+                timeout_ms: None,
+                user_agent: eng.fetcher().options().user_agent.clone(),
+                cookie: eng.fetcher().resolve_cookie_for_url(&parsed),
+            };
+            crate::cdp::fetch_html_via_cdp(&url_str, &cdp_opts).await
+        } else {
+            eng.fetcher().fetch(&url_str).await.map(|r| r.html)
+        };
         drop(permit);
 
-        match fetch_res {
-            Ok(doc) => {
+        match raw_html_res {
+            Ok(raw_html) => {
+                let doc = match eng.process_html(&raw_html, Some(&url_str), &opts) {
+                    Ok(d) => d,
+                    Err(e) => {
+                        debug!(url = %url_str, error = %e, "Failed to process HTML during crawl");
+                        continue;
+                    }
+                };
+
                 // If deduplication is enabled, check for near-duplicates via SimHash
                 if crawl_options.dedup {
                     let page_hash = crate::dedup::simhash(&doc.content);
@@ -210,32 +240,21 @@ where
 
                 let page_title = doc.title.clone().unwrap_or_else(|| url_str.clone());
 
-                // Discover child links if within depth limit
+                // Discover child links directly from the single fetched HTML (ZERO secondary network request!)
                 if depth < crawl_options.max_depth && crawled_pages.len() < crawl_options.max_pages
                 {
-                    if let Ok(raw_resp) = eng
-                        .process_url(
-                            &url_str,
-                            &ExtractionOptions {
-                                format: OutputFormat::Raw,
-                                ..Default::default()
-                            },
-                        )
-                        .await
-                    {
-                        let links = extract_discovered_links(&raw_resp.content, &current_url);
-                        for child_url in links {
-                            if should_enqueue_url(
-                                &child_url,
-                                &seed_host,
-                                &seed_path,
-                                crawl_options,
-                                &exclude_regexes,
-                            ) {
-                                let norm_child = normalize_url(&child_url);
-                                if visited.insert(norm_child) {
-                                    queue.push_back((child_url, depth + 1));
-                                }
+                    let links = extract_discovered_links(&raw_html, &current_url);
+                    for child_url in links {
+                        if should_enqueue_url(
+                            &child_url,
+                            &seed_host,
+                            &seed_path,
+                            crawl_options,
+                            &exclude_regexes,
+                        ) {
+                            let norm_child = normalize_url(&child_url);
+                            if visited.insert(norm_child) {
+                                queue.push_back((child_url, depth + 1));
                             }
                         }
                     }
