@@ -193,12 +193,12 @@ mod tests {
         let cjk_article1 = r#"
             TkLess（爪页）是一个专为大语言模型与 AI Agent 设计的高性能网页抓取、降噪清洗与搜索提取引擎。
             自动剥离导航、脚本与广告噪音，将正文转化为 LLM 友好的 Markdown 或结构化 JSON，支持段落断句平滑截断与 Token 预算控制。
-            原生集成 B站、知乎、微信公众号、小红书、掘金与 GitHub 平台适配器，内置 Bing 和 Google 双引擎检索。
+            原生集成 B站、知乎、微信公众号、小红书、掘金与 GitHub 平台适配器，内置 Bing 网页检索。
         "#;
         let cjk_article2 = r#"
             TkLess（爪页）是一个专为大语言模型与 AI Agent 设计的高性能网页抓取、降噪清洗与搜索提取引擎。
             自动剥离导航、脚本与广告噪音，将正文转化为 LLM 友好的 Markdown 或结构化 JSON，支持段落断句平滑截断与 Token 预算控制。
-            原生集成 B站、知乎、微信公众号、小红书、掘金与 GitHub 平台适配器，内置 Bing 与 Google 双引擎检索。
+            原生集成 B站、知乎、微信公众号、小红书、掘金与 GitHub 平台适配器，内置 Bing 与网页检索。
         "#;
         let cjk_h1 = simhash(cjk_article1);
         let cjk_h2 = simhash(cjk_article2);

@@ -46,21 +46,15 @@ pub enum OnTooLarge {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SearchEngineKind {
-    /// Microsoft Bing search (default, fast connectivity and great Chinese coverage)
+    /// Microsoft Bing search (fast connectivity and comprehensive coverage)
     #[default]
     Bing,
-    /// Google search (global technical community and documentation index)
-    Google,
-    /// Automatic failover mode (prefers Bing, falls back to Google on error)
-    Auto,
 }
 
 impl SearchEngineKind {
     pub fn as_str(&self) -> &'static str {
         match self {
             SearchEngineKind::Bing => "bing",
-            SearchEngineKind::Google => "google",
-            SearchEngineKind::Auto => "auto",
         }
     }
 }

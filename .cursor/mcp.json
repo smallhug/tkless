@@ -2,7 +2,7 @@
   "mcpServers": {
     "tkless": {
       "command": "tkless",
-      "args": ["mcp"]
+      "args": ["mcp", "--dynamic"]
     }
   }
 }

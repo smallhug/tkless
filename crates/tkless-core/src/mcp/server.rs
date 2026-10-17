@@ -1,4 +1,6 @@
-use super::tools::get_available_tools;
+use super::tools::{
+    get_available_tools, get_dynamic_discovery_tools, get_initial_dynamic_tools, get_tool_catalog,
+};
 use super::types::*;
 use crate::adapters::BilibiliAdapter;
 use crate::cache::DocumentCache;
@@ -9,28 +11,61 @@ use crate::model::{
 };
 use crate::TklessEngine;
 use serde_json::Value;
+use std::collections::HashSet;
 use std::path::Path;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::sync::RwLock;
 use tracing::{debug, error, info, warn};
 use url::Url;
 
 /// Type alias for an unbounded JSON notification sender used for MCP progress streaming and logging.
 pub type NotificationSender = tokio::sync::mpsc::UnboundedSender<Value>;
 
+/// Operational mode for the MCP server: Full exposure vs Two-Stage Dynamic Discovery.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum McpMode {
+    /// Standard full mode: exposes all 22 tools in tools/list.
+    #[default]
+    Full,
+    /// Two-stage dynamic discovery mode: exposes 2 core tools + 4 dynamic discovery meta-tools
+    /// (discover_tools, get_tool_schema, execute_tool, activate_tools) reducing upfront prompt tokens by >80%.
+    Dynamic,
+}
+
 /// In-memory and stdio Model Context Protocol (MCP) server for TkLess.
 pub struct McpServer {
     engine: Arc<TklessEngine>,
     cache: Arc<DocumentCache>,
+    mode: McpMode,
+    active_dynamic_tools: Arc<RwLock<HashSet<String>>>,
 }
 
 impl McpServer {
-    /// Creates a new MCP server wrapping the provided extraction engine and document cache.
+    /// Creates a new MCP server wrapping the provided extraction engine and document cache in default Full mode.
     pub fn new(engine: TklessEngine, cache: DocumentCache) -> Self {
+        Self::new_with_mode(engine, cache, McpMode::Full)
+    }
+
+    /// Creates a new MCP server with a specific operational mode (Full or Dynamic).
+    pub fn new_with_mode(engine: TklessEngine, cache: DocumentCache, mode: McpMode) -> Self {
         Self {
             engine: Arc::new(engine),
             cache: Arc::new(cache),
+            mode,
+            active_dynamic_tools: Arc::new(RwLock::new(HashSet::new())),
         }
+    }
+
+    /// Builder method to specify the MCP operational mode.
+    pub fn with_mode(mut self, mode: McpMode) -> Self {
+        self.mode = mode;
+        self
+    }
+
+    /// Returns the current MCP operational mode.
+    pub fn mode(&self) -> McpMode {
+        self.mode
     }
 
     /// Handles a single incoming JSON-RPC line and returns the appropriate response, if any.
@@ -86,7 +121,24 @@ impl McpServer {
             }
             "ping" => Some(JsonRpcResponse::success(req_id, serde_json::json!({}))),
             "tools/list" => {
-                let tools = get_available_tools();
+                let tools = match self.mode {
+                    McpMode::Full => get_available_tools(),
+                    McpMode::Dynamic => {
+                        let mut dynamic_tools = get_initial_dynamic_tools();
+                        let active_set = self.active_dynamic_tools.read().await;
+                        if !active_set.is_empty() {
+                            let all_tools = get_available_tools();
+                            for tool in all_tools {
+                                if active_set.contains(&tool.name)
+                                    && !dynamic_tools.iter().any(|t| t.name == tool.name)
+                                {
+                                    dynamic_tools.push(tool);
+                                }
+                            }
+                        }
+                        dynamic_tools
+                    }
+                };
                 Some(JsonRpcResponse::success(
                     req_id,
                     serde_json::json!({ "tools": tools }),
@@ -95,10 +147,6 @@ impl McpServer {
             "tools/call" => {
                 let params = request.params.unwrap_or(Value::Null);
                 let raw_tool_name = params.get("name").and_then(|v| v.as_str()).unwrap_or("");
-                let tool_name = raw_tool_name
-                    .strip_prefix("tkless_")
-                    .or_else(|| raw_tool_name.strip_prefix("tkless_"))
-                    .unwrap_or(raw_tool_name);
                 let arguments = params
                     .get("arguments")
                     .cloned()
@@ -108,44 +156,14 @@ impl McpServer {
                     .and_then(|m| m.get("progressToken"))
                     .cloned();
 
-                let tool_result = match tool_name {
-                    "fetch_webpage" => self.call_fetch_webpage(&arguments).await,
-                    "fetch_bilibili_feed" => self.call_fetch_bilibili_feed(&arguments).await,
-                    "search_bilibili" => self.call_search_bilibili(&arguments).await,
-                    "download_media" => self.call_download_media(&arguments).await,
-                    "web_search" | "search_web" => self.call_web_search(&arguments).await,
-                    "crawl_site" => {
-                        self.call_crawl_site(&arguments, notifier, progress_token.as_ref())
-                            .await
-                    }
-                    "batch_fetch_webpages" => {
-                        self.call_batch_fetch_webpages(
-                            &arguments,
-                            notifier,
-                            progress_token.as_ref(),
-                        )
-                        .await
-                    }
-                    "clean_html" => self.call_clean_html(&arguments).await,
-                    "login_platform" => self.call_login_platform(&arguments).await,
-                    "scaffold_schema" => self.call_scaffold_schema(&arguments).await,
-                    "compare_similarity" => self.call_compare_similarity(&arguments).await,
-                    "manage_cache" => self.call_manage_cache(&arguments).await,
-                    "fetch_feed" => self.call_fetch_feed(&arguments).await,
-                    "inspect_links" => self.call_inspect_links(&arguments).await,
-                    "check_auth" => self.call_check_auth(&arguments).await,
-                    "summarize_content" | "summarize_text" | "summarize" => {
-                        self.call_summarize_content(&arguments).await
-                    }
-                    "split_document" => self.call_split_document(&arguments).await,
-                    "chunk_markdown" => self.call_chunk_markdown(&arguments).await,
-                    "diff_documents" | "diff_content" => self.call_diff_content(&arguments).await,
-                    "take_screenshot" | "capture_screenshot" => {
-                        self.call_capture_screenshot(&arguments).await
-                    }
-                    "export_tables" | "convert_table" => self.call_export_tables(&arguments).await,
-                    _ => McpToolCallResult::error(format!("Unknown tool: '{raw_tool_name}'")),
-                };
+                let tool_result = self
+                    .dispatch_tool_execution(
+                        raw_tool_name,
+                        &arguments,
+                        notifier,
+                        progress_token.as_ref(),
+                    )
+                    .await;
 
                 let result_value = serde_json::to_value(tool_result).unwrap_or_else(|e| {
                     serde_json::json!({
@@ -226,8 +244,220 @@ impl McpServer {
     }
 
     // -------------------------------------------------------------------------
-    // Tool Dispatch Handlers
+    // Tool Dispatch Handlers & Dynamic Tool Discovery
     // -------------------------------------------------------------------------
+
+    /// Unified tool execution dispatcher supporting direct calls, prefixed calls, and meta execute_tool.
+    pub async fn dispatch_tool_execution(
+        &self,
+        raw_tool_name: &str,
+        arguments: &Value,
+        notifier: Option<&NotificationSender>,
+        progress_token: Option<&Value>,
+    ) -> McpToolCallResult {
+        let tool_name = raw_tool_name
+            .strip_prefix("tkless_")
+            .unwrap_or(raw_tool_name);
+
+        match tool_name {
+            // Stage 1: Dynamic Discovery Meta-Tools
+            "discover_tools" => self.call_discover_tools(arguments).await,
+            "get_tool_schema" => self.call_get_tool_schema(arguments).await,
+            "execute_tool" => {
+                let target_tool = arguments
+                    .get("tool_name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                if target_tool.is_empty() {
+                    return McpToolCallResult::error("Missing required parameter 'tool_name'");
+                }
+                let clean_target = target_tool.strip_prefix("tkless_").unwrap_or(target_tool);
+                if clean_target == "execute_tool" {
+                    return McpToolCallResult::error("Cannot execute 'execute_tool' recursively");
+                }
+                let target_args = arguments
+                    .get("arguments")
+                    .cloned()
+                    .unwrap_or_else(|| serde_json::json!({}));
+                Box::pin(self.dispatch_tool_execution(
+                    clean_target,
+                    &target_args,
+                    notifier,
+                    progress_token,
+                ))
+                .await
+            }
+            "activate_tools" => self.call_activate_tools(arguments, notifier).await,
+
+            // Core & Specialized Tools
+            "fetch_webpage" => self.call_fetch_webpage(arguments).await,
+            "fetch_bilibili_feed" => self.call_fetch_bilibili_feed(arguments).await,
+            "search_bilibili" => self.call_search_bilibili(arguments).await,
+            "download_media" => self.call_download_media(arguments).await,
+            "web_search" | "search_web" => self.call_web_search(arguments).await,
+            "crawl_site" => {
+                self.call_crawl_site(arguments, notifier, progress_token)
+                    .await
+            }
+            "batch_fetch_webpages" => {
+                self.call_batch_fetch_webpages(arguments, notifier, progress_token)
+                    .await
+            }
+            "clean_html" => self.call_clean_html(arguments).await,
+            "login_platform" => self.call_login_platform(arguments).await,
+            "scaffold_schema" => self.call_scaffold_schema(arguments).await,
+            "compare_similarity" => self.call_compare_similarity(arguments).await,
+            "manage_cache" => self.call_manage_cache(arguments).await,
+            "fetch_feed" => self.call_fetch_feed(arguments).await,
+            "inspect_links" => self.call_inspect_links(arguments).await,
+            "check_auth" => self.call_check_auth(arguments).await,
+            "summarize_content" | "summarize_text" | "summarize" => {
+                self.call_summarize_content(arguments).await
+            }
+            "split_document" => self.call_split_document(arguments).await,
+            "chunk_markdown" => self.call_chunk_markdown(arguments).await,
+            "diff_documents" | "diff_content" => self.call_diff_content(arguments).await,
+            "take_screenshot" | "capture_screenshot" => {
+                self.call_capture_screenshot(arguments).await
+            }
+            "export_tables" | "convert_table" => self.call_export_tables(arguments).await,
+            "list_adapters" => self.call_list_adapters(arguments).await,
+            _ => McpToolCallResult::error(format!("Unknown tool: '{raw_tool_name}'")),
+        }
+    }
+
+    async fn call_discover_tools(&self, args: &Value) -> McpToolCallResult {
+        let query = args
+            .get("query")
+            .and_then(|v| v.as_str())
+            .map(|s| s.trim().to_lowercase());
+        let category = args
+            .get("category")
+            .and_then(|v| v.as_str())
+            .unwrap_or("all")
+            .trim()
+            .to_lowercase();
+
+        let catalog = get_tool_catalog();
+        let active_set = self.active_dynamic_tools.read().await;
+
+        let filtered: Vec<_> = catalog
+            .into_iter()
+            .filter(|entry| {
+                if category != "all" && !entry.category.eq_ignore_ascii_case(&category) {
+                    return false;
+                }
+                if let Some(ref q) = query {
+                    if q.is_empty() {
+                        return true;
+                    }
+                    entry.name.to_lowercase().contains(q)
+                        || entry.summary.to_lowercase().contains(q)
+                        || entry.category.to_lowercase().contains(q)
+                        || entry.keywords.iter().any(|k| k.to_lowercase().contains(q))
+                } else {
+                    true
+                }
+            })
+            .collect();
+
+        if filtered.is_empty() {
+            let msg = format!(
+                "No specialized tools matched query '{:?}' in category '{}'. Available categories: content, search, media, analysis, system, all.",
+                query.unwrap_or_default(),
+                category
+            );
+            return McpToolCallResult::success(msg);
+        }
+
+        let mut md = String::new();
+        md.push_str(&format!(
+            "### 🔍 TkLess 动态工具发现目录 (匹配到 {} 个工具)\n\n",
+            filtered.len()
+        ));
+        md.push_str("| 工具名称 (Tool) | 分类 (Category) | 运行状态 | 功能概述 (Summary) |\n");
+        md.push_str("| :--- | :--- | :--- | :--- |\n");
+
+        for entry in &filtered {
+            let status = if entry.is_core {
+                "🌟 核心常驻"
+            } else if active_set.contains(entry.name) {
+                "⚡ 已动态激活"
+            } else {
+                "💤 按需拉取"
+            };
+            md.push_str(&format!(
+                "| `{}` | `{}` | {} | {} |\n",
+                entry.name, entry.category, status, entry.summary
+            ));
+        }
+
+        md.push_str("\n> **两阶段调用建议 (Usage Guidelines)**:\n");
+        md.push_str("> 1. **单次即时调用**: 直接调用 `execute_tool(tool_name: \"...\", arguments: {...})` 立即执行。\n");
+        md.push_str("> 2. **查看完整参数**: 调用 `get_tool_schema(tool_name: \"...\")` 获取 inputSchema 与参数描述。\n");
+        md.push_str("> 3. **会话动态注册**: 调用 `activate_tools(tool_names: [\"...\"])` 加入 tools/list 并广播 list_changed。\n");
+
+        McpToolCallResult::success(md)
+    }
+
+    async fn call_get_tool_schema(&self, args: &Value) -> McpToolCallResult {
+        let tool_name = match args.get("tool_name").and_then(|v| v.as_str()) {
+            Some(n) if !n.trim().is_empty() => n.trim().strip_prefix("tkless_").unwrap_or(n.trim()),
+            _ => return McpToolCallResult::error("Missing required parameter 'tool_name'"),
+        };
+
+        let mut all_tools = get_available_tools();
+        all_tools.extend(get_dynamic_discovery_tools());
+
+        if let Some(tool) = all_tools.into_iter().find(|t| t.name == tool_name) {
+            let schema_pretty =
+                serde_json::to_string_pretty(&tool.input_schema).unwrap_or_default();
+            let response = format!(
+                "### 🛠️ 工具参数定义: `{}`\n\n**描述**: {}\n\n**inputSchema**:\n```json\n{}\n```\n",
+                tool.name, tool.description, schema_pretty
+            );
+            McpToolCallResult::success(response)
+        } else {
+            McpToolCallResult::error(format!(
+                "Tool '{tool_name}' not found. Call 'discover_tools' to search available tools."
+            ))
+        }
+    }
+
+    async fn call_activate_tools(
+        &self,
+        args: &Value,
+        notifier: Option<&NotificationSender>,
+    ) -> McpToolCallResult {
+        let tool_names = match args.get("tool_names").and_then(|v| v.as_array()) {
+            Some(arr) if !arr.is_empty() => arr,
+            _ => return McpToolCallResult::error("Missing or empty 'tool_names' array"),
+        };
+
+        let mut newly_activated = Vec::new();
+        let mut active_set = self.active_dynamic_tools.write().await;
+        for item in tool_names {
+            if let Some(name) = item.as_str() {
+                let clean_name = name.strip_prefix("tkless_").unwrap_or(name);
+                active_set.insert(clean_name.to_string());
+                newly_activated.push(clean_name.to_string());
+            }
+        }
+
+        if let Some(tx) = notifier {
+            let notif = serde_json::json!({
+                "jsonrpc": "2.0",
+                "method": "notifications/tools/list_changed"
+            });
+            let _ = tx.send(notif);
+        }
+
+        let resp = format!(
+            "✅ 成功激活工具: [{}]。已向 MCP 客户端广播 'notifications/tools/list_changed'。后续 tools/list 声明将包含这些工具，您也可以直接调用。",
+            newly_activated.join(", ")
+        );
+        McpToolCallResult::success(resp)
+    }
 
     async fn call_fetch_webpage(&self, args: &Value) -> McpToolCallResult {
         let raw_url = match args.get("url").and_then(|v| v.as_str()) {
@@ -728,11 +958,7 @@ impl McpServer {
             Some("json") => OutputFormat::Json,
             _ => OutputFormat::Markdown,
         };
-        let engine = match args.get("engine").and_then(|v| v.as_str()) {
-            Some("google") => SearchEngineKind::Google,
-            Some("auto") => SearchEngineKind::Auto,
-            _ => SearchEngineKind::Bing,
-        };
+        let engine = SearchEngineKind::Bing;
         let scope = args.get("scope").and_then(|v| v.as_str()).unwrap_or("all");
         let effective_query = match scope {
             "wechat" => {
@@ -2279,6 +2505,22 @@ impl McpServer {
         } else {
             let formatted = crate::model::ExtractedTable::format_tables(&tables, table_format);
             McpToolCallResult::success(formatted)
+        }
+    }
+
+    async fn call_list_adapters(&self, args: &Value) -> McpToolCallResult {
+        let format = args
+            .get("format")
+            .and_then(|v| v.as_str())
+            .unwrap_or("markdown");
+        let list = crate::adapters::AdapterRegistry::list_adapter_metadata();
+        if format == "json" {
+            match serde_json::to_string_pretty(&list) {
+                Ok(s) => McpToolCallResult::success(s),
+                Err(e) => McpToolCallResult::error(format!("Serialization error: {e}")),
+            }
+        } else {
+            McpToolCallResult::success(crate::adapters::format_adapters_markdown(&list))
         }
     }
 }

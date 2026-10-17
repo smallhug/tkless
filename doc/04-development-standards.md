@@ -177,6 +177,23 @@ TkLess 原生实现了基于标准 stdio 的 JSON-RPC 2.0 MCP 协议，为确保
 ### 4. 前缀自适应与兼容性保障 (Prefix-Agnostic)
 - 客户端调用工具时，无论传入原生原子名（如 `export_tables`）还是带前缀名（如 `tkless_export_tables` 或历史前缀 `pageclaw_export_tables`），服务端必须自动执行前缀剥离与归一化路由，对客户端命名习惯保持最大容忍度。
 
+### 5. 两阶段动态工具发现规范 (Two-Stage Dynamic Tool Discovery)
+针对 MCP 客户端默认将所有工具定义注入 System Prompt 导致上下文过度消耗的问题，TkLess 提供了两阶段动态工具发现架构（`--dynamic` 或 `--profile dynamic` 或环境变量 `TKLESS_MCP_DYNAMIC=1`）：
+
+- **第一阶段：轻量常驻核心集 (Stage 1: Resident Core + Meta Discovery Tools)**
+  - **初次暴露工具数**：从全量 22 个工具大幅精简为 **6 个常驻工具**；
+  - **核心基础工具 (Core Tools)**：`fetch_webpage`（多格式抓取与清洗）、`web_search`（免 Key 全网搜索）；
+  - **发现元工具 (Meta-Tools)**：
+    1. `discover_tools(query, category)`：按关键词或分类（`content`, `search`, `media`, `analysis`, `system`, `all`）检索专门工具目录及简述；
+    2. `get_tool_schema(tool_name)`：按需获取指定工具的完整 `inputSchema` 和参数枚举定义；
+    3. `execute_tool(tool_name, arguments)`：即使该工具未在 `tools/list` 声明中暴露，Agent 也可通过元工具立即无缝执行；
+    4. `activate_tools(tool_names)`：将会话所需工具动态载入当前激活列表，并通过 `notifications/tools/list_changed` 通知 MCP 宿主重新获取工具列表。
+- **第二阶段：按需探查与执行 (Stage 2: On-Demand Discovery & Execution)**
+  - Agent 在识别出特殊需求（如提取数据表格并转为 SQL、音视频字幕抓取、文档比对、语义切块）时，先调用 `discover_tools` / `get_tool_schema` 确定工具签名，随后既可直接通过 `execute_tool` 单次即时运行，也可调用 `activate_tools` 动态入库；
+  - **服务端全容忍兼容**：服务端底层始终保留对所有 22 个工具的直接响应能力，即使客户端在动态模式下直接发送了未在列表中的工具名称（如直接调用 `export_tables`），服务端亦能正确识别并执行。
+- **Token 经济性收益指标**：
+  - 常驻上下文提示词从 **4,368 tokens (Compact)** / **7,239 tokens (Pretty)** 进一步骤降至 **1,700 tokens (Compact)** / **2,734 tokens (Pretty)**，常驻上下文 Token 净降 **>60%**（相比轻量化前基准净降 **>74%**）。
+
 ---
 
 ## 🧪 七、质量门禁与测试标准

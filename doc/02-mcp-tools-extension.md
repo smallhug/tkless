@@ -22,7 +22,7 @@ TkLess 内置原生轻量级 MCP 服务端（位于 `crates/tkless-core/src/mcp`
 │ - initialize / ping / tools/list / tools/call          │
 │ - $/progress 进度通知实时推流                          │
 ├────────────────────────────────────────────────────────┤
-│ 工具注册池 (Tool Registry - 21 Tools):                  │
+│ 工具注册池 (Tool Registry - 22 Tools + 4 Meta Tools):  │
 │ 1. fetch_webpage (通用/全平台自适应抓取与降噪清洗)     │
 │ 2. web_search (免 Key 双引擎全网搜索与定向生态检索)    │
 │ 3. crawl_site (整站递归爬取与知识库聚合)               │
@@ -30,8 +30,8 @@ TkLess 内置原生轻量级 MCP 服务端（位于 `crates/tkless-core/src/mcp`
 │ 5. chunk_markdown (语义分块与 RAG 向量切分)            │
 │ 6. summarize_content (本地启发式无 Key 核心要点摘要)   │
 │ 7. take_screenshot (CDP 无头浏览器长截图)              │
-│ 8. diff_documents (Markdown 语义差异高亮比对)          │
-│ ... 以及各类平台专属探测与清洗工具                    │
+│ 8. diff_documents (统一 Diff 与行级变更比例分析)       │
+│ ... 以及 4 个两阶段动态发现与按需执行元工具            │
 └────────────────────────────────────────────────────────┘
 ```
 
@@ -156,12 +156,97 @@ TkLess 内置原生轻量级 MCP 服务端（位于 `crates/tkless-core/src/mcp`
 }
 ```
 
+### 2.6 两阶段动态工具发现元工具 (Dynamic Discovery Meta-Tools)
+- **定位**：解决传统全量暴露模式下 22 个工具导致预置 System Prompt 膨胀（~6,724 tokens）的痛点。初始握手阶段仅暴露 2 核心工具 + 4 发现元工具（**仅 1,700 tokens，节省 74.7%**），并在运行期间按需即时执行或动态激活入库。
+
+#### 1. `discover_tools`
+```json
+{
+  "name": "discover_tools",
+  "description": "Discovers specialized TkLess tools by keyword or category (content, search, media, analysis, system, all).",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "query": { "type": "string", "description": "Search keyword (e.g. 'table', 'diff', 'bilibili', 'crawl', 'cache')" },
+      "category": {
+        "type": "string",
+        "enum": ["content", "search", "media", "analysis", "system", "all"],
+        "default": "all"
+      }
+    }
+  }
+}
+```
+
+#### 2. `get_tool_schema`
+```json
+{
+  "name": "get_tool_schema",
+  "description": "Retrieves complete inputSchema and parameter definitions for a specific tool on demand.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "tool_name": { "type": "string", "description": "Name of tool to inspect (e.g. 'export_tables', 'crawl_site')" }
+    },
+    "required": ["tool_name"]
+  }
+}
+```
+
+#### 3. `execute_tool`
+```json
+{
+  "name": "execute_tool",
+  "description": "Executes any specialized TkLess tool by name and arguments on demand without requiring it in tools/list.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "tool_name": { "type": "string", "description": "Name of tool to execute" },
+      "arguments": { "type": "object", "description": "Arguments object matching the tool's inputSchema" }
+    },
+    "required": ["tool_name"]
+  }
+}
+```
+
+#### 4. `activate_tools`
+```json
+{
+  "name": "activate_tools",
+  "description": "Dynamically activates tools into active tools/list and notifies the MCP client (list_changed).",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "tool_names": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "List of tool names to dynamically add to tools/list"
+      }
+    },
+    "required": ["tool_names"]
+  }
+}
+```
+
 ---
 
 ## 3. 宿主集成配置示例
 
 ### 3.1 Claude Desktop 配置 (`claude_desktop_config.json`)
 
+**推荐：启用两阶段动态工具发现模式（节省 >74% Token）**：
+```json
+{
+  "mcpServers": {
+    "tkless": {
+      "command": "tkless",
+      "args": ["mcp", "--dynamic"]
+    }
+  }
+}
+```
+
+全量暴露模式：
 ```json
 {
   "mcpServers": {
@@ -180,7 +265,7 @@ TkLess 内置原生轻量级 MCP 服务端（位于 `crates/tkless-core/src/mcp`
   "mcpServers": {
     "tkless": {
       "command": "tkless",
-      "args": ["mcp"]
+      "args": ["mcp", "--dynamic"]
     }
   }
 }

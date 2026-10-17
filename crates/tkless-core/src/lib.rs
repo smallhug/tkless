@@ -26,8 +26,10 @@ pub mod summarizer;
 pub mod token;
 
 pub use adapters::{
-    AdapterRegistry, BilibiliAdapter, GithubAdapter, JuejinAdapter, PlatformAdapter, WechatAdapter,
-    XiaohongshuAdapter, ZhihuAdapter,
+    format_adapters_markdown, AdapterInfo, AdapterRegistry, ArxivAdapter, BaikeAdapter,
+    BilibiliAdapter, CsdnAdapter, GithubAdapter, HuggingfaceAdapter, JuejinAdapter, MediumAdapter,
+    PlatformAdapter, RedditAdapter, StackoverflowAdapter, SubstackAdapter, V2exAdapter,
+    WechatAdapter, WikipediaAdapter, XiaohongshuAdapter, ZhihuAdapter,
 };
 pub use auth::{
     execute_login_flow, generate_qrcode, poll_qrcode_status, LoginOptions, QrPollStatus,
@@ -59,8 +61,8 @@ pub use schema::{
     ScaffoldReport,
 };
 pub use search::{
-    format_search_fetch_markdown, format_search_results_markdown, search_bing, search_google,
-    web_search, web_search_and_fetch, web_search_with_engine, SearchFetchItem, SearchResultItem,
+    format_search_fetch_markdown, format_search_results_markdown, search_bing, web_search,
+    web_search_and_fetch, web_search_with_engine, SearchFetchItem, SearchResultItem,
 };
 pub use splitter::{export_sections_to_dir, split_markdown_by_headings, DocumentSection};
 pub use summarizer::{extract_key_takeaways, summarize_markdown};

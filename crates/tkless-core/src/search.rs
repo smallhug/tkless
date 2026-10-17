@@ -15,16 +15,6 @@ static BING_SNIPPET_SELECTOR: LazyLock<Selector> = LazyLock::new(|| {
     Selector::parse(".b_caption p, .b_algoSlug, .b_snippet, .b_lineclamp2, .b_lineclamp3, .b_lineclamp4, .b_paractl").unwrap()
 });
 
-// Google Selectors
-static GOOGLE_ITEM_SELECTOR: LazyLock<Selector> =
-    LazyLock::new(|| Selector::parse("div.g, div.tF2Cxc, div.MjjYud, .MjjYud > div").unwrap());
-static GOOGLE_TITLE_SELECTOR: LazyLock<Selector> = LazyLock::new(|| Selector::parse("h3").unwrap());
-static GOOGLE_LINK_SELECTOR: LazyLock<Selector> =
-    LazyLock::new(|| Selector::parse("a[href]").unwrap());
-static GOOGLE_SNIPPET_SELECTOR: LazyLock<Selector> = LazyLock::new(|| {
-    Selector::parse("div[data-sncf], .VwiC3b, .yXK7lf, .s3v9rd, .MUxGbd").unwrap()
-});
-
 /// Structured web search result item with provider attribution.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SearchResultItem {
@@ -173,7 +163,7 @@ pub async fn web_search_and_fetch(
     Ok(fetched_items)
 }
 
-/// Executes a web search using the specified engine (Bing, Google, or Auto failover).
+/// Executes a web search using the specified engine (Bing).
 pub async fn web_search_with_engine(
     client: &reqwest::Client,
     query: &str,
@@ -187,27 +177,10 @@ pub async fn web_search_with_engine(
 
     match engine {
         SearchEngineKind::Bing => search_bing(client, clean_query, limit).await,
-        SearchEngineKind::Google => search_google(client, clean_query, limit).await,
-        SearchEngineKind::Auto => {
-            debug!(
-                query = clean_query,
-                "Executing Auto search (trying Bing first)"
-            );
-            match search_bing(client, clean_query, limit).await {
-                Ok(results) if !results.is_empty() => Ok(results),
-                Ok(_) | Err(_) => {
-                    warn!(
-                        query = clean_query,
-                        "Bing search returned empty or failed, falling back to Google"
-                    );
-                    search_google(client, clean_query, limit).await
-                }
-            }
-        }
     }
 }
 
-/// Default web search implementation using the default configured engine (Bing / Auto).
+/// Default web search implementation using the default configured engine (Bing).
 pub async fn web_search(
     client: &reqwest::Client,
     query: &str,
@@ -298,97 +271,7 @@ pub fn parse_bing_html(html: &str, limit: usize) -> Result<Vec<SearchResultItem>
     Ok(results)
 }
 
-/// Searches Google for the given query without API keys.
-pub async fn search_google(
-    client: &reqwest::Client,
-    query: &str,
-    limit: usize,
-) -> Result<Vec<SearchResultItem>, TklessError> {
-    let encoded_q: String = url::form_urlencoded::byte_serialize(query.as_bytes()).collect();
-    let search_url = format!("https://www.google.com/search?q={encoded_q}&hl=zh-CN&gl=cn");
-
-    debug!(query = query, url = %search_url, "Executing Google web search");
-
-    let resp = client
-        .get(&search_url)
-        .header(
-            "User-Agent",
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",
-        )
-        .header("Referer", "https://www.google.com/")
-        .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8")
-        .header("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
-        .send()
-        .await?;
-
-    let html = resp.text().await?;
-    parse_google_html(&html, limit)
-}
-
-/// Parses Google search results HTML into structured items.
-pub fn parse_google_html(html: &str, limit: usize) -> Result<Vec<SearchResultItem>, TklessError> {
-    let doc = Html::parse_document(html);
-    let mut results = Vec::new();
-    let mut seen_urls = std::collections::HashSet::new();
-
-    for element in doc.select(&GOOGLE_ITEM_SELECTOR) {
-        let title_el = match element.select(&GOOGLE_TITLE_SELECTOR).next() {
-            Some(el) => el,
-            None => continue,
-        };
-
-        let raw_title = title_el
-            .text()
-            .collect::<Vec<_>>()
-            .join(" ")
-            .trim()
-            .to_string();
-        if raw_title.is_empty() {
-            continue;
-        }
-
-        // Link element: usually parent of h3 or first a[href] in item
-        let raw_href = match element.select(&GOOGLE_LINK_SELECTOR).next() {
-            Some(a) => a.value().attr("href").unwrap_or("").trim(),
-            None => continue,
-        };
-
-        if raw_href.is_empty() {
-            continue;
-        }
-
-        let resolved_url = unwrap_google_url(raw_href);
-        if resolved_url.is_empty()
-            || !resolved_url.starts_with("http")
-            || resolved_url.contains("google.com/search")
-            || !seen_urls.insert(resolved_url.clone())
-        {
-            continue;
-        }
-
-        let snippet = element
-            .select(&GOOGLE_SNIPPET_SELECTOR)
-            .next()
-            .map(|el| el.text().collect::<Vec<_>>().join(" ").trim().to_string())
-            .unwrap_or_default();
-
-        results.push(SearchResultItem {
-            title: raw_title,
-            url: resolved_url,
-            snippet,
-            engine: "google".to_string(),
-        });
-
-        if results.len() >= limit {
-            break;
-        }
-    }
-
-    Ok(results)
-}
-
 /// Unwraps Bing tracking redirect URLs like `https://www.bing.com/ck/a?!&&...&u=a1aHR0cHM6Ly9ydXN0LWxhbmcub3JnLw...`
-/// into the direct destination URL (e.g. `https://rust-lang.org/`).
 pub fn unwrap_bing_url(raw_href: &str) -> String {
     if let Some(pos) = raw_href.find("&u=") {
         let after_u = &raw_href[pos + 3..];
@@ -439,21 +322,6 @@ fn decode_base64_url_safe(input: &str) -> Option<Vec<u8>> {
     }
 
     Some(out)
-}
-
-/// Unwraps Google redirect URLs like `/url?q=https%3A%2F%2Fexample.com&...`
-pub fn unwrap_google_url(raw_href: &str) -> String {
-    if let Some(pos) = raw_href.find("/url?q=") {
-        let after_q = &raw_href[pos + 7..];
-        let encoded = after_q.split('&').next().unwrap_or("");
-        let decoded: String = url::form_urlencoded::byte_serialize(encoded.as_bytes()).collect();
-        return url::form_urlencoded::parse(encoded.as_bytes())
-            .map(|(k, _)| k.to_string())
-            .next()
-            .unwrap_or(decoded);
-    }
-
-    raw_href.to_string()
 }
 
 /// Formats search results as a clean GitHub Flavored Markdown document with engine source attribution.
@@ -558,29 +426,6 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_google_html_sample() {
-        let sample = r#"
-            <div class="g">
-                <div class="tF2Cxc">
-                    <a href="https://github.com/tokio-rs/tokio">
-                        <h3>Tokio: An asynchronous runtime for Rust</h3>
-                    </a>
-                    <div class="VwiC3b">
-                        A runtime for writing reliable, asynchronous, and slim applications.
-                    </div>
-                </div>
-            </div>
-        "#;
-
-        let results = parse_google_html(sample, 5).unwrap();
-        assert_eq!(results.len(), 1);
-        assert_eq!(results[0].title, "Tokio: An asynchronous runtime for Rust");
-        assert_eq!(results[0].url, "https://github.com/tokio-rs/tokio");
-        assert!(results[0].snippet.contains("asynchronous, and slim"));
-        assert_eq!(results[0].engine, "google");
-    }
-
-    #[test]
     fn test_unwrap_bing_url() {
         let bing_url =
             "https://www.bing.com/ck/a?!&&p=abc&u=a1aHR0cHM6Ly9ydXN0LWxhbmcub3JnLw&ntb=1";
@@ -624,16 +469,6 @@ mod tests {
         assert!(md.contains("## 1. [Rust Guide](https://www.rust-lang.org/)"));
         assert!(md.contains("Fast and reliable."));
         assert!(md.contains("HTTP error 404"));
-    }
-
-    #[test]
-    fn test_unwrap_google_url() {
-        let google_url = "/url?q=https%3A%2F%2Fwww.rust-lang.org%2F&sa=U&ved=2ahUKEwj";
-        let unwrapped = unwrap_google_url(google_url);
-        assert_eq!(unwrapped, "https://www.rust-lang.org/");
-
-        let direct_url = "https://example.com/page";
-        assert_eq!(unwrap_google_url(direct_url), "https://example.com/page");
     }
 
     #[test]

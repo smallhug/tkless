@@ -350,7 +350,25 @@ async fn run(args: CliArgs) -> Result<()> {
 
         let engine = TklessEngine::with_options(fetch_options)
             .context("Failed to initialize TkLess engine")?;
-        let mcp_server = McpServer::new(engine, cache);
+
+        let is_dynamic = args.mcp_dynamic
+            || match args.command {
+                Some(SubCommand::Mcp(ref mcp_args)) => {
+                    mcp_args.dynamic || mcp_args.profile.eq_ignore_ascii_case("dynamic")
+                }
+                _ => false,
+            }
+            || std::env::var("TKLESS_MCP_DYNAMIC")
+                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                .unwrap_or(false);
+
+        let mcp_mode = if is_dynamic {
+            tkless_core::mcp::McpMode::Dynamic
+        } else {
+            tkless_core::mcp::McpMode::Full
+        };
+
+        let mcp_server = McpServer::new_with_mode(engine, cache, mcp_mode);
         return mcp_server.run_stdio().await.map_err(Into::into);
     }
 
@@ -361,6 +379,28 @@ async fn run(args: CliArgs) -> Result<()> {
         let engine = TklessEngine::with_options(fetch_options)
             .context("Failed to initialize TkLess engine")?;
         return run_shell(&engine, &extraction_options).await;
+    }
+
+    // -------------------------------------------------------------------------
+    // Execution Branch 1.25: List Built-in Platform Adapters Matrix
+    // -------------------------------------------------------------------------
+    if let Some(SubCommand::Adapters(ref adapters_args)) = args.command {
+        let list = tkless_core::adapters::AdapterRegistry::list_adapter_metadata();
+        if matches!(adapters_args.format, CliFormat::Json | CliFormat::Jsonl) {
+            println!("{}", serde_json::to_string_pretty(&list)?);
+        } else {
+            println!("{}", tkless_core::adapters::format_adapters_markdown(&list));
+        }
+        return Ok(());
+    }
+
+    // -------------------------------------------------------------------------
+    // Execution Branch 1.28: Self-Upgrade from GitHub Releases (like bun upgrade)
+    // -------------------------------------------------------------------------
+    if let Some(SubCommand::Upgrade(ref upgrade_args)) = args.command {
+        let engine = TklessEngine::with_options(fetch_options)
+            .context("Failed to initialize TkLess engine")?;
+        return run_upgrade(&engine, upgrade_args).await;
     }
 
     // -------------------------------------------------------------------------
@@ -1189,6 +1229,179 @@ async fn load_target_html(target: &str, engine: &TklessEngine) -> Result<String>
     }
 }
 
+/// Automatically checks GitHub Releases and upgrades the current running executable (like bun upgrade).
+async fn run_upgrade(engine: &TklessEngine, args: &cli::UpgradeArgs) -> Result<()> {
+    let current_version = env!("CARGO_PKG_VERSION");
+    let repo = &args.repo;
+    let url = format!("https://api.github.com/repos/{repo}/releases/latest");
+
+    eprintln!("[TkLess] 正在检查 GitHub 最新版本发布信息 (https://github.com/{repo})...");
+
+    let resp = engine
+        .client()
+        .get(&url)
+        .header("User-Agent", format!("tkless/{current_version}"))
+        .send()
+        .await
+        .with_context(|| format!("连接 GitHub API 失败: {url}"))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        bail!("GitHub API 返回异常状态码 {status}: {body}");
+    }
+
+    let release_json: serde_json::Value =
+        resp.json().await.context("解析 GitHub Release 数据失败")?;
+    let tag_name = release_json["tag_name"]
+        .as_str()
+        .context("Release 数据中未找到 tag_name 字段")?;
+    let latest_version = tag_name.trim_start_matches('v');
+
+    eprintln!("[TkLess] 当前版本: v{current_version} | 最新版本: {tag_name}");
+
+    if latest_version == current_version && !args.force {
+        println!("✨ TkLess 已经是最新版本 (v{current_version})，无需更新。");
+        return Ok(());
+    }
+
+    if args.check {
+        if latest_version != current_version {
+            println!("🔔 检测到 TkLess 有新版本可用: {tag_name} (当前: v{current_version})");
+            println!("   运行 'tkless upgrade' 即可一键自动升级。");
+        } else {
+            println!("✨ 当前已是最新版本 (v{current_version})。");
+        }
+        return Ok(());
+    }
+
+    let os = std::env::consts::OS;
+    let arch = std::env::consts::ARCH;
+
+    let target_asset_name = match (os, arch) {
+        ("windows", "x86_64") => "tkless-windows-amd64.exe",
+        ("linux", "x86_64") => "tkless-linux-amd64",
+        ("linux", "aarch64") => "tkless-linux-arm64",
+        ("macos", "aarch64") => "tkless-macos-arm64.dmg",
+        ("macos", "x86_64") => "tkless-macos-amd64.dmg",
+        _ => bail!(
+            "暂不支持在系统架构 {os}-{arch} 上执行自动替换更新，请从 GitHub Releases 手动下载。"
+        ),
+    };
+
+    let assets = release_json["assets"]
+        .as_array()
+        .context("Release 中未发现可下载的产物列表 (assets)")?;
+
+    let asset = assets
+        .iter()
+        .find(|a| a["name"].as_str() == Some(target_asset_name))
+        .with_context(|| {
+            format!("未在 Release {tag_name} 中找到适用于当前平台的产物 '{target_asset_name}'")
+        })?;
+
+    let download_url = asset["browser_download_url"]
+        .as_str()
+        .context("下载链接缺失")?;
+
+    eprintln!("[TkLess] 正在下载最新二进制: {download_url}...");
+    let bytes = engine
+        .client()
+        .get(download_url)
+        .header("User-Agent", format!("tkless/{current_version}"))
+        .send()
+        .await
+        .context("下载 release 产物失败")?
+        .bytes()
+        .await
+        .context("读取下载数据流失败")?;
+
+    let current_exe = std::env::current_exe().context("无法确定当前执行程序的物理路径")?;
+    eprintln!("[TkLess] 当前执行程序路径: {}", current_exe.display());
+
+    #[cfg(target_os = "macos")]
+    {
+        let tmp_dmg = std::env::temp_dir().join(format!("tkless_upgrade_{}.dmg", uuid_simple()));
+        std::fs::write(&tmp_dmg, &bytes)?;
+        let mount_point = std::env::temp_dir().join(format!("tkless_mnt_{}", uuid_simple()));
+        let _ = std::fs::create_dir_all(&mount_point);
+
+        let attach_status = std::process::Command::new("hdiutil")
+            .args([
+                "attach",
+                tmp_dmg.to_str().unwrap(),
+                "-mountpoint",
+                mount_point.to_str().unwrap(),
+                "-nobrowse",
+                "-quiet",
+            ])
+            .status()?;
+        if !attach_status.success() {
+            let _ = std::fs::remove_file(&tmp_dmg);
+            bail!("无法挂载下载的 DMG 镜像包");
+        }
+
+        let inner_bin = mount_point.join("tkless");
+        let temp_exe = current_exe.with_extension("new.tmp");
+        std::fs::copy(&inner_bin, &temp_exe)?;
+
+        let _ = std::process::Command::new("hdiutil")
+            .args(["detach", mount_point.to_str().unwrap(), "-quiet"])
+            .status();
+        let _ = std::fs::remove_file(&tmp_dmg);
+        let _ = std::fs::remove_dir_all(&mount_point);
+
+        std::fs::rename(&temp_exe, &current_exe)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&current_exe, std::fs::Permissions::from_mode(0o755));
+        }
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let temp_exe = current_exe.with_extension("new.tmp");
+        std::fs::write(&temp_exe, &bytes)?;
+
+        #[cfg(target_os = "windows")]
+        {
+            let old_exe = current_exe.with_extension("old.tmp");
+            let _ = std::fs::remove_file(&old_exe);
+            std::fs::rename(&current_exe, &old_exe)
+                .context("重命名当前运行中程序失败，可能被杀毒软件或其它进程锁定")?;
+            if let Err(e) = std::fs::rename(&temp_exe, &current_exe) {
+                // Rollback on failure
+                let _ = std::fs::rename(&old_exe, &current_exe);
+                return Err(e).context("替换新版本二进制失败");
+            }
+            let _ = std::fs::remove_file(&old_exe);
+        }
+
+        #[cfg(not(target_os = "windows"))]
+        {
+            std::fs::rename(&temp_exe, &current_exe).context("替换新版本二进制失败")?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ =
+                    std::fs::set_permissions(&current_exe, std::fs::Permissions::from_mode(0o755));
+            }
+        }
+    }
+
+    println!("🎉 恭喜！TkLess 已成功自动升级至 {}！", tag_name);
+    Ok(())
+}
+
+#[allow(dead_code)]
+fn uuid_simple() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos()
+}
+
 /// Interactive REPL shell session for exploratory scraping, search, and feed inspection.
 async fn run_shell(engine: &TklessEngine, base_options: &ExtractionOptions) -> Result<()> {
     println!("╔════════════════════════════════════════════════════════════════╗");
@@ -1231,6 +1444,7 @@ async fn run_shell(engine: &TklessEngine, base_options: &ExtractionOptions) -> R
                 println!("  summarize <url>     - 本地启发式提取页面核心观点要点速览");
                 println!("  chunk <url>         - 将长文档按标题与 Token 预算语义感知切块");
                 println!("  diff <url1> <url2>  - 对比两个网页或文档版本的版本差异与变更比例");
+                println!("  adapters            - 列出支持的全部 16+ 平台原生适配器矩阵与能力");
                 println!("  help                - 显示此帮助信息");
                 println!("  exit / quit         - 退出交互式会话\n");
             }
@@ -1310,6 +1524,13 @@ async fn run_shell(engine: &TklessEngine, base_options: &ExtractionOptions) -> R
                 } else {
                     eprintln!("用法: tables <url>");
                 }
+            }
+            "adapters" | "platforms" => {
+                let list = tkless_core::adapters::AdapterRegistry::list_adapter_metadata();
+                println!(
+                    "\n{}\n",
+                    tkless_core::adapters::format_adapters_markdown(&list)
+                );
             }
             "summarize" | "summary" => {
                 if let Some(target_url) = rest.first() {
@@ -1410,5 +1631,20 @@ mod tests {
         let mut buf = Vec::new();
         clap_complete::generate(clap_complete::Shell::Bash, &mut cmd, "tkless", &mut buf);
         assert!(!buf.is_empty());
+
+        // Token measurements for CLI help outputs
+        use tkless_core::model::TokenizerKind;
+        use tkless_core::token::count_tokens;
+
+        let mut h_buf = Vec::new();
+        let _ = cmd.write_help(&mut h_buf);
+        let h_str = String::from_utf8_lossy(&h_buf);
+        println!("\n=== CLI Help Token Metrics ===");
+        println!(
+            "tkless --help (Full): chars={}, o200k={}, cl100k={}",
+            h_str.len(),
+            count_tokens(&h_str, TokenizerKind::O200k),
+            count_tokens(&h_str, TokenizerKind::Cl100k)
+        );
     }
 }
