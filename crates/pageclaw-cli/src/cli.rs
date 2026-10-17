@@ -800,6 +800,13 @@ pub struct SearchSubArgs {
     )]
     pub substack: bool,
 
+    /// Scope search to arXiv research papers and preprints (arxiv.org)
+    #[arg(
+        long = "arxiv",
+        help = "Scope search to arXiv research papers and preprints (arxiv.org)"
+    )]
+    pub arxiv: bool,
+
     /// Search engine provider: bing (default), google, auto (failover)
     #[arg(
         short = 'e',

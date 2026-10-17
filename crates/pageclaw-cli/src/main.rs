@@ -398,6 +398,13 @@ async fn run(args: CliArgs) -> Result<()> {
             } else {
                 format!("site:substack.com {clean}")
             }
+        } else if search_args.arxiv {
+            let clean = search_args.query.trim();
+            if clean.starts_with("site:") {
+                clean.to_string()
+            } else {
+                format!("site:arxiv.org {clean}")
+            }
         } else {
             search_args.query.clone()
         };

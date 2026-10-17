@@ -42,7 +42,7 @@ async fn test_mcp_protocol_lifecycle() {
     let tools_array = tools_val["tools"]
         .as_array()
         .expect("Tools should be an array");
-    assert_eq!(tools_array.len(), 12);
+    assert_eq!(tools_array.len(), 13);
 
     let tool_names: Vec<&str> = tools_array
         .iter()
@@ -60,6 +60,7 @@ async fn test_mcp_protocol_lifecycle() {
     assert!(tool_names.contains(&"scaffold_schema"));
     assert!(tool_names.contains(&"compare_similarity"));
     assert!(tool_names.contains(&"manage_cache"));
+    assert!(tool_names.contains(&"fetch_feed"));
 
     // Verify web_search schema contains scope, cdp_endpoint, schema
     let search_tool = tools_array
@@ -222,6 +223,30 @@ async fn test_mcp_protocol_lifecycle() {
     let parsed_cache: serde_json::Value = serde_json::from_str(cache_text).unwrap();
     assert!(parsed_cache.get("memory_entries").is_some());
     assert!(parsed_cache.get("disk_entries").is_some());
+
+    // 5i. Tool Call: fetch_feed
+    let feed_sample = r#"<?xml version="1.0" encoding="UTF-8"?><rss version="2.0"><channel><title>Rust Blog</title><link>https://blog.rust-lang.org</link><item><title>Rust 1.85</title><link>https://blog.rust-lang.org/1.85.html</link><description>Release news</description></item></channel></rss>"#;
+    let feed_req = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 13,
+        "method": "tools/call",
+        "params": {
+            "name": "fetch_feed",
+            "arguments": {
+                "xml": feed_sample,
+                "format": "markdown"
+            }
+        }
+    });
+    let feed_res = server
+        .handle_message(&feed_req.to_string())
+        .await
+        .expect("Should return response");
+    let feed_val = feed_res.result.expect("Feed result should be present");
+    let feed_text = feed_val["content"][0]["text"].as_str().unwrap();
+    assert!(feed_text.contains("Rust Blog"));
+    assert!(feed_text.contains("Rust 1.85"));
+    assert!(feed_text.contains("Release news"));
 
     // 5. Unknown Method Error
     let unknown_req = r#"{"jsonrpc":"2.0","id":4,"method":"unknown/method"}"#;
