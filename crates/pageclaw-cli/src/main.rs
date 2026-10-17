@@ -12,6 +12,7 @@ use std::io::{self, Read, Write};
 use std::path::Path;
 use std::sync::Mutex;
 use std::time::Instant;
+use tokio::io::{AsyncBufReadExt, BufReader};
 use tracing_subscriber::EnvFilter;
 use url::Url;
 
@@ -338,6 +339,15 @@ async fn run(args: CliArgs) -> Result<()> {
     }
 
     // -------------------------------------------------------------------------
+    // Execution Branch 1.2: Interactive Exploratory REPL Shell
+    // -------------------------------------------------------------------------
+    if let Some(SubCommand::Shell(_)) = args.command {
+        let engine = PageclawEngine::with_options(fetch_options)
+            .context("Failed to initialize PageClaw engine")?;
+        return run_shell(&engine, &extraction_options).await;
+    }
+
+    // -------------------------------------------------------------------------
     // Execution Branch 1.5: Zero-API-Key Web Search
     // -------------------------------------------------------------------------
     if let Some(SubCommand::Search(ref search_args)) = args.command {
@@ -411,6 +421,13 @@ async fn run(args: CliArgs) -> Result<()> {
                 clean.to_string()
             } else {
                 format!("site:huggingface.co {clean}")
+            }
+        } else if search_args.wiki {
+            let clean = search_args.query.trim();
+            if clean.starts_with("site:") {
+                clean.to_string()
+            } else {
+                format!("site:wikipedia.org {clean}")
             }
         } else {
             search_args.query.clone()
@@ -953,4 +970,109 @@ fn apply_search_params(url_str: &str, page: Option<u32>, order: Option<&str>) ->
     } else {
         url_str.to_string()
     }
+}
+
+/// Interactive REPL shell session for exploratory scraping, search, and feed inspection.
+async fn run_shell(engine: &PageclawEngine, base_options: &ExtractionOptions) -> Result<()> {
+    println!("╔════════════════════════════════════════════════════════════════╗");
+    println!("║   PageClaw Interactive Shell (REPL 探索会话模式)               ║");
+    println!("║   输入 'help' 查看指令指南，输入 'exit' 或 'quit' 退出会话      ║");
+    println!("╚════════════════════════════════════════════════════════════════╝\n");
+
+    let stdin = tokio::io::stdin();
+    let reader = BufReader::new(stdin);
+    let mut lines = reader.lines();
+
+    loop {
+        eprint!("pageclaw> ");
+        let _ = io::stderr().flush();
+
+        let line = match lines.next_line().await {
+            Ok(Some(l)) => l.trim().to_string(),
+            _ => break,
+        };
+
+        if line.is_empty() {
+            continue;
+        }
+
+        let mut parts = line.split_whitespace();
+        let cmd = parts.next().unwrap_or("");
+        let rest: Vec<&str> = parts.collect();
+
+        match cmd {
+            "exit" | "quit" | "q" => {
+                println!("再见！");
+                break;
+            }
+            "help" | "?" => {
+                println!("\n可用指令 (Available Commands):");
+                println!("  fetch <url>         - 抓取网页并输出清洗后的 Markdown");
+                println!("  search <query>      - 免 API Key 全网搜索并返回结果列表");
+                println!("  feed <url>          - 解析并展示 RSS 2.0 / Atom 1.0 订阅源");
+                println!("  help                - 显示此帮助信息");
+                println!("  exit / quit         - 退出交互式会话\n");
+            }
+            "fetch" => {
+                if let Some(target_url) = rest.first() {
+                    match engine.process_url(target_url, base_options).await {
+                        Ok(doc) => {
+                            println!("\n{}\n", doc.content);
+                        }
+                        Err(e) => {
+                            eprintln!("❌ 抓取失败: {e}");
+                        }
+                    }
+                } else {
+                    eprintln!("用法: fetch <url>");
+                }
+            }
+            "search" => {
+                let query = rest.join(" ");
+                if query.is_empty() {
+                    eprintln!("用法: search <query>");
+                } else {
+                    match pageclaw_core::search::web_search_with_engine(
+                        engine.client(),
+                        &query,
+                        5,
+                        pageclaw_core::model::SearchEngineKind::Bing,
+                    )
+                    .await
+                    {
+                        Ok(results) => {
+                            let md = pageclaw_core::search::format_search_results_markdown(
+                                &query, &results,
+                            );
+                            println!("\n{md}\n");
+                        }
+                        Err(e) => eprintln!("❌ 搜索失败: {e}"),
+                    }
+                }
+            }
+            "feed" => {
+                if let Some(feed_url) = rest.first() {
+                    match engine.fetcher().fetch(feed_url).await {
+                        Ok(resp) => match pageclaw_core::feed::parse_feed(&resp.html) {
+                            Ok(channel) => {
+                                println!(
+                                    "\n{}\n",
+                                    pageclaw_core::feed::format_feed_markdown(&channel)
+                                );
+                            }
+                            Err(e) => eprintln!("❌ 解析订阅源失败: {e}"),
+                        },
+                        Err(e) => eprintln!("❌ 获取订阅源失败: {e}"),
+                    }
+                } else {
+                    eprintln!("用法: feed <url>");
+                }
+            }
+            other => {
+                eprintln!("未知指令: '{other}'。输入 'help' 查看可用指令。");
+            }
+        }
+    }
+
+    Ok(())
 }

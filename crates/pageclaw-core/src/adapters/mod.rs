@@ -7,6 +7,7 @@ pub mod juejin;
 pub mod medium;
 pub mod substack;
 pub mod wechat;
+pub mod wikipedia;
 pub mod xiaohongshu;
 pub mod zhihu;
 
@@ -19,6 +20,7 @@ pub use juejin::JuejinAdapter;
 pub use medium::MediumAdapter;
 pub use substack::SubstackAdapter;
 pub use wechat::WechatAdapter;
+pub use wikipedia::WikipediaAdapter;
 pub use xiaohongshu::XiaohongshuAdapter;
 pub use zhihu::ZhihuAdapter;
 
@@ -83,6 +85,7 @@ impl AdapterRegistry {
         registry.register(Arc::new(SubstackAdapter::new()));
         registry.register(Arc::new(ArxivAdapter::new()));
         registry.register(Arc::new(HuggingfaceAdapter::new()));
+        registry.register(Arc::new(WikipediaAdapter::new()));
         registry
     }
 
