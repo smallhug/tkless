@@ -272,7 +272,7 @@ fn parse_heading_line(line: &str) -> Option<(usize, String)> {
             break;
         }
     }
-    if level >= 1 && level <= 6 {
+    if (1..=6).contains(&level) {
         let text = line[level..].trim().to_string();
         Some((level, text))
     } else {

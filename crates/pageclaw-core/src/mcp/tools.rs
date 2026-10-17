@@ -826,14 +826,18 @@ pub fn get_available_tools() -> Vec<McpTool> {
             }),
         },
         McpTool {
-            name: "summarize_text".to_string(),
-            description: "Locally distills salient key takeaway bullet points (TL;DR) from arbitrary text or Markdown using term frequency and positional heuristics without requiring external LLM API calls.".to_string(),
+            name: "summarize_content".to_string(),
+            description: "Distills salient key takeaway bullet points (TL;DR) from a webpage URL or raw text/Markdown using term frequency and positional heuristics without requiring external LLM API calls.".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
+                    "url": {
+                        "type": "string",
+                        "description": "Target webpage URL to fetch and summarize"
+                    },
                     "text": {
                         "type": "string",
-                        "description": "Raw text or Markdown content to extract key takeaways from"
+                        "description": "Optional raw text or Markdown content to summarize directly"
                     },
                     "max_bullets": {
                         "type": "integer",
@@ -846,8 +850,7 @@ pub fn get_available_tools() -> Vec<McpTool> {
                         "default": "markdown",
                         "description": "Output format: 'markdown' (formatted bullet points) or 'json' (array of strings)"
                     }
-                },
-                "required": ["text"]
+                }
             }),
         },
         McpTool {
@@ -870,8 +873,47 @@ pub fn get_available_tools() -> Vec<McpTool> {
             }),
         },
         McpTool {
-            name: "diff_content".to_string(),
-            description: "Computes line-level differences, change metrics (added/removed/unchanged lines, change percentage), and unified diff format between two versions of text or Markdown.".to_string(),
+            name: "chunk_markdown".to_string(),
+            description: "Fetches a webpage URL or takes a Markdown string, and segments content into semantic chunks respecting heading hierarchy and protecting code fences for RAG vector DB ingestion.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "url": {
+                        "type": "string",
+                        "description": "Target webpage URL to fetch, convert to Markdown, and chunk"
+                    },
+                    "markdown": {
+                        "type": "string",
+                        "description": "Optional Markdown content string to chunk directly"
+                    },
+                    "chunk_size": {
+                        "type": "integer",
+                        "default": 500,
+                        "description": "Target token budget per semantic chunk (default: 500)"
+                    },
+                    "chunk_overlap": {
+                        "type": "integer",
+                        "default": 50,
+                        "description": "Token overlap between consecutive chunks (default: 50)"
+                    },
+                    "tokenizer": {
+                        "type": "string",
+                        "enum": ["o200k", "cl100k", "heuristic"],
+                        "default": "o200k",
+                        "description": "Tokenizer model encoding scheme: 'o200k' (GPT-4o/Claude), 'cl100k' (GPT-4), 'heuristic'"
+                    },
+                    "format": {
+                        "type": "string",
+                        "enum": ["json", "markdown"],
+                        "default": "json",
+                        "description": "Output presentation format: 'json' (array of MarkdownChunk objects) or 'markdown'"
+                    }
+                }
+            }),
+        },
+        McpTool {
+            name: "diff_documents".to_string(),
+            description: "Computes line-level differences, change metrics (added/removed/unchanged lines, change percentage), and unified diff format between two versions of text or Markdown documents.".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -894,8 +936,8 @@ pub fn get_available_tools() -> Vec<McpTool> {
             }),
         },
         McpTool {
-            name: "capture_screenshot".to_string(),
-            description: "Captures a high-resolution visual screenshot of a webpage rendered via Chrome DevTools Protocol (CDP) for multimodal AI models (Claude 3.5 Sonnet, GPT-4o, Gemini).".to_string(),
+            name: "take_screenshot".to_string(),
+            description: "Captures a full-page or viewport visual screenshot of a webpage rendered via Chrome DevTools Protocol (CDP) for multimodal AI models (Claude 3.5 Sonnet, GPT-4o, Gemini).".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -913,6 +955,11 @@ pub fn get_available_tools() -> Vec<McpTool> {
                         "default": "png",
                         "description": "Image format: 'png' (lossless, default) or 'jpeg'"
                     },
+                    "full_page": {
+                        "type": "boolean",
+                        "default": true,
+                        "description": "Whether to capture the entire scrollable page height (default: true)"
+                    },
                     "cdp_endpoint": {
                         "type": "string",
                         "description": "Optional Chrome DevTools Protocol endpoint (e.g. 'http://127.0.0.1:9222')"
@@ -926,14 +973,18 @@ pub fn get_available_tools() -> Vec<McpTool> {
             }),
         },
         McpTool {
-            name: "convert_table".to_string(),
-            description: "Extracts and converts HTML table elements into clean tabular datasets: SQL DDL + INSERT statements, CSV, TSV, GFM Markdown, or JSON records.".to_string(),
+            name: "export_tables".to_string(),
+            description: "Extracts all data tables from a webpage URL or raw HTML string into clean tabular datasets: SQL DDL + INSERT statements, CSV, TSV, GFM Markdown, or JSON records.".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
+                    "url": {
+                        "type": "string",
+                        "description": "Target webpage URL to fetch and extract tables from"
+                    },
                     "html": {
                         "type": "string",
-                        "description": "Raw HTML string containing one or more <table> elements"
+                        "description": "Optional raw HTML string containing one or more <table> elements"
                     },
                     "format": {
                         "type": "string",
@@ -945,9 +996,12 @@ pub fn get_available_tools() -> Vec<McpTool> {
                         "type": "string",
                         "default": "extracted_table",
                         "description": "Custom SQL table name identifier when format is 'sql' [default: 'extracted_table']"
+                    },
+                    "table_index": {
+                        "type": "integer",
+                        "description": "Optional 0-indexed specific table to extract. If omitted, extracts all tables."
                     }
-                },
-                "required": ["html"]
+                }
             }),
         }
     ]

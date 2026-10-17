@@ -94,7 +94,10 @@ impl McpServer {
             }
             "tools/call" => {
                 let params = request.params.unwrap_or(Value::Null);
-                let tool_name = params.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                let raw_tool_name = params.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                let tool_name = raw_tool_name
+                    .strip_prefix("pageclaw_")
+                    .unwrap_or(raw_tool_name);
                 let arguments = params
                     .get("arguments")
                     .cloned()
@@ -109,7 +112,7 @@ impl McpServer {
                     "fetch_bilibili_feed" => self.call_fetch_bilibili_feed(&arguments).await,
                     "search_bilibili" => self.call_search_bilibili(&arguments).await,
                     "download_media" => self.call_download_media(&arguments).await,
-                    "web_search" => self.call_web_search(&arguments).await,
+                    "web_search" | "search_web" => self.call_web_search(&arguments).await,
                     "crawl_site" => {
                         self.call_crawl_site(&arguments, notifier, progress_token.as_ref())
                             .await
@@ -130,12 +133,17 @@ impl McpServer {
                     "fetch_feed" => self.call_fetch_feed(&arguments).await,
                     "inspect_links" => self.call_inspect_links(&arguments).await,
                     "check_auth" => self.call_check_auth(&arguments).await,
-                    "summarize_text" => self.call_summarize_text(&arguments).await,
+                    "summarize_content" | "summarize_text" | "summarize" => {
+                        self.call_summarize_content(&arguments).await
+                    }
                     "split_document" => self.call_split_document(&arguments).await,
-                    "diff_content" => self.call_diff_content(&arguments).await,
-                    "capture_screenshot" => self.call_capture_screenshot(&arguments).await,
-                    "convert_table" => self.call_convert_table(&arguments).await,
-                    _ => McpToolCallResult::error(format!("Unknown tool: '{tool_name}'")),
+                    "chunk_markdown" => self.call_chunk_markdown(&arguments).await,
+                    "diff_documents" | "diff_content" => self.call_diff_content(&arguments).await,
+                    "take_screenshot" | "capture_screenshot" => {
+                        self.call_capture_screenshot(&arguments).await
+                    }
+                    "export_tables" | "convert_table" => self.call_export_tables(&arguments).await,
+                    _ => McpToolCallResult::error(format!("Unknown tool: '{raw_tool_name}'")),
                 };
 
                 let result_value = serde_json::to_value(tool_result).unwrap_or_else(|e| {
@@ -1735,7 +1743,7 @@ impl McpServer {
                         "url": url,
                         "status": status,
                         "latency_ms": latency_ms,
-                        "is_reachable": status >= 200 && status < 400,
+                        "is_reachable": (200..400).contains(&status),
                         "is_redirect": final_url.is_some(),
                         "final_url": final_url,
                         "error": error
@@ -1766,7 +1774,7 @@ impl McpServer {
                     "-".to_string()
                 };
 
-                let health_str = if status >= 200 && status < 400 {
+                let health_str = if (200..400).contains(&status) {
                     "✅ 可访问 (OK)".to_string()
                 } else if let Some(e) = err {
                     format!("❌ 异常 ({e})")
@@ -1868,11 +1876,12 @@ impl McpServer {
                                     - **凭据作用域**: `bilibili.com` (已隔离存储)"
                                 ))
                             } else {
-                                McpToolCallResult::success(format!(
+                                McpToolCallResult::success(
                                     "# ⚠️ [BILIBILI] 凭据已失效或已过期 (Cookie Expired)\n\n\
                                     - Bilibili 鉴权接口返回 `isLogin: false`。\n\
                                     - 建议操作: 运行 `pageclaw login bilibili` 重新扫码更新凭据。"
-                                ))
+                                        .to_string(),
+                                )
                             }
                         } else {
                             McpToolCallResult::success(format!("已加载 Bilibili 凭据 (长度 {} 字符)，解析接口响应异常。", cookie_str.len()))
@@ -1917,14 +1926,32 @@ impl McpServer {
         }
     }
 
-    async fn call_summarize_text(&self, args: &Value) -> McpToolCallResult {
-        let text = match args.get("text").and_then(|v| v.as_str()) {
-            Some(t) if !t.trim().is_empty() => t,
-            _ => return McpToolCallResult::error("Missing required parameter 'text'"),
+    async fn call_summarize_content(&self, args: &Value) -> McpToolCallResult {
+        let text = if let Some(t) = args.get("text").and_then(|v| v.as_str()) {
+            t.to_string()
+        } else if let Some(u) = args.get("url").and_then(|v| v.as_str()) {
+            let fetch_opts = ExtractionOptions {
+                mode: ExtractionMode::Article,
+                format: OutputFormat::Markdown,
+                ..Default::default()
+            };
+            match self.engine.process_url(u, &fetch_opts).await {
+                Ok(doc) => doc.content,
+                Err(e) => {
+                    return McpToolCallResult::error(format!(
+                        "Failed to fetch and process URL '{u}': {e}"
+                    ))
+                }
+            }
+        } else {
+            return McpToolCallResult::error(
+                "Missing required parameter: either 'url' or 'text' must be provided",
+            );
         };
 
         let max_bullets = args
             .get("max_bullets")
+            .or_else(|| args.get("max_points"))
             .and_then(|v| v.as_u64())
             .unwrap_or(3)
             .clamp(1, 10) as usize;
@@ -1934,7 +1961,7 @@ impl McpServer {
             .and_then(|v| v.as_str())
             .unwrap_or("markdown");
 
-        let bullets = crate::summarizer::extract_key_takeaways(text, max_bullets);
+        let bullets = crate::summarizer::extract_key_takeaways(&text, max_bullets);
 
         match format {
             "json" => match serde_json::to_string_pretty(&bullets) {
@@ -1950,6 +1977,79 @@ impl McpServer {
                     md.push_str(&format!("- {}\n", bullet.trim()));
                 }
                 McpToolCallResult::success(md)
+            }
+        }
+    }
+
+    async fn call_chunk_markdown(&self, args: &Value) -> McpToolCallResult {
+        let markdown = if let Some(m) = args.get("markdown").and_then(|v| v.as_str()) {
+            m.to_string()
+        } else if let Some(u) = args.get("url").and_then(|v| v.as_str()) {
+            let fetch_opts = ExtractionOptions {
+                mode: ExtractionMode::Article,
+                format: OutputFormat::Markdown,
+                ..Default::default()
+            };
+            match self.engine.process_url(u, &fetch_opts).await {
+                Ok(doc) => doc.content,
+                Err(e) => {
+                    return McpToolCallResult::error(format!(
+                        "Failed to fetch and process URL '{u}': {e}"
+                    ))
+                }
+            }
+        } else {
+            return McpToolCallResult::error(
+                "Missing required parameter: either 'url' or 'markdown' must be provided",
+            );
+        };
+
+        let chunk_size = args
+            .get("chunk_size")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(500) as usize;
+        let chunk_overlap = args
+            .get("chunk_overlap")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(50) as usize;
+        let tokenizer = match args.get("tokenizer").and_then(|v| v.as_str()) {
+            Some("cl100k") => TokenizerKind::Cl100k,
+            Some("heuristic") => TokenizerKind::Heuristic,
+            _ => TokenizerKind::O200k,
+        };
+        let format = args
+            .get("format")
+            .and_then(|v| v.as_str())
+            .unwrap_or("json");
+
+        let chunks =
+            crate::chunker::chunk_markdown(&markdown, chunk_size, chunk_overlap, tokenizer);
+
+        if format == "markdown" {
+            let mut out = String::new();
+            out.push_str(&format!("# ✂️ 语义切块结果 (共 {} 块)\n\n", chunks.len()));
+            for chunk in &chunks {
+                let breadcrumbs = if chunk.heading_path.is_empty() {
+                    "正文".to_string()
+                } else {
+                    chunk.heading_path.join(" > ")
+                };
+                out.push_str(&format!(
+                    "### 📦 切块 #{}: {} ({} Tokens / {} 字符)\n\n{}\n\n---\n\n",
+                    chunk.index + 1,
+                    breadcrumbs,
+                    chunk.token_count,
+                    chunk.content.chars().count(),
+                    chunk.content
+                ));
+            }
+            McpToolCallResult::success(out)
+        } else {
+            match serde_json::to_string_pretty(&chunks) {
+                Ok(s) => McpToolCallResult::success(s),
+                Err(e) => {
+                    McpToolCallResult::error(format!("Failed to serialize chunks to JSON: {e}"))
+                }
             }
         }
     }
@@ -2067,10 +2167,27 @@ impl McpServer {
         }
     }
 
-    async fn call_convert_table(&self, args: &Value) -> McpToolCallResult {
-        let html = match args.get("html").and_then(|v| v.as_str()) {
-            Some(h) if !h.trim().is_empty() => h,
-            _ => return McpToolCallResult::error("Missing required parameter 'html'"),
+    async fn call_export_tables(&self, args: &Value) -> McpToolCallResult {
+        let html = if let Some(h) = args.get("html").and_then(|v| v.as_str()) {
+            h.to_string()
+        } else if let Some(u) = args.get("url").and_then(|v| v.as_str()) {
+            let parsed_url = match Url::parse(u) {
+                Ok(p) => p,
+                Err(e) => return McpToolCallResult::error(format!("Invalid URL: {e}")),
+            };
+            if let Err(e) = self.engine.fetcher().validate_ssrf(&parsed_url).await {
+                return McpToolCallResult::error(format!("SSRF blocked: {e}"));
+            }
+            match self.engine.fetcher().fetch(u).await {
+                Ok(res) => res.html,
+                Err(e) => {
+                    return McpToolCallResult::error(format!("Failed to fetch URL '{u}': {e}"))
+                }
+            }
+        } else {
+            return McpToolCallResult::error(
+                "Missing required parameter: either 'url' or 'html' must be provided",
+            );
         };
 
         let format_str = args.get("format").and_then(|v| v.as_str()).unwrap_or("sql");
@@ -2088,11 +2205,29 @@ impl McpServer {
             .and_then(|v| v.as_str())
             .unwrap_or("extracted_table");
 
-        let doc = scraper::Html::parse_document(html);
-        let tables = crate::extractor::extract_tables(&doc);
+        let doc = scraper::Html::parse_document(&html);
+        let mut tables = crate::extractor::extract_tables(&doc);
 
         if tables.is_empty() {
-            return McpToolCallResult::error("未在提供的 HTML 中检测到有效的 <table> 表格元素");
+            return McpToolCallResult::error(
+                "未在提供的页面或 HTML 中检测到有效的 <table> 表格元素",
+            );
+        }
+
+        if let Some(idx) = args
+            .get("table_index")
+            .and_then(|v| v.as_u64())
+            .map(|n| n as usize)
+        {
+            if idx >= tables.len() {
+                return McpToolCallResult::error(format!(
+                    "table_index {} 超出范围，页面仅包含 {} 个表格 (有效索引: 0-{})",
+                    idx,
+                    tables.len(),
+                    tables.len().saturating_sub(1)
+                ));
+            }
+            tables = vec![tables.swap_remove(idx)];
         }
 
         if table_format == TableExportFormat::Sql {
@@ -2108,7 +2243,7 @@ impl McpServer {
                     t.to_sql(&name)
                 })
                 .collect::<Vec<_>>()
-                .join("\n");
+                .join("\n\n");
             McpToolCallResult::success(sql_ddl)
         } else {
             let formatted = crate::model::ExtractedTable::format_tables(&tables, table_format);

@@ -248,33 +248,35 @@ impl PageclawEngine {
                 let cdp_ep =
                     cdp::resolve_cdp_endpoint(options.cdp_endpoint.as_deref(), options.auto_cdp);
 
-                if is_challenge && cdp_ep.is_some() {
-                    let ep = cdp_ep.unwrap();
-                    debug!(
-                        url = url,
-                        endpoint = %ep,
-                        "Static fetch encountered anti-scraping challenge; auto falling back to CDP headless browser"
-                    );
-                    return self
-                        .fetch_via_cdp_and_process(url, &parsed_url, options, &ep)
-                        .await;
+                if is_challenge {
+                    if let Some(ep) = cdp_ep {
+                        debug!(
+                            url = url,
+                            endpoint = %ep,
+                            "Static fetch encountered anti-scraping challenge; auto falling back to CDP headless browser"
+                        );
+                        return self
+                            .fetch_via_cdp_and_process(url, &parsed_url, options, &ep)
+                            .await;
+                    }
                 }
                 resp
             }
             Err(err) => {
                 let cdp_ep =
                     cdp::resolve_cdp_endpoint(options.cdp_endpoint.as_deref(), options.auto_cdp);
-                if options.auto_cdp && cdp_ep.is_some() {
-                    let ep = cdp_ep.unwrap();
-                    debug!(
-                        url = url,
-                        endpoint = %ep,
-                        error = %err,
-                        "Static fetch failed with network error; auto falling back to CDP headless browser"
-                    );
-                    return self
-                        .fetch_via_cdp_and_process(url, &parsed_url, options, &ep)
-                        .await;
+                if options.auto_cdp {
+                    if let Some(ep) = cdp_ep {
+                        debug!(
+                            url = url,
+                            endpoint = %ep,
+                            error = %err,
+                            "Static fetch failed with network error; auto falling back to CDP headless browser"
+                        );
+                        return self
+                            .fetch_via_cdp_and_process(url, &parsed_url, options, &ep)
+                            .await;
+                    }
                 }
                 return Err(err);
             }
@@ -456,9 +458,11 @@ impl PageclawEngine {
                 };
                 let token_count = count_tokens(&content, options.tokenizer);
                 let title = Some(channel.title.clone());
-                let mut metadata = PageMetadata::default();
-                metadata.description = Some(channel.description.clone());
-                metadata.canonical_url = Some(channel.link.clone());
+                let metadata = PageMetadata {
+                    description: Some(channel.description.clone()),
+                    canonical_url: Some(channel.link.clone()),
+                    ..Default::default()
+                };
 
                 return Ok(PageDocument {
                     url: base_url.unwrap_or(&channel.link).to_string(),

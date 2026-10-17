@@ -17,12 +17,12 @@ pub fn simhash(text: &str) -> u64 {
 
     for (feature, weight) in features {
         let hash = fnv1a_64(feature.as_bytes());
-        for i in 0..64 {
+        for (i, count) in bit_counts.iter_mut().enumerate() {
             let bit = (hash >> i) & 1;
             if bit == 1 {
-                bit_counts[i] += weight as i32;
+                *count += weight as i32;
             } else {
-                bit_counts[i] -= weight as i32;
+                *count -= weight as i32;
             }
         }
     }

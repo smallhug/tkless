@@ -42,7 +42,7 @@ async fn test_mcp_protocol_lifecycle() {
     let tools_array = tools_val["tools"]
         .as_array()
         .expect("Tools should be an array");
-    assert_eq!(tools_array.len(), 20);
+    assert_eq!(tools_array.len(), 21);
 
     let tool_names: Vec<&str> = tools_array
         .iter()
@@ -63,11 +63,12 @@ async fn test_mcp_protocol_lifecycle() {
     assert!(tool_names.contains(&"fetch_feed"));
     assert!(tool_names.contains(&"inspect_links"));
     assert!(tool_names.contains(&"check_auth"));
-    assert!(tool_names.contains(&"summarize_text"));
+    assert!(tool_names.contains(&"summarize_content"));
     assert!(tool_names.contains(&"split_document"));
-    assert!(tool_names.contains(&"diff_content"));
-    assert!(tool_names.contains(&"capture_screenshot"));
-    assert!(tool_names.contains(&"convert_table"));
+    assert!(tool_names.contains(&"chunk_markdown"));
+    assert!(tool_names.contains(&"diff_documents"));
+    assert!(tool_names.contains(&"take_screenshot"));
+    assert!(tool_names.contains(&"export_tables"));
 
     // Verify web_search schema contains scope, cdp_endpoint, schema
     let search_tool = tools_array
@@ -462,6 +463,112 @@ async fn test_mcp_protocol_lifecycle() {
     assert!(convert_sql.contains("CREATE TABLE IF NOT EXISTS quarterly_financials"));
     assert!(convert_sql.contains("INSERT INTO quarterly_financials"));
     assert!(convert_sql.contains("Q1 2026"));
+
+    // 5r. Tool Call: export_tables with pageclaw_ prefix and CSV format
+    let export_req = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 22,
+        "method": "tools/call",
+        "params": {
+            "name": "pageclaw_export_tables",
+            "arguments": {
+                "html": "<table><thead><tr><th>Asset</th><th>Value</th></tr></thead><tbody><tr><td>Bitcoin</td><td>95000</td></tr><tr><td>Ethereum</td><td>3500</td></tr></tbody></table>",
+                "format": "csv",
+                "table_index": 0
+            }
+        }
+    });
+    let export_res = server
+        .handle_message(&export_req.to_string())
+        .await
+        .expect("Should return response");
+    let export_val = export_res
+        .result
+        .expect("Export tables result should be present");
+    let export_csv = export_val["content"][0]["text"].as_str().unwrap();
+    assert!(export_csv.contains("Asset,Value"));
+    assert!(export_csv.contains("Bitcoin,95000"));
+
+    // 5s. Tool Call: chunk_markdown with pageclaw_ prefix
+    let chunk_md_req = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 23,
+        "method": "tools/call",
+        "params": {
+            "name": "pageclaw_chunk_markdown",
+            "arguments": {
+                "markdown": "# Overview\nPageClaw is an ultra-fast token-efficient extraction engine for LLMs.\n## Architecture\nBuilt in pure Rust with strict stream separation and MCP stdio support.\n## Features\nSupports 15+ platform adapters.",
+                "chunk_size": 25,
+                "chunk_overlap": 5,
+                "format": "json"
+            }
+        }
+    });
+    let chunk_md_res = server
+        .handle_message(&chunk_md_req.to_string())
+        .await
+        .expect("Should return response");
+    let chunk_md_val = chunk_md_res
+        .result
+        .expect("Chunk markdown result should be present");
+    let chunk_md_text = chunk_md_val["content"][0]["text"].as_str().unwrap();
+    let parsed_chunks: serde_json::Value = serde_json::from_str(chunk_md_text).unwrap();
+    let chunks_arr = parsed_chunks.as_array().expect("Should be array of chunks");
+    assert!(chunks_arr.len() >= 2);
+    assert!(chunks_arr[0]["content"]
+        .as_str()
+        .unwrap()
+        .contains("PageClaw"));
+
+    // 5t. Tool Call: summarize_content with pageclaw_ prefix
+    let sum_content_req = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 24,
+        "method": "tools/call",
+        "params": {
+            "name": "pageclaw_summarize_content",
+            "arguments": {
+                "text": "PageClaw provides an ultra-fast web content extraction engine designed specifically for LLMs. By stripping aggressive advertisements and noisy navigation elements, PageClaw reduces LLM context token consumption by up to 90%. Native adapters for GitHub, Bilibili, WeChat, Zhihu, and Wikipedia are included.",
+                "max_bullets": 2,
+                "format": "json"
+            }
+        }
+    });
+    let sum_content_res = server
+        .handle_message(&sum_content_req.to_string())
+        .await
+        .expect("Should return response");
+    let sum_content_val = sum_content_res
+        .result
+        .expect("Summarize content result should be present");
+    let sum_content_text = sum_content_val["content"][0]["text"].as_str().unwrap();
+    let parsed_sum: serde_json::Value = serde_json::from_str(sum_content_text).unwrap();
+    assert!(parsed_sum.as_array().unwrap().len() <= 2);
+
+    // 5u. Tool Call: diff_documents with pageclaw_ prefix
+    let diff_doc_req = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 25,
+        "method": "tools/call",
+        "params": {
+            "name": "pageclaw_diff_documents",
+            "arguments": {
+                "old_text": "Version 1.0\nInitial release",
+                "new_text": "Version 1.1\nInitial release\nAdded MCP extensions",
+                "format": "markdown"
+            }
+        }
+    });
+    let diff_doc_res = server
+        .handle_message(&diff_doc_req.to_string())
+        .await
+        .expect("Should return response");
+    let diff_doc_val = diff_doc_res
+        .result
+        .expect("Diff documents result should be present");
+    let diff_doc_text = diff_doc_val["content"][0]["text"].as_str().unwrap();
+    assert!(diff_doc_text.contains("+Version 1.1"));
+    assert!(diff_doc_text.contains("+Added MCP extensions"));
 
     // 5. Unknown Method Error
     let unknown_req = r#"{"jsonrpc":"2.0","id":4,"method":"unknown/method"}"#;
