@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "tkless": {
+      "command": "tkless",
+      "args": ["mcp"]
+    }
+  }
+}
