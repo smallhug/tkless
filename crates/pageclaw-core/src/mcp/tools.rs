@@ -359,9 +359,9 @@ pub fn get_available_tools() -> Vec<McpTool> {
                     },
                     "scope": {
                         "type": "string",
-                        "enum": ["all", "wechat", "zhihu", "github", "juejin", "csdn", "medium", "substack", "arxiv"],
+                        "enum": ["all", "wechat", "zhihu", "github", "juejin", "csdn", "medium", "substack", "arxiv", "huggingface"],
                         "default": "all",
-                        "description": "Search scope limitation: 'all' (entire web), 'wechat' (WeChat Official Accounts), 'zhihu' (Zhihu questions and articles), 'github' (GitHub repositories and issues), 'juejin' (Juejin tech posts), 'csdn' (CSDN blog posts), 'medium' (Medium articles), 'substack' (Substack newsletters), or 'arxiv' (arXiv research papers)"
+                        "description": "Search scope limitation: 'all' (entire web), 'wechat' (WeChat Official Accounts), 'zhihu' (Zhihu questions and articles), 'github' (GitHub repositories and issues), 'juejin' (Juejin tech posts), 'csdn' (CSDN blog posts), 'medium' (Medium articles), 'substack' (Substack newsletters), 'arxiv' (arXiv research papers), or 'huggingface' (Hugging Face models, papers, blogs)"
                     },
                     "dedup": {
                         "type": "boolean",
@@ -748,6 +748,37 @@ pub fn get_available_tools() -> Vec<McpTool> {
                         "description": "Optional maximum number of feed items to return"
                     }
                 }
+            }),
+        },
+        McpTool {
+            name: "inspect_links".to_string(),
+            description: "High-speed concurrent link health and status checker. Verifies reachability, HTTP status codes, response latency, and redirection targets for a list of URLs with SSRF protection.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "urls": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "List of URLs to inspect and verify"
+                    },
+                    "concurrency": {
+                        "type": "integer",
+                        "default": 10,
+                        "description": "Maximum concurrent network requests (default: 10, max: 30)"
+                    },
+                    "timeout_secs": {
+                        "type": "integer",
+                        "default": 10,
+                        "description": "Per-link handshake and request timeout in seconds (default: 10)"
+                    },
+                    "format": {
+                        "type": "string",
+                        "enum": ["markdown", "json"],
+                        "default": "markdown",
+                        "description": "Output format: 'markdown' (summary table) or 'json'"
+                    }
+                },
+                "required": ["urls"]
             }),
         }
     ]

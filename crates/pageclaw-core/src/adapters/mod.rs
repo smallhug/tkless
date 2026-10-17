@@ -2,6 +2,7 @@ pub mod arxiv;
 pub mod bilibili;
 pub mod csdn;
 pub mod github;
+pub mod huggingface;
 pub mod juejin;
 pub mod medium;
 pub mod substack;
@@ -13,6 +14,7 @@ pub use arxiv::ArxivAdapter;
 pub use bilibili::BilibiliAdapter;
 pub use csdn::CsdnAdapter;
 pub use github::GithubAdapter;
+pub use huggingface::HuggingfaceAdapter;
 pub use juejin::JuejinAdapter;
 pub use medium::MediumAdapter;
 pub use substack::SubstackAdapter;
@@ -80,6 +82,7 @@ impl AdapterRegistry {
         registry.register(Arc::new(MediumAdapter::new()));
         registry.register(Arc::new(SubstackAdapter::new()));
         registry.register(Arc::new(ArxivAdapter::new()));
+        registry.register(Arc::new(HuggingfaceAdapter::new()));
         registry
     }
 

@@ -42,7 +42,7 @@ async fn test_mcp_protocol_lifecycle() {
     let tools_array = tools_val["tools"]
         .as_array()
         .expect("Tools should be an array");
-    assert_eq!(tools_array.len(), 13);
+    assert_eq!(tools_array.len(), 14);
 
     let tool_names: Vec<&str> = tools_array
         .iter()
@@ -61,6 +61,7 @@ async fn test_mcp_protocol_lifecycle() {
     assert!(tool_names.contains(&"compare_similarity"));
     assert!(tool_names.contains(&"manage_cache"));
     assert!(tool_names.contains(&"fetch_feed"));
+    assert!(tool_names.contains(&"inspect_links"));
 
     // Verify web_search schema contains scope, cdp_endpoint, schema
     let search_tool = tools_array
@@ -247,6 +248,31 @@ async fn test_mcp_protocol_lifecycle() {
     assert!(feed_text.contains("Rust Blog"));
     assert!(feed_text.contains("Rust 1.85"));
     assert!(feed_text.contains("Release news"));
+
+    // 5j. Tool Call: inspect_links
+    let inspect_req = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 14,
+        "method": "tools/call",
+        "params": {
+            "name": "inspect_links",
+            "arguments": {
+                "urls": ["http://127.0.0.1/blocked_ssrf", "https://example.com/check"],
+                "format": "json"
+            }
+        }
+    });
+    let inspect_res = server
+        .handle_message(&inspect_req.to_string())
+        .await
+        .expect("Should return response");
+    let inspect_val = inspect_res
+        .result
+        .expect("Inspect result should be present");
+    let inspect_text = inspect_val["content"][0]["text"].as_str().unwrap();
+    let parsed_links: serde_json::Value = serde_json::from_str(inspect_text).unwrap();
+    assert_eq!(parsed_links.as_array().unwrap().len(), 2);
+    assert!(parsed_links[0]["error"].as_str().unwrap().contains("SSRF"));
 
     // 5. Unknown Method Error
     let unknown_req = r#"{"jsonrpc":"2.0","id":4,"method":"unknown/method"}"#;
