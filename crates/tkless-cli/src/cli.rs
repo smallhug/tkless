@@ -762,6 +762,20 @@ pub enum SubCommand {
         about = "提取网页或 HTML 中的全部数据表格，并直接导出为 SQL DDL/INSERT、CSV、TSV 或 JSON"
     )]
     Tables(TablesArgs),
+
+    /// 生成 Shell (Bash, Zsh, Fish, PowerShell, Elvish) 终端自动补全脚本
+    #[command(
+        name = "completions",
+        about = "生成 Shell (Bash, Zsh, Fish, PowerShell, Elvish) 终端自动补全脚本"
+    )]
+    Completions(CompletionsArgs),
+}
+
+#[derive(clap::Args, Debug, Clone)]
+pub struct CompletionsArgs {
+    /// Target shell family (bash, zsh, fish, powershell, elvish)
+    #[arg(value_enum)]
+    pub shell: clap_complete::Shell,
 }
 
 #[derive(clap::Args, Debug, Clone, Default)]
@@ -1107,7 +1121,7 @@ pub struct CrawlArgs {
 
     /// Maximum number of unique pages to crawl [default: 20]
     #[arg(
-        short = 'p',
+        short = 'P',
         long = "max-pages",
         default_value_t = 20,
         value_name = "N"

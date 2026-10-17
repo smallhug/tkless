@@ -2,7 +2,7 @@ mod cli;
 mod output;
 
 use anyhow::{bail, Context, Result};
-use clap::Parser;
+use clap::{CommandFactory, Parser};
 use cli::{CliArgs, CliFormat, SubCommand};
 use std::io::{self, Read, Write};
 use std::path::Path;
@@ -154,7 +154,25 @@ async fn run(args: CliArgs) -> Result<()> {
     }
 
     // -------------------------------------------------------------------------
-    // Execution Branch 0: Interactive Browser QR Code Login
+    // Execution Branch 0: Shell Auto-Completions Generation
+    // -------------------------------------------------------------------------
+    if let Some(SubCommand::Completions(ref comp_args)) = args.command {
+        let shell = comp_args.shell;
+        std::thread::Builder::new()
+            .name("tkless-completions".to_string())
+            .stack_size(4 * 1024 * 1024)
+            .spawn(move || {
+                let mut cmd = cli::CliArgs::command();
+                clap_complete::generate(shell, &mut cmd, "tkless", &mut io::stdout());
+            })
+            .expect("Failed to spawn completion thread")
+            .join()
+            .expect("Completion thread failed");
+        return Ok(());
+    }
+
+    // -------------------------------------------------------------------------
+    // Execution Branch 0.1: Interactive Browser QR Code Login
     // -------------------------------------------------------------------------
     if let Some(SubCommand::Login(ref login_args)) = args.command {
         let platform_clean = login_args.platform.trim().to_ascii_lowercase();
@@ -1363,4 +1381,24 @@ async fn run_shell(engine: &TklessEngine, base_options: &ExtractionOptions) -> R
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::CommandFactory;
+
+    #[test]
+    fn test_cli_command_build() {
+        let cmd = cli::CliArgs::command();
+        assert_eq!(cmd.get_name(), "tkless");
+    }
+
+    #[test]
+    fn test_completions_generation() {
+        let mut cmd = cli::CliArgs::command();
+        let mut buf = Vec::new();
+        clap_complete::generate(clap_complete::Shell::Bash, &mut cmd, "tkless", &mut buf);
+        assert!(!buf.is_empty());
+    }
 }

@@ -150,6 +150,21 @@ tkless diff https://example.com/v1.0 https://example.com/v2.0
 tkless diff ./spec_v1.md ./spec_v2.md -f json
 ```
 
+### 2.11 终端自动补全脚本生成 (tkless completions)
+```bash
+# 生成 Bash 自动补全脚本并加载
+tkless completions bash > ~/.local/share/bash-completion/completions/tkless
+
+# 生成 Zsh 自动补全脚本
+tkless completions zsh > "${fpath[1]}/_tkless"
+
+# 生成 Fish 自动补全脚本
+tkless completions fish > ~/.config/fish/completions/tkless.fish
+
+# 在 PowerShell 当前会话中实时加载自动补全
+tkless completions powershell | Out-String | Invoke-Expression
+```
+
 ---
 
 ## 3. Agent 管道典型集成范例
