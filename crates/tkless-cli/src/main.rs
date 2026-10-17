@@ -904,9 +904,14 @@ async fn run(args: CliArgs) -> Result<()> {
     // Dedicated Visual Action: Capture Screenshot via CDP Headless Browser
     // -------------------------------------------------------------------------
     if let Some(ref shot_path) = args.screenshot {
+        let parsed_url = url::Url::parse(&target)?;
+        engine
+            .fetcher()
+            .validate_ssrf(&parsed_url)
+            .await
+            .context("SSRF blocked")?;
         let cdp_ep = tkless_core::cdp::resolve_cdp_endpoint(args.cdp.as_deref(), true)
             .unwrap_or_else(|| "http://127.0.0.1:9222".to_string());
-        let parsed_url = url::Url::parse(&target)?;
         let cdp_opts = tkless_core::cdp::CdpOptions {
             endpoint: cdp_ep,
             wait_ms: args.cdp_wait_ms.or(Some(1000)),
@@ -982,6 +987,11 @@ async fn run(args: CliArgs) -> Result<()> {
             stdin_content
         } else if let Some(ref cdp_endpoint) = args.cdp {
             let parsed_url = url::Url::parse(&target)?;
+            engine
+                .fetcher()
+                .validate_ssrf(&parsed_url)
+                .await
+                .context("SSRF blocked")?;
             let cdp_opts = tkless_core::cdp::CdpOptions {
                 endpoint: cdp_endpoint.clone(),
                 wait_ms: args.cdp_wait_ms.or(Some(1000)),

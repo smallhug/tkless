@@ -1693,11 +1693,26 @@ impl McpServer {
                 let (status, final_url, err) = match resp_res {
                     Ok(resp) => {
                         let st = resp.status().as_u16();
-                        let final_dest = if resp.url().as_str() != target_url {
-                            Some(resp.url().to_string())
+                        let redirect_target = if (300..400).contains(&st) {
+                            resp.headers()
+                                .get(reqwest::header::LOCATION)
+                                .and_then(|h| h.to_str().ok())
+                                .and_then(|loc| {
+                                    Url::parse(&target_url)
+                                        .ok()
+                                        .and_then(|base| base.join(loc).ok())
+                                })
+                                .map(|u| u.to_string())
                         } else {
                             None
                         };
+                        let final_dest = redirect_target.or_else(|| {
+                            if resp.url().as_str() != target_url {
+                                Some(resp.url().to_string())
+                            } else {
+                                None
+                            }
+                        });
                         (st, final_dest, None)
                     }
                     Err(_) => {
@@ -1711,11 +1726,26 @@ impl McpServer {
                         match get_res {
                             Ok(resp) => {
                                 let st = resp.status().as_u16();
-                                let final_dest = if resp.url().as_str() != target_url {
-                                    Some(resp.url().to_string())
+                                let redirect_target = if (300..400).contains(&st) {
+                                    resp.headers()
+                                        .get(reqwest::header::LOCATION)
+                                        .and_then(|h| h.to_str().ok())
+                                        .and_then(|loc| {
+                                            Url::parse(&target_url)
+                                                .ok()
+                                                .and_then(|base| base.join(loc).ok())
+                                        })
+                                        .map(|u| u.to_string())
                                 } else {
                                     None
                                 };
+                                let final_dest = redirect_target.or_else(|| {
+                                    if resp.url().as_str() != target_url {
+                                        Some(resp.url().to_string())
+                                    } else {
+                                        None
+                                    }
+                                });
                                 (st, final_dest, None)
                             }
                             Err(e) => (0, None, Some(e.to_string())),
