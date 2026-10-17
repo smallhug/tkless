@@ -1162,11 +1162,29 @@ impl McpServer {
                 Err(e) => McpToolCallResult::error(format!("Search & fetch failed: {e}")),
             }
         } else {
-            match crate::search::web_search_with_engine(
+            let cdp_options = args.get("cdp_endpoint").and_then(|v| v.as_str()).map(|ep| {
+                crate::cdp::CdpOptions {
+                    endpoint: ep.to_string(),
+                    wait_ms: args
+                        .get("cdp_wait_ms")
+                        .and_then(|v| v.as_u64())
+                        .or(Some(1000)),
+                    timeout_ms: Some(30_000),
+                    ..Default::default()
+                }
+            });
+            let auto_cdp = args
+                .get("auto_cdp")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+
+            match crate::search::web_search_with_options(
                 engine_ref.client(),
                 &effective_query,
                 limit,
                 engine,
+                cdp_options.as_ref(),
+                auto_cdp,
             )
             .await
             {

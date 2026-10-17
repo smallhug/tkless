@@ -163,12 +163,24 @@ pub async fn web_search_and_fetch(
     Ok(fetched_items)
 }
 
-/// Executes a web search using the specified engine (Bing).
+/// Executes a web search using the specified engine (Bing) with default options.
 pub async fn web_search_with_engine(
     client: &reqwest::Client,
     query: &str,
     limit: usize,
     engine: SearchEngineKind,
+) -> Result<Vec<SearchResultItem>, TklessError> {
+    web_search_with_options(client, query, limit, engine, None, false).await
+}
+
+/// Executes a web search with optional CDP browser fallback to bypass anti-scraping challenges.
+pub async fn web_search_with_options(
+    client: &reqwest::Client,
+    query: &str,
+    limit: usize,
+    engine: SearchEngineKind,
+    cdp_options: Option<&crate::cdp::CdpOptions>,
+    auto_cdp: bool,
 ) -> Result<Vec<SearchResultItem>, TklessError> {
     let clean_query = query.trim();
     if clean_query.is_empty() {
@@ -176,7 +188,9 @@ pub async fn web_search_with_engine(
     }
 
     match engine {
-        SearchEngineKind::Bing => search_bing(client, clean_query, limit).await,
+        SearchEngineKind::Bing => {
+            search_bing_with_options(client, clean_query, limit, cdp_options, auto_cdp).await
+        }
     }
 }
 
@@ -189,38 +203,403 @@ pub async fn web_search(
     web_search_with_engine(client, query, limit, SearchEngineKind::default()).await
 }
 
-/// Searches Microsoft Bing for the given query without API keys.
+/// Tokenized query elements separated into core entity tokens and temporal tokens.
+#[derive(Debug, Clone)]
+pub struct QueryTokens {
+    /// Non-temporal core content tokens (e.g. "特斯拉", "上海工厂", "产量")
+    pub core_tokens: Vec<String>,
+    /// Temporal modifier tokens (e.g. "2026", "2025")
+    pub temporal_tokens: Vec<String>,
+    /// All raw tokens
+    pub all_tokens: Vec<String>,
+}
+
+/// Tokenizes a user query into core semantic tokens and temporal modifiers.
+pub fn tokenize_query(query: &str) -> QueryTokens {
+    let clean = query.trim().to_lowercase();
+    let raw_tokens: Vec<&str> = clean.split_whitespace().collect();
+
+    let mut core_tokens = Vec::new();
+    let mut temporal_tokens = Vec::new();
+    let mut all_tokens = Vec::new();
+
+    for token in raw_tokens {
+        let t = token.trim();
+        if t.is_empty() {
+            continue;
+        }
+        all_tokens.push(t.to_string());
+        // Check if 4-digit year (e.g. 2024, 2025, 2026, 2027)
+        if t.len() == 4 && t.chars().all(|c| c.is_ascii_digit()) {
+            temporal_tokens.push(t.to_string());
+        } else {
+            core_tokens.push(t.to_string());
+        }
+    }
+
+    QueryTokens {
+        core_tokens,
+        temporal_tokens,
+        all_tokens,
+    }
+}
+
+static AD_CONTAINER_CLASSES: &[&str] = &[
+    "b_ad",
+    "b_algo_ad",
+    "b_promoted",
+    "b_sponsored",
+    "b_adbottom",
+    "b_adtop",
+    "b_adtopcontent",
+    "b_ans_ad",
+    "ads",
+];
+
+static PROMO_DOMAINS: &[&str] = &[
+    "taobao.com",
+    "douyin.com",
+    "taptap.cn",
+    "alipan.com",
+    "pinduoduo.com",
+    "yangkeduo.com",
+    "poki.com",
+    "poki.cn",
+    "youtube.com",
+    "tiktok.com",
+    "missav",
+    "kohi-den",
+    "e621.net",
+    "patreon.com",
+    "52pojie.cn",
+];
+
+/// Identifies whether a Bing SERP element is a commercial advertisement or disguised promotional card.
+pub fn is_bing_ad_or_promotion(
+    element: &scraper::ElementRef,
+    title: &str,
+    _snippet: &str,
+    resolved_url: &str,
+    query_tokens: &QueryTokens,
+) -> bool {
+    // 1. Check element class attribute
+    if let Some(cls) = element.value().attr("class") {
+        let cls_lower = cls.to_lowercase();
+        for ad_cls in AD_CONTAINER_CLASSES {
+            if cls_lower.contains(ad_cls) {
+                return true;
+            }
+        }
+    }
+
+    // 2. Check inner elements for ad indicators (b_adlabel, ad_label, etc.)
+    let inner_html = element.html().to_lowercase();
+    if inner_html.contains("b_adlabel")
+        || inner_html.contains("ad_label")
+        || inner_html.contains("class=\"b_ad\"")
+        || inner_html.contains("class=\"ad\"")
+        || inner_html.contains("class=\"ads\"")
+    {
+        return true;
+    }
+
+    // 3. Check for text prefixes explicitly indicating advertising
+    let trimmed_title = title.trim();
+    if trimmed_title.starts_with("广告")
+        || trimmed_title.starts_with("推广")
+        || trimmed_title.starts_with("赞助")
+        || trimmed_title.starts_with("Ad ")
+        || trimmed_title.starts_with("Sponsored")
+    {
+        return true;
+    }
+
+    // 4. Commercial promo landing domains heuristic
+    // If the URL is a commercial landing domain and the user's query did not mention that domain/brand,
+    // and neither title nor snippet contains any core query tokens, it is a disguised promotion.
+    let url_lower = resolved_url.to_lowercase();
+    for promo_domain in PROMO_DOMAINS {
+        if url_lower.contains(promo_domain) {
+            let query_mentions_domain = query_tokens.all_tokens.iter().any(|t| {
+                promo_domain.contains(t)
+                    || (t.contains("淘宝") && *promo_domain == "taobao.com")
+                    || (t.contains("抖音") && *promo_domain == "douyin.com")
+                    || (t.contains("阿里") && *promo_domain == "alipan.com")
+                    || (t.contains("taptap") && *promo_domain == "taptap.cn")
+            });
+            if !query_mentions_domain {
+                return true;
+            }
+        }
+    }
+
+    false
+}
+
+/// Evaluates query relevance and scores a candidate result.
+/// Returns None if the candidate is completely unrelated or a first-token-only fallback.
+pub fn calculate_relevance(title: &str, snippet: &str, query_tokens: &QueryTokens) -> Option<i32> {
+    if query_tokens.core_tokens.is_empty() {
+        return Some(10);
+    }
+
+    let title_lower = title.to_lowercase();
+    let snippet_lower = snippet.to_lowercase();
+
+    let mut matched_core = Vec::new();
+    let mut score = 0;
+
+    for (idx, token) in query_tokens.core_tokens.iter().enumerate() {
+        let in_title = title_lower.contains(token);
+        let in_snippet = snippet_lower.contains(token);
+
+        if in_title || in_snippet {
+            matched_core.push(idx);
+            if in_title {
+                score += 15;
+            }
+            if in_snippet {
+                score += 5;
+            }
+        }
+    }
+
+    // Hard Filter 1: Zero Core Tokens Matched -> Completely unrelated (e.g. 阿里云盘 for 个人所得税)
+    if matched_core.is_empty() {
+        return None;
+    }
+
+    // Hard Filter 2: First-Token-Only Fallback (Bing Term Drop)
+    // If user asked a multi-token query (>=2 core tokens), but the result ONLY matches token 0,
+    // and matches NONE of the other 1..N core tokens (e.g. "北京 小学 入学 政策" -> only matches "北京", becoming "北京市 - 百度百科"),
+    // this is a broad degradation fallback where all constraints were lost. REJECT it!
+    if query_tokens.core_tokens.len() >= 2 {
+        if matched_core == vec![0] {
+            return None;
+        }
+        // If 3 or more core tokens, require at least 2 matched core tokens
+        if query_tokens.core_tokens.len() >= 3 && matched_core.len() < 2 {
+            return None;
+        }
+    }
+
+    // Check temporal tokens (e.g. 2026, 2025)
+    for year in &query_tokens.temporal_tokens {
+        if title_lower.contains(year) {
+            score += 12;
+        } else if snippet_lower.contains(year) {
+            score += 4;
+        }
+    }
+
+    Some(score)
+}
+
+struct ScoredBingItem {
+    item: SearchResultItem,
+    score: i32,
+}
+
+/// Searches Microsoft Bing for the given query without API keys, with anti-degradation hardening and multi-stage relaxation.
 pub async fn search_bing(
     client: &reqwest::Client,
     query: &str,
     limit: usize,
 ) -> Result<Vec<SearchResultItem>, TklessError> {
-    let encoded_q: String = url::form_urlencoded::byte_serialize(query.as_bytes()).collect();
-    let search_url = format!("https://www.bing.com/search?q={encoded_q}&setlang=zh-hans");
+    search_bing_with_options(client, query, limit, None, false).await
+}
 
-    debug!(query = query, url = %search_url, "Executing Bing web search");
+/// Searches Microsoft Bing with optional CDP headless browser rendering to bypass anti-scraping challenges.
+pub async fn search_bing_with_options(
+    client: &reqwest::Client,
+    query: &str,
+    limit: usize,
+    cdp_options: Option<&crate::cdp::CdpOptions>,
+    auto_cdp: bool,
+) -> Result<Vec<SearchResultItem>, TklessError> {
+    let clean_query = query.trim();
+    if clean_query.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // Stage 1: Full original query with clean Bing endpoint
+    let results = fetch_and_parse_bing(
+        client,
+        clean_query,
+        clean_query,
+        limit,
+        cdp_options,
+        auto_cdp,
+    )
+    .await?;
+    if !results.is_empty() {
+        return Ok(results);
+    }
+
+    let tokens = tokenize_query(clean_query);
+
+    // Stage 2: Temporal Relaxation
+    // If query has future years (e.g. "2026", "2025") causing Bing to return 0 exact hits or drop terms,
+    // retry once with core entity tokens (e.g. "房贷 利率 LPR", "特斯拉 上海工厂 产量")
+    if !tokens.temporal_tokens.is_empty() && tokens.core_tokens.len() >= 2 {
+        let relaxed_core = tokens.core_tokens.join(" ");
+        debug!(
+            original = clean_query,
+            relaxed = %relaxed_core,
+            "Stage 2: Year-constrained query returned 0 relevant results, retrying without temporal constraint"
+        );
+        let relaxed_results = fetch_and_parse_bing(
+            client,
+            &relaxed_core,
+            clean_query,
+            limit,
+            cdp_options,
+            auto_cdp,
+        )
+        .await?;
+        if !relaxed_results.is_empty() {
+            return Ok(relaxed_results);
+        }
+    }
+
+    // Stage 3: CJK Word Compaction (Prevent Bing Term Drop)
+    // In Chinese, space-separated keywords like "新能源汽车 补贴 政策" often confuse Bing's segmenter
+    // into dropping all words except the first. Merging CJK tokens ("新能源汽车补贴政策") forces exact phrase matching.
+    if tokens.core_tokens.len() >= 2 && clean_query.chars().any(|c| (c as u32) >= 0x4E00) {
+        let compacted_cjk = tokens.core_tokens.join("");
+        let query_compact = if tokens.temporal_tokens.is_empty() {
+            compacted_cjk.clone()
+        } else {
+            format!("{} {}", compacted_cjk, tokens.temporal_tokens.join(" "))
+        };
+
+        if query_compact != clean_query {
+            debug!(
+                original = clean_query,
+                compacted = %query_compact,
+                "Stage 3: Retrying with compacted CJK phrase to prevent Bing Term Drop"
+            );
+            let compacted_results = fetch_and_parse_bing(
+                client,
+                &query_compact,
+                clean_query,
+                limit,
+                cdp_options,
+                auto_cdp,
+            )
+            .await?;
+            if !compacted_results.is_empty() {
+                return Ok(compacted_results);
+            }
+        }
+
+        // Stage 4: Compacted CJK phrase without temporal token
+        if !tokens.temporal_tokens.is_empty() {
+            debug!(
+                original = clean_query,
+                compacted = %compacted_cjk,
+                "Stage 4: Retrying with pure compacted CJK phrase without temporal token"
+            );
+            let pure_results = fetch_and_parse_bing(
+                client,
+                &compacted_cjk,
+                clean_query,
+                limit,
+                cdp_options,
+                auto_cdp,
+            )
+            .await?;
+            if !pure_results.is_empty() {
+                return Ok(pure_results);
+            }
+        }
+    }
+
+    Ok(Vec::new())
+}
+
+async fn fetch_and_parse_bing(
+    client: &reqwest::Client,
+    search_query: &str,
+    relevance_query: &str,
+    limit: usize,
+    cdp_options: Option<&crate::cdp::CdpOptions>,
+    auto_cdp: bool,
+) -> Result<Vec<SearchResultItem>, TklessError> {
+    let encoded_q: String = url::form_urlencoded::byte_serialize(search_query.as_bytes()).collect();
+    // Use clean global search URL without &setlang=... which disrupts backend search query routing
+    let search_url = format!("https://www.bing.com/search?q={encoded_q}");
+
+    debug!(query = search_query, url = %search_url, "Executing Bing web search");
+
+    // If explicit CDP options provided, fetch directly via headless Chrome
+    if let Some(cdp_opts) = cdp_options {
+        let html = crate::cdp::fetch_html_via_cdp(&search_url, cdp_opts).await?;
+        return parse_bing_html_with_query(&html, relevance_query, limit);
+    }
 
     let resp = client
         .get(&search_url)
         .header(
             "User-Agent",
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36 Edg/133.0.0.0",
         )
         .header("Referer", "https://www.bing.com/")
-        .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8")
+        .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8")
         .header("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
+        .header("Sec-Ch-Ua", "\"Not(A:Brand\";v=\"99\", \"Microsoft Edge\";v=\"133\", \"Chromium\";v=\"133\"")
+        .header("Sec-Ch-Ua-Mobile", "?0")
+        .header("Sec-Ch-Ua-Platform", "\"Windows\"")
+        .header("Sec-Fetch-Dest", "document")
+        .header("Sec-Fetch-Mode", "navigate")
+        .header("Sec-Fetch-Site", "same-origin")
+        .header("Sec-Fetch-User", "?1")
+        .header("Upgrade-Insecure-Requests", "1")
         .send()
         .await?;
 
     let html = resp.text().await?;
-    parse_bing_html(&html, limit)
+    match parse_bing_html_with_query(&html, relevance_query, limit) {
+        Err(TklessError::SearchAntiScraping(ref err_msg)) if auto_cdp => {
+            warn!(
+                error = %err_msg,
+                "Encountered Bing anti-scraping challenge, auto-falling back to CDP browser rendering"
+            );
+            let fallback_cdp = crate::cdp::CdpOptions {
+                endpoint: "http://127.0.0.1:9222".to_string(),
+                wait_ms: Some(1500),
+                timeout_ms: Some(30_000),
+                ..Default::default()
+            };
+            let cdp_html = crate::cdp::fetch_html_via_cdp(&search_url, &fallback_cdp).await?;
+            parse_bing_html_with_query(&cdp_html, relevance_query, limit)
+        }
+        other => other,
+    }
 }
 
-/// Parses Bing search results HTML into structured items.
-pub fn parse_bing_html(html: &str, limit: usize) -> Result<Vec<SearchResultItem>, TklessError> {
+/// Parses Bing search results HTML into structured items with query-aware relevance gatekeeping.
+pub fn parse_bing_html_with_query(
+    html: &str,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<SearchResultItem>, TklessError> {
+    // 0. Active Anti-Scraping / Captcha Challenge Detection
+    if html.contains("最后一步 请解决以下难题以继续")
+        || html.contains("请解决以下难题以继续")
+        || html.contains("b_captcha")
+        || html.contains("Please solve the challenge below")
+    {
+        return Err(TklessError::SearchAntiScraping(
+            "遭遇 Bing 搜索人机验证码挑战（'最后一步 请解决以下难题以继续'）。建议操作：1. 稍后重试或更换代理节点；2. 启动本地 Chrome 无头浏览器并配合 `--cdp` 选项绕过挑战。".to_string(),
+        ));
+    }
+
     let doc = Html::parse_document(html);
-    let mut results = Vec::new();
+    let mut scored_results: Vec<ScoredBingItem> = Vec::new();
     let mut seen_urls = std::collections::HashSet::new();
+
+    let query_tokens = tokenize_query(query);
 
     for element in doc.select(&BING_ITEM_SELECTOR) {
         let title_el = match element.select(&BING_TITLE_SELECTOR).next() {
@@ -256,19 +635,40 @@ pub fn parse_bing_html(html: &str, limit: usize) -> Result<Vec<SearchResultItem>
             .map(|el| el.text().collect::<Vec<_>>().join(" ").trim().to_string())
             .unwrap_or_default();
 
-        results.push(SearchResultItem {
-            title: raw_title,
-            url: resolved_url,
-            snippet,
-            engine: "bing".to_string(),
-        });
+        // 1. Filter out ads and commercial promotion widgets
+        if is_bing_ad_or_promotion(&element, &raw_title, &snippet, &resolved_url, &query_tokens) {
+            continue;
+        }
 
-        if results.len() >= limit {
-            break;
+        // 2. Filter out completely unrelated items and first-token-only fallbacks
+        if let Some(score) = calculate_relevance(&raw_title, &snippet, &query_tokens) {
+            scored_results.push(ScoredBingItem {
+                item: SearchResultItem {
+                    title: raw_title,
+                    url: resolved_url,
+                    snippet,
+                    engine: "bing".to_string(),
+                },
+                score,
+            });
         }
     }
 
+    // Sort by relevance score descending so the most relevant results come first
+    scored_results.sort_by_key(|a| std::cmp::Reverse(a.score));
+
+    let results = scored_results
+        .into_iter()
+        .take(limit)
+        .map(|sr| sr.item)
+        .collect();
+
     Ok(results)
+}
+
+/// Parses Bing search results HTML into structured items (backward compatible).
+pub fn parse_bing_html(html: &str, limit: usize) -> Result<Vec<SearchResultItem>, TklessError> {
+    parse_bing_html_with_query(html, "", limit)
 }
 
 /// Unwraps Bing tracking redirect URLs like `https://www.bing.com/ck/a?!&&...&u=a1aHR0cHM6Ly9ydXN0LWxhbmcub3JnLw...`
@@ -335,7 +735,8 @@ pub fn format_search_results_markdown(query: &str, results: &[SearchResultItem])
     out.push_str(&format!("# 网页搜索 ({engine_name}): \"{query}\"\n\n"));
 
     if results.is_empty() {
-        out.push_str("未检索到相关网页结果。\n");
+        out.push_str("⚠️ 未检索到符合查询约束的高置信度网页结果（已自动甄别并剔除广告推广与首词降级条目）。\n");
+        out.push_str("> 建议操作：1. 简化关键词；2. 去除年份等强时效限定；3. 指定平台定向参数（如 --zhihu, --baike, --so）。\n");
         return out;
     }
 
@@ -545,5 +946,94 @@ mod tests {
         assert_eq!(deduped.len(), 2);
         assert_eq!(deduped[0].url, "https://example.com/original");
         assert_eq!(deduped[1].url, "https://tokio.rs/overview");
+    }
+
+    #[test]
+    fn test_tokenize_query_and_temporal() {
+        let tokens = tokenize_query("北京 小学 入学 政策 2026");
+        assert_eq!(tokens.core_tokens, vec!["北京", "小学", "入学", "政策"]);
+        assert_eq!(tokens.temporal_tokens, vec!["2026"]);
+
+        let tokens_en = tokenize_query("Tesla Model 3 Production 2025");
+        assert_eq!(
+            tokens_en.core_tokens,
+            vec!["tesla", "model", "3", "production"]
+        );
+        assert_eq!(tokens_en.temporal_tokens, vec!["2025"]);
+    }
+
+    #[test]
+    fn test_relevance_first_token_drop_and_zero_relevance() {
+        let query_tokens = tokenize_query("北京 小学 入学 政策 2026");
+
+        // 1. First-token-only fallback (Term Drop): matches ONLY "北京", misses "小学", "入学", "政策"
+        let fallback_title = "北京市 - 百度百科";
+        let fallback_snip = "北京市，简称“京”，是中华人民共和国首都、直辖市、国家中心城市。";
+        let fallback_score = calculate_relevance(fallback_title, fallback_snip, &query_tokens);
+        assert!(
+            fallback_score.is_none(),
+            "First-token-only fallback (北京市百科) must be rejected"
+        );
+
+        // 2. Completely unrelated item (Zero Core Tokens matched, e.g. 阿里云盘 or 淘宝)
+        let ad_title = "阿里云盘 - 备份您的照片与文件";
+        let ad_snip = "不限速的高速云存储网盘，支持大文件快速上传下载。";
+        let ad_score = calculate_relevance(ad_title, ad_snip, &query_tokens);
+        assert!(
+            ad_score.is_none(),
+            "Completely unrelated promotion item must be rejected"
+        );
+
+        // 3. Genuine relevant result: matches "北京", "小学", "入学", "政策", "2026"
+        let good_title = "2026年北京各区小学入学政策与信息采集指南公布";
+        let good_snip =
+            "北京市教委正式发布2026年义务教育阶段小学入学政策，明确报名流程与居住证要求。";
+        let good_score = calculate_relevance(good_title, good_snip, &query_tokens);
+        assert!(
+            good_score.is_some(),
+            "Genuine relevant policy article must be accepted"
+        );
+        assert!(good_score.unwrap() >= 40);
+    }
+
+    #[test]
+    fn test_parse_bing_html_with_ad_and_relevance_filters() {
+        let sample = r#"
+            <ol id="b_results">
+                <!-- 1. Disguised promotion / ad item -->
+                <li class="b_algo b_ad">
+                    <h2><a href="https://www.douyin.com/">抖音-记录美好生活</a></h2>
+                    <div class="b_caption">
+                        <p>抖音让每一个人看见并连接更大的世界，鼓励表达、沟通和记录。</p>
+                    </div>
+                </li>
+                <!-- 2. Term Drop fallback: only matches "北京" -->
+                <li class="b_algo">
+                    <h2><a href="https://baike.baidu.com/item/%E5%8C%97%E4%BA%AC%E5%B8%82">北京市 - 百度百科</a></h2>
+                    <div class="b_caption">
+                        <p>北京市，简称“京”，是中华人民共和国首都、国家中心城市。</p>
+                    </div>
+                </li>
+                <!-- 3. Genuine relevant result -->
+                <li class="b_algo">
+                    <h2><a href="https://jw.beijing.gov.cn/policy/2026">2026年北京小学入学政策官方解答</a></h2>
+                    <div class="b_caption">
+                        <p>北京市教委发布2026小学入学政策，详述幼升小网上信息采集时间与入学顺位要求。</p>
+                    </div>
+                </li>
+            </ol>
+        "#;
+
+        let query = "北京 小学 入学 政策 2026";
+        let results = parse_bing_html_with_query(sample, query, 5).unwrap();
+
+        // Must filter out the Douyin ad and the Beijing encyclopedia fallback
+        assert_eq!(
+            results.len(),
+            1,
+            "Only the genuine relevant policy result should survive"
+        );
+        assert_eq!(results[0].title, "2026年北京小学入学政策官方解答");
+        assert_eq!(results[0].url, "https://jw.beijing.gov.cn/policy/2026");
     }
 }

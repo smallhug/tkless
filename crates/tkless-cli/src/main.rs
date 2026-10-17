@@ -636,11 +636,23 @@ async fn run(args: CliArgs) -> Result<()> {
             return Ok(());
         }
 
-        let results = tkless_core::web_search_with_engine(
+        let cdp_opts = search_args
+            .cdp
+            .as_ref()
+            .map(|ep| tkless_core::cdp::CdpOptions {
+                endpoint: ep.clone(),
+                wait_ms: search_args.cdp_wait_ms.or(Some(1000)),
+                timeout_ms: Some(30_000),
+                ..Default::default()
+            });
+
+        let results = tkless_core::web_search_with_options(
             engine.client(),
             &effective_query,
             search_args.limit,
             search_args.engine.into(),
+            cdp_opts.as_ref(),
+            args.auto_cdp,
         )
         .await
         .context("Failed to perform web search")?;
