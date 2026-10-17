@@ -659,6 +659,8 @@ pub fn detect_platform_from_host(host: &str) -> Option<&'static str> {
         Some("csdn")
     } else if is_subdomain_or_exact(&host_lower, "medium.com") {
         Some("medium")
+    } else if is_subdomain_or_exact(&host_lower, "substack.com") {
+        Some("substack")
     } else {
         None
     }
@@ -996,6 +998,10 @@ mod tests {
             detect_platform_from_url("https://medium.com/@author/my-article"),
             Some("medium")
         );
+        assert_eq!(
+            detect_platform_from_url("https://newsletter.substack.com/p/my-post"),
+            Some("substack")
+        );
 
         // Security check: spoofed / typosquatted domains MUST NOT leak cookies!
         assert_eq!(
@@ -1008,6 +1014,10 @@ mod tests {
         );
         assert_eq!(
             detect_platform_from_url("https://evilmedium.com/story"),
+            None
+        );
+        assert_eq!(
+            detect_platform_from_url("https://evilsubstack.com/post"),
             None
         );
         assert_eq!(

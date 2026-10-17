@@ -3,6 +3,7 @@ pub mod csdn;
 pub mod github;
 pub mod juejin;
 pub mod medium;
+pub mod substack;
 pub mod wechat;
 pub mod xiaohongshu;
 pub mod zhihu;
@@ -12,6 +13,7 @@ pub use csdn::CsdnAdapter;
 pub use github::GithubAdapter;
 pub use juejin::JuejinAdapter;
 pub use medium::MediumAdapter;
+pub use substack::SubstackAdapter;
 pub use wechat::WechatAdapter;
 pub use xiaohongshu::XiaohongshuAdapter;
 pub use zhihu::ZhihuAdapter;
@@ -74,6 +76,7 @@ impl AdapterRegistry {
         registry.register(Arc::new(GithubAdapter::new()));
         registry.register(Arc::new(CsdnAdapter::new()));
         registry.register(Arc::new(MediumAdapter::new()));
+        registry.register(Arc::new(SubstackAdapter::new()));
         registry
     }
 

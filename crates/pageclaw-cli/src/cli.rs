@@ -750,6 +750,13 @@ pub struct SearchSubArgs {
     )]
     pub medium: bool,
 
+    /// Scope search to Substack newsletters and tech blogs (substack.com)
+    #[arg(
+        long = "substack",
+        help = "Scope search to Substack newsletters and tech blogs (substack.com)"
+    )]
+    pub substack: bool,
+
     /// Search engine provider: bing (default), google, auto (failover)
     #[arg(
         short = 'e',
@@ -766,6 +773,13 @@ pub struct SearchSubArgs {
         help = "Concurrently fetch and extract clean Markdown content for each search result"
     )]
     pub fetch_content: bool,
+
+    /// 启用 64-bit SimHash 汉明距离去重，自动过滤高度雷同的转载/镜像文章 (仅当 fetch-content 时生效)
+    #[arg(
+        long = "dedup",
+        help = "Filter near-duplicate pages via 64-bit SimHash when fetching search results"
+    )]
+    pub dedup: bool,
 
     /// Maximum tokens extracted per webpage during search & fetch [default: 1500]
     #[arg(

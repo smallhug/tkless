@@ -125,6 +125,7 @@ impl McpServer {
                     "clean_html" => self.call_clean_html(&arguments).await,
                     "login_platform" => self.call_login_platform(&arguments).await,
                     "scaffold_schema" => self.call_scaffold_schema(&arguments).await,
+                    "compare_similarity" => self.call_compare_similarity(&arguments).await,
                     _ => McpToolCallResult::error(format!("Unknown tool: '{tool_name}'")),
                 };
 
@@ -748,6 +749,14 @@ impl McpServer {
                     format!("site:medium.com {clean}")
                 }
             }
+            "substack" => {
+                let clean = query.trim();
+                if clean.starts_with("site:") {
+                    clean.to_string()
+                } else {
+                    format!("site:substack.com {clean}")
+                }
+            }
             _ => query.to_string(),
         };
 
@@ -767,6 +776,7 @@ impl McpServer {
             .get("mobile")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
+        let dedup = args.get("dedup").and_then(|v| v.as_bool()).unwrap_or(false);
 
         let custom_engine;
         let engine_ref = if proxy.is_some() || mobile {
@@ -816,6 +826,7 @@ impl McpServer {
                 engine,
                 &options,
                 max_tokens_per_page,
+                dedup,
             )
             .await
             {
@@ -1377,6 +1388,42 @@ impl McpServer {
 
         let report = crate::schema::scaffold_dom_skeleton(&raw_html);
         McpToolCallResult::success(report.summary_markdown)
+    }
+
+    async fn call_compare_similarity(&self, args: &Value) -> McpToolCallResult {
+        let text1 = match args.get("text1").and_then(|v| v.as_str()) {
+            Some(t) if !t.trim().is_empty() => t,
+            _ => return McpToolCallResult::error("Missing required parameter 'text1'"),
+        };
+        let text2 = match args.get("text2").and_then(|v| v.as_str()) {
+            Some(t) if !t.trim().is_empty() => t,
+            _ => return McpToolCallResult::error("Missing required parameter 'text2'"),
+        };
+
+        let max_dist = args
+            .get("max_hamming_distance")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(3) as u32;
+
+        let hash1 = crate::dedup::simhash(text1);
+        let hash2 = crate::dedup::simhash(text2);
+        let dist = crate::dedup::hamming_distance(hash1, hash2);
+        let is_duplicate = dist <= max_dist;
+        let similarity_pct = (1.0 - (dist as f64 / 64.0)) * 100.0;
+
+        let res = serde_json::json!({
+            "simhash1": format!("0x{:016x}", hash1),
+            "simhash2": format!("0x{:016x}", hash2),
+            "hamming_distance": dist,
+            "threshold": max_dist,
+            "is_near_duplicate": is_duplicate,
+            "similarity_percentage": (similarity_pct * 100.0).round() / 100.0
+        });
+
+        match serde_json::to_string_pretty(&res) {
+            Ok(json_str) => McpToolCallResult::success(json_str),
+            Err(e) => McpToolCallResult::error(format!("Failed to serialize result: {e}")),
+        }
     }
 }
 
