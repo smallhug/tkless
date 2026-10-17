@@ -13,6 +13,7 @@ pub mod dedup;
 pub mod downloader;
 pub mod error;
 pub mod extractor;
+pub mod feed;
 pub mod fetcher;
 pub mod markdown;
 pub mod mcp;
@@ -32,7 +33,8 @@ pub use cache::{CacheStats, DocumentCache};
 pub use cdp::{fetch_html_via_cdp, CdpOptions};
 pub use chunker::chunk_markdown;
 pub use crawler::{
-    crawl_site, format_crawl_report_markdown, CrawlOptions, CrawledPage, SiteCrawlReport,
+    crawl_site, format_crawl_report_jsonl, format_crawl_report_markdown, CrawlOptions, CrawledPage,
+    SiteCrawlReport,
 };
 pub use dedup::{hamming_distance, is_near_duplicate, simhash, similarity_ratio};
 pub use downloader::{
@@ -40,6 +42,7 @@ pub use downloader::{
     DownloadProgressReporter,
 };
 pub use error::PageclawError;
+pub use feed::{format_feed_markdown, is_feed_xml, parse_feed, FeedChannel, FeedItem};
 pub use mcp::McpServer;
 pub use model::{
     CommentEntry, ConclusionChapter, ConclusionKeypoint, DanmakuEntry, ExtractedImage,
@@ -232,7 +235,44 @@ impl PageclawEngine {
                 .await;
         }
 
-        let response = self.fetcher.fetch(url).await?;
+        let response = match self.fetcher.fetch(url).await {
+            Ok(resp) => {
+                // If anti-scraping challenge detected and auto_cdp enabled or CDP endpoint resolvable
+                let is_challenge = cdp::is_anti_scraping_challenge(&resp.html, resp.status);
+                let cdp_ep =
+                    cdp::resolve_cdp_endpoint(options.cdp_endpoint.as_deref(), options.auto_cdp);
+
+                if is_challenge && cdp_ep.is_some() {
+                    let ep = cdp_ep.unwrap();
+                    debug!(
+                        url = url,
+                        endpoint = %ep,
+                        "Static fetch encountered anti-scraping challenge; auto falling back to CDP headless browser"
+                    );
+                    return self
+                        .fetch_via_cdp_and_process(url, &parsed_url, options, &ep)
+                        .await;
+                }
+                resp
+            }
+            Err(err) => {
+                let cdp_ep =
+                    cdp::resolve_cdp_endpoint(options.cdp_endpoint.as_deref(), options.auto_cdp);
+                if options.auto_cdp && cdp_ep.is_some() {
+                    let ep = cdp_ep.unwrap();
+                    debug!(
+                        url = url,
+                        endpoint = %ep,
+                        error = %err,
+                        "Static fetch failed with network error; auto falling back to CDP headless browser"
+                    );
+                    return self
+                        .fetch_via_cdp_and_process(url, &parsed_url, options, &ep)
+                        .await;
+                }
+                return Err(err);
+            }
+        };
 
         let mut doc = self.process_html(&response.html, Some(&response.final_url), options)?;
         doc.url = response.requested_url;
@@ -399,6 +439,47 @@ impl PageclawEngine {
         } else {
             raw_html
         };
+
+        // 0.5 Auto-detection or explicit request for RSS 2.0 / Atom 1.0 Syndication Feeds
+        if options.feed || feed::is_feed_xml(effective_html) {
+            if let Ok(channel) = feed::parse_feed(effective_html) {
+                let content = match options.format {
+                    OutputFormat::Json => serde_json::to_string_pretty(&channel)
+                        .unwrap_or_else(|_| feed::format_feed_markdown(&channel)),
+                    _ => feed::format_feed_markdown(&channel),
+                };
+                let token_count = count_tokens(&content, options.tokenizer);
+                let title = Some(channel.title.clone());
+                let mut metadata = PageMetadata::default();
+                metadata.description = Some(channel.description.clone());
+                metadata.canonical_url = Some(channel.link.clone());
+
+                return Ok(PageDocument {
+                    url: base_url.unwrap_or(&channel.link).to_string(),
+                    final_url: base_url.unwrap_or(&channel.link).to_string(),
+                    status: 200,
+                    title,
+                    byline: None,
+                    content,
+                    metadata,
+                    json_ld: Vec::new(),
+                    token_count,
+                    tokenizer: options.tokenizer.as_str().to_string(),
+                    truncated: false,
+                    subtitles: None,
+                    danmaku: None,
+                    comments: None,
+                    conclusion: None,
+                    links: None,
+                    images: None,
+                    tables: None,
+                    entity: None,
+                    chunks: None,
+                    content_hash: None,
+                    metrics: None,
+                });
+            }
+        }
 
         let parsed_doc = Html::parse_document(effective_html);
 

@@ -16,6 +16,8 @@ static DATA_LANG_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r#"(?i)data-lang(?:uage)?\s*=\s*["']([^"']+)["']"#).unwrap());
 static INNER_CODE_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r#"(?is)<code([^>]*)>(.*?)</code>"#).unwrap());
+static LINE_NUM_PREFIX_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"^\s*\d+\s*([|│:：]|\s{2,})\s*"#).unwrap());
 
 static KATEX_DISPLAY_DIV_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"(?is)<div[^>]*class\s*=\s*["'][^"']*\bkatex-display\b[^"']*["'][^>]*>[\s\S]*?<annotation\s+encoding\s*=\s*["']application/x-tex["']>([\s\S]*?)</annotation>[\s\S]*?</div>"#).unwrap()
@@ -313,7 +315,8 @@ fn extract_lang_from_attrs(attrs: &str) -> Option<&'static str> {
     None
 }
 
-/// Preprocesses HTML to guarantee code blocks receive standardized `<code class="language-<canonical>">` tags.
+/// Preprocesses HTML to guarantee code blocks receive standardized `<code class="language-<canonical>">` tags
+/// and strips distracting line numbering prefixes (e.g. `1 | `, `01: `).
 pub fn normalize_code_language_tags(html: &str) -> String {
     PRE_TAG_RE
         .replace_all(html, |caps: &regex::Captures| {
@@ -331,18 +334,60 @@ pub fn normalize_code_language_tags(html: &str) -> String {
                 }
             }
 
-            if let Some(lang) = detected_lang {
-                if let Some(ref c_cap) = code_match {
-                    let code_body = &c_cap[2];
-                    format!("<pre{pre_attrs}><code class=\"language-{lang}\">{code_body}</code></pre>")
-                } else {
-                    format!("<pre{pre_attrs}><code class=\"language-{lang}\">{inner_content}</code></pre>")
-                }
+            let raw_body = if let Some(ref c_cap) = code_match {
+                &c_cap[2]
             } else {
-                caps[0].to_string()
+                inner_content
+            };
+            let cleaned_body = strip_code_line_numbers(raw_body);
+
+            if let Some(lang) = detected_lang {
+                format!(
+                    "<pre{pre_attrs}><code class=\"language-{lang}\">{cleaned_body}</code></pre>"
+                )
+            } else if let Some(ref c_cap) = code_match {
+                let code_attrs = &c_cap[1];
+                format!("<pre{pre_attrs}><code{code_attrs}>{cleaned_body}</code></pre>")
+            } else {
+                format!("<pre{pre_attrs}><code>{cleaned_body}</code></pre>")
             }
         })
         .to_string()
+}
+
+/// Strips leading code line numbers (e.g. `1 | `, `01: `, `1 │ `) commonly injected into blog code blocks.
+pub fn strip_code_line_numbers(code: &str) -> String {
+    let lines: Vec<&str> = code.lines().collect();
+    if lines.len() < 2 {
+        return code.to_string();
+    }
+
+    let mut numbered_count = 0;
+    let mut non_empty_count = 0;
+
+    for line in &lines {
+        let trimmed = line.trim();
+        if !trimmed.is_empty() {
+            non_empty_count += 1;
+            if LINE_NUM_PREFIX_RE.is_match(line) {
+                numbered_count += 1;
+            }
+        }
+    }
+
+    if non_empty_count >= 2 && (numbered_count as f64 / non_empty_count as f64) >= 0.7 {
+        let mut cleaned_lines = Vec::with_capacity(lines.len());
+        for line in lines {
+            if let Some(mat) = LINE_NUM_PREFIX_RE.find(line) {
+                cleaned_lines.push(&line[mat.end()..]);
+            } else {
+                cleaned_lines.push(line);
+            }
+        }
+        cleaned_lines.join("\n")
+    } else {
+        code.to_string()
+    }
 }
 
 #[cfg(test)]
@@ -413,5 +458,22 @@ mod tests {
             r#"<p>Let <script type="math/tex">f(x) = x^2 + 1</script> be continuous.</p>"#;
         let md3 = converter.convert(mathjax_inline, false, false).unwrap();
         assert!(md3.contains("$f(x) = x^2 + 1$"));
+    }
+
+    #[test]
+    fn test_strip_code_line_numbers() {
+        let converter = MarkdownConverter::new();
+        let sample = r#"
+            <pre class="language-rust"><code>1 | fn main() {
+2 |     println!("Hello, World!");
+3 | }</code></pre>
+        "#;
+        let md = converter.convert(sample, false, false).unwrap();
+        assert!(md.contains("```rust"));
+        assert!(md.contains("fn main() {"));
+        assert!(md.contains("println!(\"Hello, World!\");"));
+        assert!(!md.contains("1 |"));
+        assert!(!md.contains("2 |"));
+        assert!(!md.contains("3 |"));
     }
 }

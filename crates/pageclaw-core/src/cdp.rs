@@ -295,6 +295,86 @@ async fn connect_and_extract_html(
     Ok(html)
 }
 
+/// Detects whether an HTML response body or HTTP status indicates an active anti-scraping challenge
+/// (e.g. Cloudflare Turnstile, 5-second shield, Zhihu captcha, WeChat verification, DDOS-GUARD, WAF block).
+pub fn is_anti_scraping_challenge(html: &str, status: u16) -> bool {
+    if status == 403 || status == 503 {
+        return true;
+    }
+
+    let lower = html.to_ascii_lowercase();
+
+    // Cloudflare challenges
+    if lower.contains("cf-browser-verification")
+        || lower.contains("challenge-platform")
+        || lower.contains("cf-turnstile")
+        || lower.contains("_cf_chl_opt")
+        || lower.contains("just a moment...")
+    {
+        return true;
+    }
+
+    // Zhihu security challenge
+    if lower.contains("data-za-module=\"securitycaptcha\"")
+        || lower.contains("知乎 - 安全验证")
+        || (lower.contains("zhihu.com/signin?next=") && lower.contains("captcha"))
+    {
+        return true;
+    }
+
+    // WeChat verification template
+    if lower.contains("weixin.qq.com/mp/readtemplate?t=pages/verify_")
+        || lower.contains("环境异常")
+        || lower.contains("当前访问环境存在安全风险")
+    {
+        return true;
+    }
+
+    // DDOS-GUARD and general WAF
+    if lower.contains("ddos-guard")
+        || lower.contains("waf-challenge")
+        || lower.contains("data-security-challenge")
+        || lower.contains("please enable javascript and cookies to continue")
+    {
+        return true;
+    }
+
+    false
+}
+
+/// Resolves effective Chrome DevTools Protocol endpoint:
+/// 1. Explicitly configured parameter
+/// 2. `PAGECLAW_CDP_ENDPOINT` or `CDP_ENDPOINT` environment variables
+/// 3. Default fallback "http://127.0.0.1:9222" if auto-cdp requested
+pub fn resolve_cdp_endpoint(configured: Option<&str>, auto_cdp: bool) -> Option<String> {
+    if let Some(endpoint) = configured {
+        let trimmed = endpoint.trim();
+        if !trimmed.is_empty() {
+            return Some(trimmed.to_string());
+        }
+    }
+
+    if let Ok(env_ep) = std::env::var("PAGECLAW_CDP_ENDPOINT") {
+        let trimmed = env_ep.trim();
+        if !trimmed.is_empty() {
+            return Some(trimmed.to_string());
+        }
+    }
+
+    if let Ok(env_ep) = std::env::var("CDP_ENDPOINT") {
+        let trimmed = env_ep.trim();
+        if !trimmed.is_empty() {
+            return Some(trimmed.to_string());
+        }
+    }
+
+    if auto_cdp {
+        Some("http://127.0.0.1:9222".to_string())
+    } else {
+        None
+    }
+}
+
 /// Helper function to URL-encode a string.
 fn urlencoding(input: &str) -> String {
     url::form_urlencoded::byte_serialize(input.as_bytes()).collect()

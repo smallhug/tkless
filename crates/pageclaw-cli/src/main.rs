@@ -278,6 +278,7 @@ async fn run(args: CliArgs) -> Result<()> {
         table_format: args.table_format.into(),
         stats: args.stats,
         remove_selector: args.remove_selector.clone(),
+        auto_cdp: args.auto_cdp,
     };
 
     // -------------------------------------------------------------------------
@@ -533,6 +534,7 @@ async fn run(args: CliArgs) -> Result<()> {
             table_format: pageclaw_core::model::TableExportFormat::default(),
             stats: false,
             remove_selector: args.remove_selector.clone(),
+            auto_cdp: args.auto_cdp,
         });
 
         let semaphore =
@@ -632,6 +634,7 @@ async fn run(args: CliArgs) -> Result<()> {
         let mut payload = match crawl_args.format {
             CliFormat::Json => serde_json::to_string_pretty(&report)
                 .context("Failed to serialize crawl report to JSON")?,
+            CliFormat::Jsonl => pageclaw_core::format_crawl_report_jsonl(&report),
             _ => pageclaw_core::format_crawl_report_markdown(&report),
         };
 
