@@ -130,6 +130,7 @@ impl McpServer {
                     "fetch_feed" => self.call_fetch_feed(&arguments).await,
                     "inspect_links" => self.call_inspect_links(&arguments).await,
                     "check_auth" => self.call_check_auth(&arguments).await,
+                    "summarize_text" => self.call_summarize_text(&arguments).await,
                     _ => McpToolCallResult::error(format!("Unknown tool: '{tool_name}'")),
                 };
 
@@ -806,6 +807,14 @@ impl McpServer {
                     clean.to_string()
                 } else {
                     format!("site:reddit.com {clean}")
+                }
+            }
+            "stackoverflow" | "so" => {
+                let clean = query.trim();
+                if clean.starts_with("site:") {
+                    clean.to_string()
+                } else {
+                    format!("site:stackoverflow.com {clean}")
                 }
             }
             _ => query.to_string(),
@@ -1877,6 +1886,43 @@ impl McpServer {
                 cookie_str.len()
             )),
             _ => McpToolCallResult::error(format!("Unsupported platform '{platform}'")),
+        }
+    }
+
+    async fn call_summarize_text(&self, args: &Value) -> McpToolCallResult {
+        let text = match args.get("text").and_then(|v| v.as_str()) {
+            Some(t) if !t.trim().is_empty() => t,
+            _ => return McpToolCallResult::error("Missing required parameter 'text'"),
+        };
+
+        let max_bullets = args
+            .get("max_bullets")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(3)
+            .clamp(1, 10) as usize;
+
+        let format = args
+            .get("format")
+            .and_then(|v| v.as_str())
+            .unwrap_or("markdown");
+
+        let bullets = crate::summarizer::extract_key_takeaways(text, max_bullets);
+
+        match format {
+            "json" => match serde_json::to_string_pretty(&bullets) {
+                Ok(json_str) => McpToolCallResult::success(json_str),
+                Err(e) => {
+                    McpToolCallResult::error(format!("Failed to serialize summary to JSON: {e}"))
+                }
+            },
+            _ => {
+                let mut md = String::new();
+                md.push_str("### 💡 核心要点速览 (Key Takeaways)\n\n");
+                for bullet in bullets {
+                    md.push_str(&format!("- {}\n", bullet.trim()));
+                }
+                McpToolCallResult::success(md)
+            }
         }
     }
 }

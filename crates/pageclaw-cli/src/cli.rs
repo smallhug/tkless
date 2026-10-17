@@ -844,6 +844,14 @@ pub struct SearchSubArgs {
     )]
     pub reddit: bool,
 
+    /// Scope search to Stack Overflow and Stack Exchange developer Q&A (stackoverflow.com)
+    #[arg(
+        long = "so",
+        alias = "stackoverflow",
+        help = "Scope search to Stack Overflow and Stack Exchange developer Q&A (stackoverflow.com)"
+    )]
+    pub so: bool,
+
     /// Search engine provider: bing (default), google, auto (failover)
     #[arg(
         short = 'e',
