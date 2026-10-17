@@ -134,6 +134,7 @@ impl McpServer {
                     "split_document" => self.call_split_document(&arguments).await,
                     "diff_content" => self.call_diff_content(&arguments).await,
                     "capture_screenshot" => self.call_capture_screenshot(&arguments).await,
+                    "convert_table" => self.call_convert_table(&arguments).await,
                     _ => McpToolCallResult::error(format!("Unknown tool: '{tool_name}'")),
                 };
 
@@ -393,6 +394,7 @@ impl McpServer {
             Some("csv") => TableExportFormat::Csv,
             Some("tsv") => TableExportFormat::Tsv,
             Some("json") => TableExportFormat::Json,
+            Some("sql") => TableExportFormat::Sql,
             _ => TableExportFormat::Markdown,
         };
         let stats = args.get("stats").and_then(|v| v.as_bool()).unwrap_or(false);
@@ -1371,6 +1373,7 @@ impl McpServer {
             Some("csv") => TableExportFormat::Csv,
             Some("tsv") => TableExportFormat::Tsv,
             Some("json") => TableExportFormat::Json,
+            Some("sql") => TableExportFormat::Sql,
             _ => TableExportFormat::Markdown,
         };
         let stats = args.get("stats").and_then(|v| v.as_bool()).unwrap_or(false);
@@ -2061,6 +2064,55 @@ impl McpServer {
                 }
             }
             Err(e) => McpToolCallResult::error(format!("CDP 截取网页快照失败: {e}")),
+        }
+    }
+
+    async fn call_convert_table(&self, args: &Value) -> McpToolCallResult {
+        let html = match args.get("html").and_then(|v| v.as_str()) {
+            Some(h) if !h.trim().is_empty() => h,
+            _ => return McpToolCallResult::error("Missing required parameter 'html'"),
+        };
+
+        let format_str = args.get("format").and_then(|v| v.as_str()).unwrap_or("sql");
+
+        let table_format = match format_str {
+            "sql" => TableExportFormat::Sql,
+            "csv" => TableExportFormat::Csv,
+            "tsv" => TableExportFormat::Tsv,
+            "json" => TableExportFormat::Json,
+            _ => TableExportFormat::Markdown,
+        };
+
+        let table_name = args
+            .get("table_name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("extracted_table");
+
+        let doc = scraper::Html::parse_document(html);
+        let tables = crate::extractor::extract_tables(&doc);
+
+        if tables.is_empty() {
+            return McpToolCallResult::error("未在提供的 HTML 中检测到有效的 <table> 表格元素");
+        }
+
+        if table_format == TableExportFormat::Sql {
+            let sql_ddl = tables
+                .iter()
+                .enumerate()
+                .map(|(idx, t)| {
+                    let name = if tables.len() > 1 {
+                        format!("{table_name}_{}", idx + 1)
+                    } else {
+                        table_name.to_string()
+                    };
+                    t.to_sql(&name)
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            McpToolCallResult::success(sql_ddl)
+        } else {
+            let formatted = crate::model::ExtractedTable::format_tables(&tables, table_format);
+            McpToolCallResult::success(formatted)
         }
     }
 }

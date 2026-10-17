@@ -148,6 +148,8 @@ pub enum CliTableFormat {
     Tsv,
     /// Structured JSON records
     Json,
+    /// ANSI/SQLite-compatible SQL DDL and INSERT statements
+    Sql,
 }
 
 impl From<CliTableFormat> for pageclaw_core::model::TableExportFormat {
@@ -157,6 +159,7 @@ impl From<CliTableFormat> for pageclaw_core::model::TableExportFormat {
             CliTableFormat::Csv => pageclaw_core::model::TableExportFormat::Csv,
             CliTableFormat::Tsv => pageclaw_core::model::TableExportFormat::Tsv,
             CliTableFormat::Json => pageclaw_core::model::TableExportFormat::Json,
+            CliTableFormat::Sql => pageclaw_core::model::TableExportFormat::Sql,
         }
     }
 }
