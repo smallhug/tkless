@@ -203,9 +203,9 @@ pub fn get_available_tools() -> Vec<McpTool> {
                     },
                     "table_format": {
                         "type": "string",
-                        "enum": ["markdown", "csv", "tsv", "json"],
+                        "enum": ["markdown", "csv", "tsv", "json", "sql"],
                         "default": "markdown",
-                        "description": "Presentation format for table export: 'markdown' (default), 'csv', 'tsv', or 'json'"
+                        "description": "Presentation format for table export: 'markdown' (default), 'csv', 'tsv', 'json', or 'sql' (CREATE TABLE + INSERT DDL)"
                     },
                     "mobile": {
                         "type": "boolean",
@@ -632,9 +632,9 @@ pub fn get_available_tools() -> Vec<McpTool> {
                     },
                     "table_format": {
                         "type": "string",
-                        "enum": ["markdown", "csv", "tsv", "json"],
+                        "enum": ["markdown", "csv", "tsv", "json", "sql"],
                         "default": "markdown",
-                        "description": "Presentation format for table export: 'markdown' (default), 'csv', 'tsv', or 'json'"
+                        "description": "Presentation format for table export: 'markdown' (default), 'csv', 'tsv', 'json', or 'sql' (CREATE TABLE + INSERT DDL)"
                     },
                     "stats": {
                         "type": "boolean",
@@ -923,6 +923,31 @@ pub fn get_available_tools() -> Vec<McpTool> {
                     }
                 },
                 "required": ["url"]
+            }),
+        },
+        McpTool {
+            name: "convert_table".to_string(),
+            description: "Extracts and converts HTML table elements into clean tabular datasets: SQL DDL + INSERT statements, CSV, TSV, GFM Markdown, or JSON records.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "html": {
+                        "type": "string",
+                        "description": "Raw HTML string containing one or more <table> elements"
+                    },
+                    "format": {
+                        "type": "string",
+                        "enum": ["sql", "csv", "tsv", "json", "markdown"],
+                        "default": "sql",
+                        "description": "Output format: 'sql' (CREATE TABLE + batch INSERT DDL), 'csv', 'tsv', 'json', or 'markdown'"
+                    },
+                    "table_name": {
+                        "type": "string",
+                        "default": "extracted_table",
+                        "description": "Custom SQL table name identifier when format is 'sql' [default: 'extracted_table']"
+                    }
+                },
+                "required": ["html"]
             }),
         }
     ]

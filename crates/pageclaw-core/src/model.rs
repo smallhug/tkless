@@ -371,6 +371,8 @@ pub enum TableExportFormat {
     Tsv,
     /// Structured JSON records.
     Json,
+    /// ANSI/SQLite-compatible SQL DDL and INSERT statements.
+    Sql,
 }
 
 impl TableExportFormat {
@@ -380,6 +382,7 @@ impl TableExportFormat {
             TableExportFormat::Csv => "csv",
             TableExportFormat::Tsv => "tsv",
             TableExportFormat::Json => "json",
+            TableExportFormat::Sql => "sql",
         }
     }
 }
@@ -484,6 +487,137 @@ impl ExtractedTable {
         out
     }
 
+    /// Converts the extracted table into ANSI/SQLite-compatible CREATE TABLE and batch INSERT statements.
+    pub fn to_sql(&self, table_name: &str) -> String {
+        if self.headers.is_empty() && self.rows.is_empty() {
+            return String::new();
+        }
+
+        let clean_table_name = sanitize_sql_identifier(table_name);
+        let num_cols = self
+            .headers
+            .len()
+            .max(self.rows.first().map(|r| r.len()).unwrap_or(0));
+
+        // 1. Column names and type inference
+        let mut col_names = Vec::new();
+        let mut col_types = Vec::new();
+
+        for i in 0..num_cols {
+            let raw_header = self.headers.get(i).map(|s| s.as_str()).unwrap_or("");
+            let col_id = if raw_header.trim().is_empty() {
+                format!("col_{}", i + 1)
+            } else {
+                sanitize_sql_identifier(raw_header)
+            };
+            col_names.push(col_id);
+
+            // Infer type by scanning row values
+            let mut all_int = true;
+            let mut all_float = true;
+            let mut all_bool = true;
+            let mut non_empty_count = 0;
+
+            for row in &self.rows {
+                if let Some(cell) = row.get(i) {
+                    let trimmed = cell.trim();
+                    if !trimmed.is_empty() {
+                        non_empty_count += 1;
+                        if parse_sql_cell_as_int(trimmed).is_none() {
+                            all_int = false;
+                        }
+                        if parse_sql_cell_as_float(trimmed).is_none() {
+                            all_float = false;
+                        }
+                        let lower = trimmed.to_lowercase();
+                        if lower != "true"
+                            && lower != "false"
+                            && lower != "yes"
+                            && lower != "no"
+                            && lower != "1"
+                            && lower != "0"
+                        {
+                            all_bool = false;
+                        }
+                    }
+                }
+            }
+
+            let col_type = if non_empty_count == 0 {
+                "TEXT"
+            } else if all_int {
+                "INTEGER"
+            } else if all_float {
+                "NUMERIC"
+            } else if all_bool {
+                "BOOLEAN"
+            } else {
+                "TEXT"
+            };
+
+            col_types.push(col_type);
+        }
+
+        let mut sql = String::new();
+        sql.push_str(&format!(
+            "CREATE TABLE IF NOT EXISTS {clean_table_name} (\n"
+        ));
+        let col_defs: Vec<String> = col_names
+            .iter()
+            .zip(col_types.iter())
+            .map(|(name, t)| format!("    {name} {t}"))
+            .collect();
+        sql.push_str(&col_defs.join(",\n"));
+        sql.push_str("\n);\n\n");
+
+        if !self.rows.is_empty() {
+            sql.push_str(&format!(
+                "INSERT INTO {clean_table_name} ({}) VALUES\n",
+                col_names.join(", ")
+            ));
+            let mut val_rows = Vec::new();
+
+            for row in &self.rows {
+                let mut vals = Vec::new();
+                for i in 0..num_cols {
+                    let cell = row.get(i).map(|s| s.as_str()).unwrap_or("");
+                    let t = col_types[i];
+                    let trimmed = cell.trim();
+                    if trimmed.is_empty() {
+                        vals.push("NULL".to_string());
+                    } else if t == "INTEGER" {
+                        if let Some(num) = parse_sql_cell_as_int(trimmed) {
+                            vals.push(num.to_string());
+                        } else {
+                            vals.push(format!("'{}'", trimmed.replace('\'', "''")));
+                        }
+                    } else if t == "NUMERIC" {
+                        if let Some(num) = parse_sql_cell_as_float(trimmed) {
+                            vals.push(num.to_string());
+                        } else {
+                            vals.push(format!("'{}'", trimmed.replace('\'', "''")));
+                        }
+                    } else if t == "BOOLEAN" {
+                        let lower = trimmed.to_lowercase();
+                        if lower == "true" || lower == "yes" || lower == "1" {
+                            vals.push("TRUE".to_string());
+                        } else {
+                            vals.push("FALSE".to_string());
+                        }
+                    } else {
+                        vals.push(format!("'{}'", trimmed.replace('\'', "''")));
+                    }
+                }
+                val_rows.push(format!("    ({})", vals.join(", ")));
+            }
+
+            sql.push_str(&val_rows.join(",\n"));
+            sql.push_str(";\n");
+        }
+
+        sql
+    }
+
     /// Formats multiple extracted tables into the requested export format.
     pub fn format_tables(tables: &[ExtractedTable], format: TableExportFormat) -> String {
         if tables.is_empty() {
@@ -495,6 +629,12 @@ impl ExtractedTable {
 
         match format {
             TableExportFormat::Json => serde_json::to_string_pretty(tables).unwrap_or_default(),
+            TableExportFormat::Sql => tables
+                .iter()
+                .enumerate()
+                .map(|(idx, t)| t.to_sql(&format!("table_{}", idx + 1)))
+                .collect::<Vec<_>>()
+                .join("\n"),
             TableExportFormat::Csv => tables
                 .iter()
                 .enumerate()
@@ -554,6 +694,47 @@ fn sanitize_md_cell(s: &str) -> String {
         .replace(['\r', '\n'], " ")
         .trim()
         .to_string()
+}
+
+fn sanitize_sql_identifier(s: &str) -> String {
+    let mut clean = String::new();
+    for ch in s.chars() {
+        if ch.is_ascii_alphanumeric() || ch == '_' {
+            clean.push(ch.to_ascii_lowercase());
+        } else if ch == ' ' || ch == '-' {
+            clean.push('_');
+        }
+    }
+    let collapsed = clean
+        .split('_')
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join("_");
+
+    if collapsed.is_empty()
+        || collapsed
+            .chars()
+            .next()
+            .map_or(false, |c| c.is_ascii_digit())
+    {
+        format!("col_{collapsed}")
+    } else {
+        collapsed
+    }
+}
+
+fn parse_sql_cell_as_int(s: &str) -> Option<i64> {
+    let clean = s.trim().replace(',', "");
+    clean.parse::<i64>().ok()
+}
+
+fn parse_sql_cell_as_float(s: &str) -> Option<f64> {
+    let clean = s
+        .trim()
+        .trim_start_matches(|c| c == '$' || c == '¥' || c == '€' || c == '£')
+        .trim_end_matches('%')
+        .replace(',', "");
+    clean.parse::<f64>().ok()
 }
 
 /// Official or AI-generated video conclusion and outline summary.

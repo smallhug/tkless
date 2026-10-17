@@ -42,7 +42,7 @@ async fn test_mcp_protocol_lifecycle() {
     let tools_array = tools_val["tools"]
         .as_array()
         .expect("Tools should be an array");
-    assert_eq!(tools_array.len(), 19);
+    assert_eq!(tools_array.len(), 20);
 
     let tool_names: Vec<&str> = tools_array
         .iter()
@@ -67,6 +67,7 @@ async fn test_mcp_protocol_lifecycle() {
     assert!(tool_names.contains(&"split_document"));
     assert!(tool_names.contains(&"diff_content"));
     assert!(tool_names.contains(&"capture_screenshot"));
+    assert!(tool_names.contains(&"convert_table"));
 
     // Verify web_search schema contains scope, cdp_endpoint, schema
     let search_tool = tools_array
@@ -424,6 +425,43 @@ async fn test_mcp_protocol_lifecycle() {
     assert_eq!(shot_val["isError"], true);
     let shot_text = shot_val["content"][0]["text"].as_str().unwrap();
     assert!(shot_text.contains("SSRF"));
+
+    // 5q. Tool Call: convert_table to SQL
+    let table_sample = r#"
+        <table>
+            <thead>
+                <tr><th>Quarter</th><th>Revenue</th><th>Growth</th></tr>
+            </thead>
+            <tbody>
+                <tr><td>Q1 2026</td><td>1500000</td><td>0.25</td></tr>
+                <tr><td>Q2 2026</td><td>1950000</td><td>0.30</td></tr>
+            </tbody>
+        </table>
+    "#;
+    let convert_req = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 21,
+        "method": "tools/call",
+        "params": {
+            "name": "convert_table",
+            "arguments": {
+                "html": table_sample,
+                "format": "sql",
+                "table_name": "quarterly_financials"
+            }
+        }
+    });
+    let convert_res = server
+        .handle_message(&convert_req.to_string())
+        .await
+        .expect("Should return response");
+    let convert_val = convert_res
+        .result
+        .expect("Convert table result should be present");
+    let convert_sql = convert_val["content"][0]["text"].as_str().unwrap();
+    assert!(convert_sql.contains("CREATE TABLE IF NOT EXISTS quarterly_financials"));
+    assert!(convert_sql.contains("INSERT INTO quarterly_financials"));
+    assert!(convert_sql.contains("Q1 2026"));
 
     // 5. Unknown Method Error
     let unknown_req = r#"{"jsonrpc":"2.0","id":4,"method":"unknown/method"}"#;
