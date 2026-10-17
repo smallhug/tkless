@@ -1,0 +1,79 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    name: Build - ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            artifact_name: pageclaw-windows-amd64.zip
+            binary_name: pageclaw.exe
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            artifact_name: pageclaw-linux-amd64.tar.gz
+            binary_name: pageclaw
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            artifact_name: pageclaw-linux-arm64.tar.gz
+            binary_name: pageclaw
+            use_cross: true
+          - target: x86_64-apple-darwin
+            os: macos-13
+            artifact_name: pageclaw-darwin-amd64.tar.gz
+            binary_name: pageclaw
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            artifact_name: pageclaw-darwin-arm64.tar.gz
+            binary_name: pageclaw
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install cross (for Linux ARM64 cross compilation)
+        if: matrix.use_cross
+        run: cargo install cross --git https://github.com/cross-rs/cross
+
+      - name: Build Release Binary
+        run: |
+          if [ "${{ matrix.use_cross }}" = "true" ]; then
+            cross build --release --target ${{ matrix.target }} -p pageclaw-cli
+          else
+            cargo build --release --target ${{ matrix.target }} -p pageclaw-cli
+          fi
+        shell: bash
+
+      - name: Package Artifact (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          7z a ${{ matrix.artifact_name }} ./target/${{ matrix.target }}/release/${{ matrix.binary_name }} README.md
+        shell: bash
+
+      - name: Package Artifact (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          tar -czvf ${{ matrix.artifact_name }} -C ./target/${{ matrix.target }}/release ${{ matrix.binary_name }}
+        shell: bash
+
+      - name: Publish GitHub Release Asset
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ matrix.artifact_name }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
