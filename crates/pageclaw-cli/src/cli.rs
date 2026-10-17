@@ -860,6 +860,13 @@ pub struct SearchSubArgs {
     )]
     pub so: bool,
 
+    /// Scope search to V2EX developer community discussions (v2ex.com)
+    #[arg(
+        long = "v2ex",
+        help = "Scope search to V2EX developer community discussions (v2ex.com)"
+    )]
+    pub v2ex: bool,
+
     /// Search engine provider: bing (default), google, auto (failover)
     #[arg(
         short = 'e',

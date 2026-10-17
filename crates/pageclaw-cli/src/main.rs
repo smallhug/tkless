@@ -444,6 +444,13 @@ async fn run(args: CliArgs) -> Result<()> {
             } else {
                 format!("site:stackoverflow.com {clean}")
             }
+        } else if search_args.v2ex {
+            let clean = search_args.query.trim();
+            if clean.starts_with("site:") {
+                clean.to_string()
+            } else {
+                format!("site:v2ex.com {clean}")
+            }
         } else {
             search_args.query.clone()
         };
