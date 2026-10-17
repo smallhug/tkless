@@ -40,6 +40,7 @@
 - 🚀 **[01-ci-cd-and-release.md](doc/01-ci-cd-and-release.md)**：发布流程与 CI/CD 自动化构建指南（GitHub Actions 多平台交叉编译、Release 打包与瘦身）
 - 🔌 **[02-mcp-tools-extension.md](doc/02-mcp-tools-extension.md)**：Model Context Protocol (MCP) 工具扩展架构设计（专用原子工具、进度推流与宿主配置）
 - 🛠️ **[03-adapters-and-features.md](doc/03-adapters-and-features.md)**：平台适配器矩阵与功能特性实战手册（15+ 平台参数速查、SQL 表格导出、RAG 分块与实战案例）
+- 📐 **[04-development-standards.md](doc/04-development-standards.md)**：核心开发规范与工程标准指南（架构分层、安全防御红线、适配器扩展规程及 Git 规范）
 
 ---
 
@@ -57,7 +58,8 @@ tkless/
 │   ├── README.md                       # 文档索引与快速指引
 │   ├── 01-ci-cd-and-release.md         # CI/CD 与多平台构建发布指南
 │   ├── 02-mcp-tools-extension.md       # MCP 工具扩展与协议规范
-│   └── 03-adapters-and-features.md     # 适配器矩阵与全量功能使用手册
+│   ├── 03-adapters-and-features.md     # 适配器矩阵与全量功能使用手册
+│   └── 04-development-standards.md     # 核心开发规范与工程标准指南
 └── crates/
     ├── tkless-core/                    # 核心提取与清洗引擎库 (可独立引入)
     │   ├── src/

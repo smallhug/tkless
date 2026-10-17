@@ -1,0 +1,173 @@
+# 04 - TkLess 核心开发规范与工程标准指南
+
+> **Spend less tokens, perceive more web.**  
+> 本文档定义 TkLess 项目的架构设计原则、Rust 编码与风格准则、安全防御硬约束、平台适配器扩展规程及 Git 提交规范，作为全仓库开发、代码审查（Code Review）与持续集成的法定参考基线。
+
+---
+
+## 🏛️ 一、架构设计与模块分层原则
+
+TkLess 采用标准的 Cargo Workspace 多包模块化架构，严格遵循**关注点分离（Separation of Concerns）**与**零无用运行时依赖**：
+
+```text
+tkless/
+├── crates/
+│   ├── tkless-core/     # 纯核心引擎库：零 CLI 假设、零 stdio 依赖，作为纯粹的 Rust Library
+│   └── tkless-cli/      # 终端二进制层：仅负责 Clap 参数解析、退出码映射、渲染输出与 REPL
+├── doc/                 # 核心架构与开发规范文档中心
+└── .github/workflows/   # 跨平台 CI/CD 自动化构建流水线
+```
+
+### 1. 核心库独立性约束 (`tkless-core`)
+- `tkless-core` **严禁直接向标准输出/标准错误（`println!`, `eprintln!`）打印任何非必要内容**。所有运行时状态与诊断信息必须通过 `tracing` 宏（`trace!`, `debug!`, `info!`, `warn!`）记录，由上层宿主环境自由决定如何订阅。
+- 保证可作为第三方 Rust 库被外部程序、Web 框架或本地智能体直接引入，无全局状态绑定。
+
+### 2. 严格标准流隔离 (Strict Stream Separation)
+- `stdout`（标准输出）：**仅且只能输出纯净的目标提取数据**（Markdown 正文、JSON、SQL DDL、纯文本）。任何 Agent、管道重定向（`|`）或自动化脚本抓取 stdout 时，绝不能混入任何非目标载荷。
+- `stderr`（标准错误）：输出所有的网络耗时、HTTP 状态、Token 统计、进度条与调试日志。
+
+### 3. 内存与便携性底线
+- **纯 Safe Rust**：全库严禁引入自定义 `unsafe` 代码块或裸指针操作。所有内存安全与并发同步依托 Rust 编译器借用检查、Tokio 运行时与标准库同步原语。
+- **纯静态单二进制分发**：全局网络通信统一使用 `rustls-tls`，Linux 平台强制绑定 `openssl/vendored`，保证编译出的二进制程序不依赖目标系统安装的特定动态共享库（如 `libssl.so`），做到任意机器“复制即可运行”。
+- **极速低占用**：冷启动延迟控制在毫秒级，基础运行内存必须维持在 `< 15MB`。
+
+---
+
+## 💻 二、Rust 语言与编码规范
+
+### 1. 命名与代码风格
+- 严格遵循 Rust 官方命名规范：
+  - 类型、特征、枚举：大驼峰（`TklessEngine`, `PageDocument`, `PlatformAdapter`）；
+  - 函数、方法、变量、模块：蛇形命名（`process_url`, `extract_discovered_links`, `clean_html`）；
+  - 常量、静态正则：全大写蛇形（`MAX_REDIRECTS`, `A_HREF_SELECTOR`）；
+  - 静态编译期正则统一使用 `std::sync::LazyLock` 封装，杜绝重复解析编译损耗。
+- 代码格式必须 100% 满足 `cargo fmt` 官方规范，行宽以 100 字符为软性基线。
+
+### 2. 错误处理与退出码规范
+- **领域错误统一定义**：`tkless-core` 使用 `thiserror` 派生枚举 `TklessError`，为每种错误类型提供精确的语义说明。
+- **命令行退出码映射**：`TklessError` 必须实现 `exit_code(&self) -> i32`，严格映射为 Agent 调度友好的语义退出码：
+  - `0`: 成功 (Success)；
+  - `1`: 通用错误 (I/O, 未分类异常)；
+  - `2`: 参数或 URL 格式错误；
+  - `3`: 网络连接异常、DNS 失败、超时或服务端 5xx 故障；
+  - `4`: 编码解码异常或客户端 HTTP 4xx 错误；
+  - `5`: 响应体超出 `--max-size` 限制；
+  - `6`: SSRF 拦截命中（拒绝私有/回环网络请求）。
+- `anyhow` **仅允许**在 `tkless-cli` 二进制中使用，用于收集和丰富顶层调用上下文（`.context(...)`）。
+
+### 3. Token 经济学与边界安全截断
+- 任何正文截断操作必须通过 `tkless_core::token::truncate_to_tokens` 统一执行，**严禁使用粗暴的字符切片（`&str[..n]`）**。
+- 截断算法必须感知段落（`\n\n`）与自然句子（句号/问号/感叹号）边界，且必须在截断处**自动检测并补齐未封闭的 Markdown 代码块（```` ``` ````）**，杜绝大模型在消费时产生未闭合代码块语法瘫痪。
+
+---
+
+## 🛡️ 三、网络安全与数据防御硬约束
+
+作为需要直接面向未知互联网抓取页面的自动化引擎，必须坚守以下安全红线：
+
+### 1. SSRF 全链路深度防御
+- **全网请求强制前置校验**：所有面向用户传入 URL 的网络请求（普通抓取、整站爬虫、搜索结果即抓取、CDP 无头渲染、长截图、链接巡检），必须在出站前调用 `fetcher.validate_ssrf(&parsed_url)`。
+- **全 DNS 解析遍历**：DNS 解析阶段若解析出多个 IP，必须遍历所有返回的 IP，只要存在任意一个命中私网（RFC 1918）、本地环回（`127.0.0.1`）、链路本地（`169.254.169.254` 云厂商元数据），必须全盘拦截。
+- **重定向逐跳拦截 (Hop-by-Hop)**：网络层对 3xx 跳转重定向必须每一跳重新进行 SSRF 校验，防止攻击者利用公网域名 302 跳转至内网靶机。
+
+### 2. 凭据作用域隔离与防泄漏
+- **平台前缀存储隔离**：Cookie 文件持久化必须带平台标识符（如 `bilibili: ...`, `zhihu: ...`），同文件内多站点互不污染。
+- **域名匹配出站**：出站请求仅根据当前请求的 URL 顶级私有域名匹配对应的平台凭据；无前缀命令行 Cookie 仅且只能绑定初始目标 Host，在发生跨域重定向时立即清空 Cookie，严防凭据被第三方捕获。
+
+### 3. 防注入与数据净化
+- **SQL DDL/INSERT 安全**：
+  - 表名与列名必须通过 `sanitize_sql_identifier` 字符白名单清洗（仅允许 `[a-z0-9_]`）；
+  - 若表头清洗后存在同名标识符，必须通过 `seen_col_names` 自动追加序号（`_1`, `_2`）消歧，确保生成的 DDL 语法合法；
+  - 单元格数据必须包裹单引号，并对内部所有单引号严格执行 SQL 倍写转义（`'` ➔ `''`）。
+- **XML/RSS/Atom 解析**：使用 `html5ever`，严禁开启外部实体展开与 DTD 处理，彻底免疫 XXE 攻击。
+- **路径遍历防御**：长文档拆分文件名必须经过 `slugify` 正则清理；图片资产落盘统一采用内部数字自增模板 `img_NNN.<ext>`，禁止直接使用远程文件名作为本地磁盘路径。
+
+---
+
+## 🧩 四、平台专属适配器开发规程
+
+当引入新的网站适配器（如 Reddit、Wikipedia、V2EX）时，必须遵守以下规范：
+
+1. **实现标准特征 (`PlatformAdapter`)**：
+   ```rust
+   pub trait PlatformAdapter: Send + Sync {
+       fn name(&self) -> &'static str;
+       fn can_handle(&self, url: &Url) -> bool;
+       fn extract<'a>(
+           &'a self,
+           fetcher: &'a Fetcher,
+           url: &'a Url,
+           options: &'a ExtractionOptions,
+       ) -> BoxFuture<'a, Result<PageDocument, TklessError>>;
+   }
+   ```
+2. **轻量与高保真优先**：
+   - 优先通过提取页面内置数据树（如 `__INITIAL_STATE__`、JSON-LD）或轻量公开 API 解析，耗时应压制在 100~200ms 以内，非必要不启动无头浏览器；
+   - 自动解包平台外链中转页（如 `link.zhihu.com/?target=...`、`link.juejin.cn/?target=...`）；
+   - 图片地址自动替换为平台最高清无水印原始资源链接。
+3. **反爬与降级意识**：
+   - 必须实现反爬挑战探测（如 Cloudflare 滑块、平台图形验证码），当遭遇风控拦截时返回清晰的错误诊断或触发 CDP 降级。
+4. **适配器注册**：
+   - 在 `crates/tkless-core/src/adapters/mod.rs` 中的 `AdapterRegistry::default()` 完成注册。
+5. **配套单元测试**：
+   - 每个适配器必须在所属模块的 `tests` 模块中提供：
+     1. URL 路由匹配测试（支持主站、子域、短链接、移动端链接）；
+     2. 基于离线 HTML 片段或 JSON 夹具的解析测试（严禁依赖外部真实网络）。
+
+---
+
+## 🤖 五、Model Context Protocol (MCP) 扩展规范
+
+1. **前缀自适应 (Prefix-Agnostic)**：
+   - 所有在 MCP 服务端公开的工具调用，均需在 `server.rs` 调度层统一执行前缀归一化：
+     ```rust
+     let raw_tool_name = params.get("name").and_then(|v| v.as_str()).unwrap_or("");
+     let tool_name = raw_tool_name
+         .strip_prefix("tkless_")
+         .or_else(|| raw_tool_name.strip_prefix("pageclaw_"))
+         .unwrap_or(raw_tool_name);
+     ```
+2. **原子工具设计原则**：
+   - 暴露给大模型的工具入参必须收敛，优先提供语义清晰的专用原子工具（如 `export_tables`, `chunk_markdown`, `summarize_content`）；
+   - 支持多源入参兼容（例如同时支持直接传入 `url` 自动抓取，或传入本地 `html`/`text` 直接处理）。
+3. **长任务推流**：
+   - 针对爬虫（`crawl_site`）或并发流水线，必须通过标准 JSON-RPC 2.0 `$/progress` 持续推送当前处理进度与实时消息。
+
+---
+
+## 🧪 六、质量门禁与测试标准
+
+在向仓库提交任何代码之前，必须确保在工作区根目录下执行并通过以下检查：
+
+```bash
+# 1. 代码格式一致性检查 (禁止提交未格式化的代码)
+cargo fmt --all -- --check
+
+# 2. 严苛静态分析 (警告视为错误，强制 0 告警通过)
+cargo clippy --workspace --all-targets -- -D warnings
+
+# 3. 全工作区自动化测试全量通过
+cargo test --workspace
+
+# 4. 生产优化构建验证
+cargo build --release -p tkless-cli
+```
+
+---
+
+## 📝 七、Git 提交信息规范 (Commit Guidelines)
+
+遵循清晰、简明且规范的 Git 提交风格：
+
+- **语言**：使用中文精炼总结代码改动。
+- **标题行 (Subject Line)**：
+  - 尽量限制在 50 个字符以内；
+  - 首字母大写（英文）或祈使动词开头（如：`支持...`、`修复...`、`重构...`、`优化...`）；
+  - **末尾严禁添加任何标点符号**（如句号、感叹号）。
+- **正文 (Body - 可选)**：
+  - 仅在标题行无法完整表达上下文时补充，说明“为什么改”以及“核心影响”；
+  - 标题与正文之间空一行，单行字数折行限制在 72 字符以内。
+- **示例**：
+  - 好的示例：`支持表格提取与文档比对CLI子命令并增强REPL会话`
+  - 好的示例：`修复Linux交叉编译OpenSSL缺失并启用vendored静态编译`
+  - 避免的示例：`fix: bug.` 或 `更新代码`
