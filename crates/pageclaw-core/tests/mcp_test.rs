@@ -211,3 +211,51 @@ async fn test_mcp_protocol_lifecycle() {
     assert!(malformed_res.error.is_some());
     assert_eq!(malformed_res.error.unwrap().code, -32700);
 }
+
+#[tokio::test]
+async fn test_mcp_progress_notification_streaming() {
+    let engine = PageclawEngine::new().expect("Engine should initialize");
+    let cache = DocumentCache::memory_only(300);
+    let server = McpServer::new(engine, cache);
+
+    let (notify_tx, mut notify_rx) = tokio::sync::mpsc::unbounded_channel();
+
+    let batch_req = r#"{
+        "jsonrpc": "2.0",
+        "id": 11,
+        "method": "tools/call",
+        "params": {
+            "name": "batch_fetch_webpages",
+            "arguments": {
+                "urls": ["https://example.com/page1", "https://example.com/page2"]
+            },
+            "_meta": {
+                "progressToken": "batch-job-42"
+            }
+        }
+    }"#;
+
+    let res = server
+        .handle_message_with_notifier(batch_req, Some(&notify_tx))
+        .await
+        .expect("Should return response");
+
+    assert_eq!(res.id, serde_json::json!(11));
+
+    // Verify progress notifications were emitted
+    let mut notifications = Vec::new();
+    while let Ok(notif) = notify_rx.try_recv() {
+        notifications.push(notif);
+    }
+
+    assert_eq!(notifications.len(), 2);
+    assert_eq!(notifications[0]["method"], "notifications/progress");
+    assert_eq!(notifications[0]["params"]["progressToken"], "batch-job-42");
+    assert_eq!(notifications[0]["params"]["progress"], 1);
+    assert_eq!(notifications[0]["params"]["total"], 2);
+
+    assert_eq!(notifications[1]["method"], "notifications/progress");
+    assert_eq!(notifications[1]["params"]["progressToken"], "batch-job-42");
+    assert_eq!(notifications[1]["params"]["progress"], 2);
+    assert_eq!(notifications[1]["params"]["total"], 2);
+}

@@ -1,13 +1,17 @@
 pub mod bilibili;
+pub mod csdn;
 pub mod github;
 pub mod juejin;
+pub mod medium;
 pub mod wechat;
 pub mod xiaohongshu;
 pub mod zhihu;
 
 pub use bilibili::BilibiliAdapter;
+pub use csdn::CsdnAdapter;
 pub use github::GithubAdapter;
 pub use juejin::JuejinAdapter;
+pub use medium::MediumAdapter;
 pub use wechat::WechatAdapter;
 pub use xiaohongshu::XiaohongshuAdapter;
 pub use zhihu::ZhihuAdapter;
@@ -68,6 +72,8 @@ impl AdapterRegistry {
         registry.register(Arc::new(XiaohongshuAdapter::new()));
         registry.register(Arc::new(JuejinAdapter::new()));
         registry.register(Arc::new(GithubAdapter::new()));
+        registry.register(Arc::new(CsdnAdapter::new()));
+        registry.register(Arc::new(MediumAdapter::new()));
         registry
     }
 

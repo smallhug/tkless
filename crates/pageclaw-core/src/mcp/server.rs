@@ -15,6 +15,9 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tracing::{debug, error, info, warn};
 use url::Url;
 
+/// Type alias for an unbounded JSON notification sender used for MCP progress streaming and logging.
+pub type NotificationSender = tokio::sync::mpsc::UnboundedSender<Value>;
+
 /// In-memory and stdio Model Context Protocol (MCP) server for PageClaw.
 pub struct McpServer {
     engine: Arc<PageclawEngine>,
@@ -32,6 +35,15 @@ impl McpServer {
 
     /// Handles a single incoming JSON-RPC line and returns the appropriate response, if any.
     pub async fn handle_message(&self, line: &str) -> Option<JsonRpcResponse> {
+        self.handle_message_with_notifier(line, None).await
+    }
+
+    /// Handles a single incoming JSON-RPC line with optional progress/logging notification streaming.
+    pub async fn handle_message_with_notifier(
+        &self,
+        line: &str,
+        notifier: Option<&NotificationSender>,
+    ) -> Option<JsonRpcResponse> {
         let trimmed = line.trim().trim_matches('\u{feff}');
         if trimmed.is_empty() {
             return None;
@@ -58,7 +70,8 @@ impl McpServer {
                 let init_result = serde_json::json!({
                     "protocolVersion": "2024-11-05",
                     "capabilities": {
-                        "tools": {}
+                        "tools": {},
+                        "logging": {}
                     },
                     "serverInfo": {
                         "name": "pageclaw",
@@ -86,6 +99,10 @@ impl McpServer {
                     .get("arguments")
                     .cloned()
                     .unwrap_or(serde_json::json!({}));
+                let progress_token = params
+                    .get("_meta")
+                    .and_then(|m| m.get("progressToken"))
+                    .cloned();
 
                 let tool_result = match tool_name {
                     "fetch_webpage" => self.call_fetch_webpage(&arguments).await,
@@ -93,8 +110,18 @@ impl McpServer {
                     "search_bilibili" => self.call_search_bilibili(&arguments).await,
                     "download_media" => self.call_download_media(&arguments).await,
                     "web_search" => self.call_web_search(&arguments).await,
-                    "crawl_site" => self.call_crawl_site(&arguments).await,
-                    "batch_fetch_webpages" => self.call_batch_fetch_webpages(&arguments).await,
+                    "crawl_site" => {
+                        self.call_crawl_site(&arguments, notifier, progress_token.as_ref())
+                            .await
+                    }
+                    "batch_fetch_webpages" => {
+                        self.call_batch_fetch_webpages(
+                            &arguments,
+                            notifier,
+                            progress_token.as_ref(),
+                        )
+                        .await
+                    }
                     "clean_html" => self.call_clean_html(&arguments).await,
                     "login_platform" => self.call_login_platform(&arguments).await,
                     "scaffold_schema" => self.call_scaffold_schema(&arguments).await,
@@ -121,25 +148,47 @@ impl McpServer {
         }
     }
 
-    /// Asynchronous stdio loop reading requests from stdin and streaming responses to stdout.
+    /// Asynchronous stdio loop reading requests from stdin and streaming responses/notifications to stdout.
     pub async fn run_stdio(&self) -> Result<(), PageclawError> {
         info!("Starting PageClaw MCP Server (transport: stdio, protocol: 2024-11-05)");
 
+        let (stdout_tx, mut stdout_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+
+        let writer_handle = tokio::spawn(async move {
+            let mut stdout = tokio::io::stdout();
+            while let Some(line) = stdout_rx.recv().await {
+                if let Err(e) = stdout.write_all(line.as_bytes()).await {
+                    error!(error = %e, "Failed to write MCP response to stdout");
+                    break;
+                }
+                let _ = stdout.flush().await;
+            }
+        });
+
+        let (notify_tx, mut notify_rx) = tokio::sync::mpsc::unbounded_channel::<Value>();
+        let stdout_tx_notify = stdout_tx.clone();
+        let forwarder_handle = tokio::spawn(async move {
+            while let Some(notif) = notify_rx.recv().await {
+                if let Ok(mut json_line) = serde_json::to_string(&notif) {
+                    json_line.push('\n');
+                    let _ = stdout_tx_notify.send(json_line);
+                }
+            }
+        });
+
         let stdin = tokio::io::stdin();
-        let mut stdout = tokio::io::stdout();
         let reader = BufReader::new(stdin);
         let mut lines = reader.lines();
 
         while let Some(line) = lines.next_line().await.map_err(PageclawError::Io)? {
-            if let Some(response) = self.handle_message(&line).await {
+            if let Some(response) = self
+                .handle_message_with_notifier(&line, Some(&notify_tx))
+                .await
+            {
                 match serde_json::to_string(&response) {
                     Ok(mut json_line) => {
                         json_line.push('\n');
-                        stdout
-                            .write_all(json_line.as_bytes())
-                            .await
-                            .map_err(PageclawError::Io)?;
-                        stdout.flush().await.map_err(PageclawError::Io)?;
+                        let _ = stdout_tx.send(json_line);
                     }
                     Err(e) => {
                         error!(error = %e, "Failed to serialize JSON-RPC response");
@@ -147,6 +196,11 @@ impl McpServer {
                 }
             }
         }
+
+        drop(notify_tx);
+        drop(stdout_tx);
+        let _ = forwarder_handle.await;
+        let _ = writer_handle.await;
 
         info!("PageClaw MCP Server connection closed");
         Ok(())
@@ -678,6 +732,22 @@ impl McpServer {
                     format!("site:juejin.cn {clean}")
                 }
             }
+            "csdn" => {
+                let clean = query.trim();
+                if clean.starts_with("site:") {
+                    clean.to_string()
+                } else {
+                    format!("site:blog.csdn.net {clean}")
+                }
+            }
+            "medium" => {
+                let clean = query.trim();
+                if clean.starts_with("site:") {
+                    clean.to_string()
+                } else {
+                    format!("site:medium.com {clean}")
+                }
+            }
             _ => query.to_string(),
         };
 
@@ -793,7 +863,12 @@ impl McpServer {
         }
     }
 
-    async fn call_crawl_site(&self, args: &Value) -> McpToolCallResult {
+    async fn call_crawl_site(
+        &self,
+        args: &Value,
+        notifier: Option<&NotificationSender>,
+        progress_token: Option<&Value>,
+    ) -> McpToolCallResult {
         let seed_url = match args.get("seed_url").and_then(|v| v.as_str()) {
             Some(u) if !u.trim().is_empty() => u.trim(),
             _ => return McpToolCallResult::error("Missing required parameter 'seed_url'"),
@@ -888,8 +963,37 @@ impl McpServer {
             &self.engine
         };
 
-        match crate::crawler::crawl_site(engine_ref, seed_url, &crawl_options, &extraction_options)
-            .await
+        let notifier_clone = notifier.cloned();
+        let progress_token_clone = progress_token.cloned();
+
+        let on_progress = if let (Some(tx), Some(token)) = (notifier_clone, progress_token_clone) {
+            Some(
+                move |crawled_count: usize, max_pages: usize, current_url: &str| {
+                    let notif = serde_json::json!({
+                        "jsonrpc": "2.0",
+                        "method": "notifications/progress",
+                        "params": {
+                            "progressToken": token,
+                            "progress": crawled_count,
+                            "total": max_pages,
+                            "url": current_url
+                        }
+                    });
+                    let _ = tx.send(notif);
+                },
+            )
+        } else {
+            None
+        };
+
+        match crate::crawler::crawl_site_with_progress(
+            engine_ref,
+            seed_url,
+            &crawl_options,
+            &extraction_options,
+            on_progress,
+        )
+        .await
         {
             Ok(report) => match format {
                 OutputFormat::Json => match serde_json::to_string_pretty(&report) {
@@ -917,7 +1021,12 @@ impl McpServer {
         }
     }
 
-    async fn call_batch_fetch_webpages(&self, args: &Value) -> McpToolCallResult {
+    async fn call_batch_fetch_webpages(
+        &self,
+        args: &Value,
+        notifier: Option<&NotificationSender>,
+        progress_token: Option<&Value>,
+    ) -> McpToolCallResult {
         let urls = match args.get("urls").and_then(|v| v.as_array()) {
             Some(arr) if !arr.is_empty() => arr
                 .iter()
@@ -1008,6 +1117,7 @@ impl McpServer {
             ..Default::default()
         };
 
+        let total_urls = urls.len();
         let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(concurrency));
         let mut join_set = tokio::task::JoinSet::new();
 
@@ -1023,10 +1133,24 @@ impl McpServer {
             });
         }
 
+        let mut completed = 0;
         let mut results = Vec::new();
         while let Some(res) = join_set.join_next().await {
             if let Ok(item) = res {
                 results.push(item);
+            }
+            completed += 1;
+            if let (Some(tx), Some(token)) = (notifier, progress_token) {
+                let notif = serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "method": "notifications/progress",
+                    "params": {
+                        "progressToken": token,
+                        "progress": completed,
+                        "total": total_urls
+                    }
+                });
+                let _ = tx.send(notif);
             }
         }
         results.sort_by_key(|(idx, _, _)| *idx);

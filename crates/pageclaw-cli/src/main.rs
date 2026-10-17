@@ -345,6 +345,20 @@ async fn run(args: CliArgs) -> Result<()> {
             } else {
                 format!("site:juejin.cn {clean}")
             }
+        } else if search_args.csdn {
+            let clean = search_args.query.trim();
+            if clean.starts_with("site:") {
+                clean.to_string()
+            } else {
+                format!("site:blog.csdn.net {clean}")
+            }
+        } else if search_args.medium {
+            let clean = search_args.query.trim();
+            if clean.starts_with("site:") {
+                clean.to_string()
+            } else {
+                format!("site:medium.com {clean}")
+            }
         } else {
             search_args.query.clone()
         };
