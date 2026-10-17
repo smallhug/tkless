@@ -1,13 +1,15 @@
 use crate::error::TklessError;
 use crate::fetcher::Fetcher;
-use reqwest::header::{HeaderValue, COOKIE};
+use reqwest::header::{HeaderValue, CONTENT_RANGE, COOKIE, RANGE};
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::{BufWriter, Write};
-use std::path::Path;
-use std::sync::LazyLock;
+use std::io::{BufReader, BufWriter, Read, Write};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, LazyLock};
 use std::time::Duration;
-use tracing::debug;
+use tokio::task::JoinSet;
+use tracing::{debug, warn};
 use url::Url;
 
 static MD_IMAGE_REGEX: LazyLock<regex::Regex> =
@@ -32,16 +34,227 @@ pub struct DownloadOptions<'a> {
     pub referer: Option<&'a str>,
     pub cookie: Option<&'a str>,
     pub reporter: Option<&'a dyn DownloadProgressReporter>,
+    pub concurrency: Option<usize>,
 }
 
-/// Downloads a remote file in chunks with progress reporting and cleanup on failure.
+/// Downloads a remote file with optional multi-threaded Range chunking and progress reporting.
 pub async fn download_file(
     client: &reqwest::Client,
     options: DownloadOptions<'_>,
 ) -> Result<u64, TklessError> {
-    debug!(url = options.url, dest = %options.destination.display(), "Starting file download");
+    debug!(
+        url = options.url,
+        dest = %options.destination.display(),
+        concurrency = ?options.concurrency,
+        "Starting file download"
+    );
 
-    let mut request = client.get(options.url).timeout(Duration::from_secs(1800)); // Allow up to 30 minutes for large media file transfers
+    // Ensure parent directory exists
+    if let Some(parent) = options.destination.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent)?;
+        }
+    }
+
+    let concurrency = options.concurrency.unwrap_or(1);
+
+    // If concurrency > 1, attempt multi-connection HTTP Range chunked download
+    if concurrency > 1 {
+        if let Some(total_bytes) =
+            probe_range_support(client, options.url, options.referer, options.cookie).await
+        {
+            // Only perform multi-threaded range downloads for files >= 4MB
+            if total_bytes >= 4 * 1024 * 1024 {
+                debug!(
+                    total_bytes = total_bytes,
+                    concurrency = concurrency,
+                    "Target supports HTTP Range; launching multi-threaded concurrent download"
+                );
+                match download_file_concurrent(client, &options, total_bytes, concurrency).await {
+                    Ok(bytes) => return Ok(bytes),
+                    Err(e) => {
+                        warn!(
+                            error = %e,
+                            "Multi-threaded range download failed; falling back to single-stream download"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    // Default single-stream download
+    download_file_single_stream(client, options).await
+}
+
+/// Probes whether the remote server supports HTTP 206 Partial Content and returns the total file size.
+async fn probe_range_support(
+    client: &reqwest::Client,
+    url: &str,
+    referer: Option<&str>,
+    cookie: Option<&str>,
+) -> Option<u64> {
+    let mut req = client.get(url).timeout(Duration::from_secs(15));
+    if let Some(ref_url) = referer {
+        req = req.header("Referer", ref_url);
+    }
+    if let Some(cookie_str) = cookie {
+        if !cookie_str.trim().is_empty() {
+            if let Ok(hval) = HeaderValue::from_str(cookie_str.trim()) {
+                req = req.header(COOKIE, hval);
+            }
+        }
+    }
+    req = req.header(RANGE, "bytes=0-0");
+
+    let resp = req.send().await.ok()?;
+    if resp.status() == reqwest::StatusCode::PARTIAL_CONTENT {
+        if let Some(cr) = resp
+            .headers()
+            .get(CONTENT_RANGE)
+            .and_then(|v| v.to_str().ok())
+        {
+            if let Some(slash_pos) = cr.rfind('/') {
+                let total_str = &cr[slash_pos + 1..];
+                if let Ok(total) = total_str.parse::<u64>() {
+                    return Some(total);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Downloads a remote file concurrently in N byte ranges and stitches the parts sequentially.
+async fn download_file_concurrent(
+    client: &reqwest::Client,
+    options: &DownloadOptions<'_>,
+    total_bytes: u64,
+    concurrency: usize,
+) -> Result<u64, TklessError> {
+    let threads = concurrency.clamp(2, 16);
+    let chunk_size = total_bytes.div_ceil(threads as u64);
+
+    if let Some(reporter) = options.reporter {
+        reporter.on_start(Some(total_bytes));
+    }
+
+    let progress_counter = Arc::new(AtomicU64::new(0));
+    let mut part_files = Vec::new();
+    let mut join_set = JoinSet::new();
+
+    for i in 0..threads {
+        let start = i as u64 * chunk_size;
+        let end = std::cmp::min((i as u64 + 1) * chunk_size - 1, total_bytes - 1);
+        let part_path = PathBuf::from(format!("{}.part{}", options.destination.display(), i));
+        part_files.push(part_path.clone());
+
+        let client = client.clone();
+        let url = options.url.to_string();
+        let referer = options.referer.map(|s| s.to_string());
+        let cookie = options.cookie.map(|s| s.to_string());
+        let progress = Arc::clone(&progress_counter);
+
+        join_set.spawn(async move {
+            let mut req = client.get(&url).timeout(Duration::from_secs(1800));
+            if let Some(ref r) = referer {
+                req = req.header("Referer", r);
+            }
+            if let Some(ref c) = cookie {
+                if !c.trim().is_empty() {
+                    if let Ok(hval) = HeaderValue::from_str(c.trim()) {
+                        req = req.header(COOKIE, hval);
+                    }
+                }
+            }
+            req = req.header(RANGE, format!("bytes={start}-{end}"));
+
+            let mut resp = req.send().await.map_err(TklessError::Network)?;
+            let status = resp.status();
+            if !status.is_success() && status != reqwest::StatusCode::PARTIAL_CONTENT {
+                return Err(TklessError::AdapterError {
+                    platform: "downloader",
+                    message: format!("HTTP {} error for range {start}-{end}", status),
+                });
+            }
+
+            let file = File::create(&part_path).map_err(TklessError::Io)?;
+            let mut writer = BufWriter::with_capacity(512 * 1024, file);
+
+            while let Some(chunk) = resp.chunk().await.map_err(TklessError::Network)? {
+                writer.write_all(&chunk).map_err(TklessError::Io)?;
+                progress.fetch_add(chunk.len() as u64, Ordering::Relaxed);
+            }
+            writer.flush().map_err(TklessError::Io)?;
+            Ok::<(), TklessError>(())
+        });
+    }
+
+    // Monitor progress reporting while tasks are downloading
+    while let Some(res) = join_set.join_next().await {
+        match res {
+            Ok(Ok(())) => {
+                if let Some(reporter) = options.reporter {
+                    let cur = progress_counter.load(Ordering::Relaxed);
+                    reporter.on_progress(cur, Some(total_bytes));
+                }
+            }
+            Ok(Err(err)) => {
+                cleanup_part_files(&part_files);
+                return Err(err);
+            }
+            Err(join_err) => {
+                cleanup_part_files(&part_files);
+                return Err(TklessError::AdapterError {
+                    platform: "downloader",
+                    message: format!("Concurrent download task panicked: {join_err}"),
+                });
+            }
+        }
+    }
+
+    // Stitch all part files sequentially into the final destination
+    let final_file = File::create(options.destination)?;
+    let mut final_writer = BufWriter::with_capacity(1024 * 1024, final_file);
+    let mut assembled_bytes: u64 = 0;
+    let mut buffer = vec![0u8; 512 * 1024];
+
+    for part_path in &part_files {
+        let part_file = File::open(part_path)?;
+        let mut part_reader = BufReader::new(part_file);
+        loop {
+            let n = part_reader.read(&mut buffer)?;
+            if n == 0 {
+                break;
+            }
+            final_writer.write_all(&buffer[..n])?;
+            assembled_bytes += n as u64;
+        }
+    }
+    final_writer.flush()?;
+
+    // Clean up temporary part files
+    cleanup_part_files(&part_files);
+
+    if let Some(reporter) = options.reporter {
+        reporter.on_finish(assembled_bytes);
+    }
+
+    Ok(assembled_bytes)
+}
+
+fn cleanup_part_files(part_files: &[PathBuf]) {
+    for part in part_files {
+        let _ = std::fs::remove_file(part);
+    }
+}
+
+/// Fallback single-stream file download.
+async fn download_file_single_stream(
+    client: &reqwest::Client,
+    options: DownloadOptions<'_>,
+) -> Result<u64, TklessError> {
+    let mut request = client.get(options.url).timeout(Duration::from_secs(1800));
     if let Some(ref_url) = options.referer {
         request = request.header("Referer", ref_url);
     }
@@ -67,15 +280,8 @@ pub async fn download_file(
         reporter.on_start(total_bytes);
     }
 
-    // Ensure parent directory exists
-    if let Some(parent) = options.destination.parent() {
-        if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent)?;
-        }
-    }
-
     let file = File::create(options.destination)?;
-    let mut writer = BufWriter::new(file);
+    let mut writer = BufWriter::with_capacity(1024 * 1024, file);
     let mut downloaded_bytes: u64 = 0;
 
     let download_result: Result<(), TklessError> = async {
@@ -100,7 +306,6 @@ pub async fn download_file(
             Ok(downloaded_bytes)
         }
         Err(err) => {
-            // Remove incomplete file on error
             drop(writer);
             let _ = std::fs::remove_file(options.destination);
             Err(err)

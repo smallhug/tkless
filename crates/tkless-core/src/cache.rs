@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{BufReader, BufWriter};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{debug, warn};
@@ -53,11 +53,14 @@ impl DocumentCache {
         if let Some(ref p) = dir {
             let _ = fs::create_dir_all(p);
         }
-        Self {
+        let cache = Self {
             memory: Arc::new(RwLock::new(HashMap::new())),
             cache_dir: dir,
             default_ttl_secs: default_ttl_secs.max(1),
-        }
+        };
+        // Automatically prune expired cache files on initialization to prevent disk bloat
+        cache.prune_expired();
+        cache
     }
 
     /// Creates an in-memory-only cache without filesystem persistence.
@@ -356,11 +359,49 @@ fn current_time_secs() -> u64 {
 }
 
 fn resolve_default_cache_dir() -> Option<PathBuf> {
-    let local = Path::new(".tkless_cache");
-    if fs::create_dir_all(local).is_ok() {
-        return Some(local.to_path_buf());
+    // 1. Windows: %LOCALAPPDATA%\tkless\cache
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
+            let path = PathBuf::from(local_app_data).join("tkless").join("cache");
+            if fs::create_dir_all(&path).is_ok() {
+                return Some(path);
+            }
+        }
     }
-    let temp = std::env::temp_dir().join("tkless_cache");
+
+    // 2. macOS: ~/Library/Caches/tkless
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(home) = std::env::var("HOME") {
+            let path = PathBuf::from(home)
+                .join("Library")
+                .join("Caches")
+                .join("tkless");
+            if fs::create_dir_all(&path).is_ok() {
+                return Some(path);
+            }
+        }
+    }
+
+    // 3. Linux / Unix: $XDG_CACHE_HOME/tkless or ~/.cache/tkless
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        if let Ok(xdg_cache) = std::env::var("XDG_CACHE_HOME") {
+            let path = PathBuf::from(xdg_cache).join("tkless");
+            if fs::create_dir_all(&path).is_ok() {
+                return Some(path);
+            }
+        } else if let Ok(home) = std::env::var("HOME") {
+            let path = PathBuf::from(home).join(".cache").join("tkless");
+            if fs::create_dir_all(&path).is_ok() {
+                return Some(path);
+            }
+        }
+    }
+
+    // 4. Universal fallback across all operating systems: system temp directory
+    let temp = std::env::temp_dir().join("tkless").join("cache");
     let _ = fs::create_dir_all(&temp);
     Some(temp)
 }
