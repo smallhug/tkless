@@ -669,6 +669,10 @@ pub fn detect_platform_from_host(host: &str) -> Option<&'static str> {
         Some("huggingface")
     } else if is_subdomain_or_exact(&host_lower, "wikipedia.org") {
         Some("wikipedia")
+    } else if is_subdomain_or_exact(&host_lower, "reddit.com")
+        || is_subdomain_or_exact(&host_lower, "redd.it")
+    {
+        Some("reddit")
     } else {
         None
     }
@@ -1030,6 +1034,14 @@ mod tests {
             detect_platform_from_url("https://zh.wikipedia.org/wiki/AI"),
             Some("wikipedia")
         );
+        assert_eq!(
+            detect_platform_from_url("https://www.reddit.com/r/rust/comments/123/rust_news/"),
+            Some("reddit")
+        );
+        assert_eq!(
+            detect_platform_from_url("https://redd.it/123"),
+            Some("reddit")
+        );
 
         // Security check: spoofed / typosquatted domains MUST NOT leak cookies!
         assert_eq!(
@@ -1058,6 +1070,10 @@ mod tests {
         );
         assert_eq!(
             detect_platform_from_url("https://evilwikipedia.org/wiki/Fake"),
+            None
+        );
+        assert_eq!(
+            detect_platform_from_url("https://evilreddit.com/r/rust/comments/123"),
             None
         );
         assert_eq!(

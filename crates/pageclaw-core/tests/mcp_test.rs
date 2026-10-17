@@ -297,6 +297,28 @@ async fn test_mcp_protocol_lifecycle() {
     assert!(auth_text.contains("ZHIHU"));
     assert!(auth_text.contains("完整登录态"));
 
+    // 5l. Tool Call: clean_html with summarize
+    let sum_req = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 16,
+        "method": "tools/call",
+        "params": {
+            "name": "clean_html",
+            "arguments": {
+                "html": "<article><h1>Rust AI Engineering</h1><p>Rust provides zero-cost abstractions, strong memory safety, and thread concurrency.</p><p>PageClaw delivers sub-millisecond local web content extraction for intelligent AI agents.</p><p>Extractive summarization distills key takeaway bullet points without external model API calls.</p></article>",
+                "summarize": true
+            }
+        }
+    });
+    let sum_res = server
+        .handle_message(&sum_req.to_string())
+        .await
+        .expect("Should return response");
+    let sum_val = sum_res.result.expect("Summarize result should be present");
+    let sum_text = sum_val["content"][0]["text"].as_str().unwrap();
+    assert!(sum_text.contains("核心要点速览 (Key Takeaways)"));
+    assert!(sum_text.contains("- "));
+
     // 5. Unknown Method Error
     let unknown_req = r#"{"jsonrpc":"2.0","id":4,"method":"unknown/method"}"#;
     let unknown_res = server

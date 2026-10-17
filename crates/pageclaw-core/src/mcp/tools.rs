@@ -221,6 +221,11 @@ pub fn get_available_tools() -> Vec<McpTool> {
                         "type": "boolean",
                         "default": false,
                         "description": "Whether to automatically detect anti-scraping challenges (Cloudflare, captcha) and fall back to CDP headless rendering"
+                    },
+                    "summarize": {
+                        "type": "boolean",
+                        "default": false,
+                        "description": "Whether to extract and prepend local heuristic key takeaways / summary bullet points"
                     }
                 },
                 "required": ["url"]
@@ -359,9 +364,9 @@ pub fn get_available_tools() -> Vec<McpTool> {
                     },
                     "scope": {
                         "type": "string",
-                        "enum": ["all", "wechat", "zhihu", "github", "juejin", "csdn", "medium", "substack", "arxiv", "huggingface"],
+                        "enum": ["all", "wechat", "zhihu", "github", "juejin", "csdn", "medium", "substack", "arxiv", "huggingface", "wikipedia", "reddit"],
                         "default": "all",
-                        "description": "Search scope limitation: 'all' (entire web), 'wechat' (WeChat Official Accounts), 'zhihu' (Zhihu questions and articles), 'github' (GitHub repositories and issues), 'juejin' (Juejin tech posts), 'csdn' (CSDN blog posts), 'medium' (Medium articles), 'substack' (Substack newsletters), 'arxiv' (arXiv research papers), or 'huggingface' (Hugging Face models, papers, blogs)"
+                        "description": "Search scope limitation: 'all' (entire web), 'wechat' (WeChat Official Accounts), 'zhihu' (Zhihu questions and articles), 'github' (GitHub repositories and issues), 'juejin' (Juejin tech posts), 'csdn' (CSDN blog posts), 'medium' (Medium articles), 'substack' (Substack newsletters), 'arxiv' (arXiv research papers), 'huggingface' (Hugging Face models, papers, blogs), 'wikipedia' (Wikipedia articles), or 'reddit' (Reddit discussions)"
                     },
                     "dedup": {
                         "type": "boolean",
@@ -625,6 +630,11 @@ pub fn get_available_tools() -> Vec<McpTool> {
                         "type": "boolean",
                         "default": false,
                         "description": "Whether to compute and include telemetry performance and token economy metrics"
+                    },
+                    "summarize": {
+                        "type": "boolean",
+                        "default": false,
+                        "description": "Whether to extract and prepend local heuristic key takeaways / summary bullet points"
                     }
                 },
                 "required": ["html"]
