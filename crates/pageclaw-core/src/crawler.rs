@@ -31,6 +31,8 @@ pub struct CrawlOptions {
     pub sitemap: bool,
     /// Automatically skip near-duplicate pages based on 64-bit SimHash Hamming distance.
     pub dedup: bool,
+    /// Delay between consecutive page requests in milliseconds to respect rate limits [default: 0].
+    pub delay_ms: u64,
 }
 
 impl Default for CrawlOptions {
@@ -47,6 +49,7 @@ impl Default for CrawlOptions {
             ],
             sitemap: false,
             dedup: false,
+            delay_ms: 0,
         }
     }
 }
@@ -268,6 +271,10 @@ where
                     cb(crawled_pages.len(), crawl_options.max_pages, &url_str);
                 }
             }
+        }
+
+        if crawl_options.delay_ms > 0 {
+            tokio::time::sleep(std::time::Duration::from_millis(crawl_options.delay_ms)).await;
         }
     }
 

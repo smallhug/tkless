@@ -661,6 +661,7 @@ async fn run(args: CliArgs) -> Result<()> {
             exclude_patterns: pageclaw_core::CrawlOptions::default().exclude_patterns,
             sitemap: crawl_args.sitemap,
             dedup: crawl_args.dedup,
+            delay_ms: crawl_args.delay_ms,
         };
 
         let mut crawl_extraction_options = extraction_options.clone();
@@ -950,6 +951,21 @@ async fn run(args: CliArgs) -> Result<()> {
                 eprintln!("----------------------------------------------------------\n");
             }
         }
+    }
+
+    // Multi-file directory export divided by headings if --out-dir is specified
+    if let Some(ref out_dir) = args.out_dir {
+        let sections = pageclaw_core::split_markdown_by_headings(&doc.content, 2);
+        let _written =
+            pageclaw_core::export_sections_to_dir(&sections, out_dir, doc.title.as_deref())?;
+        if !args.quiet {
+            eprintln!(
+                "[PageClaw] Successfully exported {} sections and index.md to: {}",
+                sections.len(),
+                out_dir.display()
+            );
+        }
+        return Ok(());
     }
 
     // Write final content to stdout or designated file

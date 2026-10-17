@@ -479,6 +479,11 @@ pub fn get_available_tools() -> Vec<McpTool> {
                         "enum": ["markdown", "json", "jsonl"],
                         "default": "markdown",
                         "description": "Output presentation format: 'markdown' (assembled knowledge base with TOC), 'json', or 'jsonl' (line-delimited JSON for RAG vector databases)"
+                    },
+                    "delay_ms": {
+                        "type": "integer",
+                        "default": 0,
+                        "description": "Inter-request delay in milliseconds between crawled pages to respect server rate limits"
                     }
                 },
                 "required": ["seed_url"]
@@ -538,6 +543,11 @@ pub fn get_available_tools() -> Vec<McpTool> {
                         "type": "boolean",
                         "default": false,
                         "description": "Whether to emulate a mobile browser User-Agent during batch fetching"
+                    },
+                    "delay_ms": {
+                        "type": "integer",
+                        "default": 0,
+                        "description": "Inter-request delay in milliseconds between batch requests to respect server rate limits"
                     }
                 },
                 "required": ["urls"]
@@ -838,6 +848,25 @@ pub fn get_available_tools() -> Vec<McpTool> {
                     }
                 },
                 "required": ["text"]
+            }),
+        },
+        McpTool {
+            name: "split_document".to_string(),
+            description: "Splits a monolithic Markdown document into modular sections by heading hierarchy (# or ##) for RAG vector indexing or multi-file export.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "markdown": {
+                        "type": "string",
+                        "description": "Raw Markdown document string to split by headings"
+                    },
+                    "max_heading_level": {
+                        "type": "integer",
+                        "default": 2,
+                        "description": "Maximum heading depth level to split on (1 for # only, 2 for # and ##, 3 for #, ##, ###; default: 2)"
+                    }
+                },
+                "required": ["markdown"]
             }),
         }
     ]
