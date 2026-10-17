@@ -214,6 +214,8 @@ pub struct ExtractionOptions {
     pub table_format: TableExportFormat,
     /// Whether to measure and compute detailed telemetry and token economy metrics.
     pub stats: bool,
+    /// Whether to automatically detect anti-scraping challenges (Cloudflare, captcha) and fallback to CDP headless rendering.
+    pub auto_cdp: bool,
 }
 
 impl Default for ExtractionOptions {
@@ -252,6 +254,7 @@ impl Default for ExtractionOptions {
             tables_only: false,
             table_format: TableExportFormat::default(),
             stats: false,
+            auto_cdp: false,
         }
     }
 }

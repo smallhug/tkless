@@ -431,8 +431,22 @@ pub fn format_crawl_report_markdown(report: &SiteCrawlReport) -> String {
     out
 }
 
-fn slugify(text: &str) -> String {
-    text.chars()
+/// Formats the crawled pages report into line-delimited JSON (JSONL / ndjson)
+/// for streaming ingestion into vector databases and RAG knowledge pipelines.
+pub fn format_crawl_report_jsonl(report: &SiteCrawlReport) -> String {
+    let mut out = String::new();
+    for page in &report.pages {
+        if let Ok(line) = serde_json::to_string(page) {
+            out.push_str(&line);
+            out.push('\n');
+        }
+    }
+    out
+}
+
+fn slugify(title: &str) -> String {
+    title
+        .chars()
         .map(|c| {
             if c.is_alphanumeric() {
                 c.to_ascii_lowercase()

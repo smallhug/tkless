@@ -389,6 +389,10 @@ impl McpServer {
             _ => TableExportFormat::Markdown,
         };
         let stats = args.get("stats").and_then(|v| v.as_bool()).unwrap_or(false);
+        let auto_cdp = args
+            .get("auto_cdp")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
 
         let options = ExtractionOptions {
             mode,
@@ -424,6 +428,7 @@ impl McpServer {
             table_format,
             stats,
             remove_selector,
+            auto_cdp,
         };
 
         let initial_target_host = Url::parse(url.as_str())
@@ -911,6 +916,7 @@ impl McpServer {
             .unwrap_or(false);
         let dedup = args.get("dedup").and_then(|v| v.as_bool()).unwrap_or(false);
 
+        let is_jsonl = args.get("format").and_then(|v| v.as_str()) == Some("jsonl");
         let format = match args.get("format").and_then(|v| v.as_str()) {
             Some("json") => OutputFormat::Json,
             _ => OutputFormat::Markdown,
@@ -1012,28 +1018,36 @@ impl McpServer {
         )
         .await
         {
-            Ok(report) => match format {
-                OutputFormat::Json => match serde_json::to_string_pretty(&report) {
-                    Ok(json_str) => McpToolCallResult::success(json_str),
-                    Err(e) => McpToolCallResult::error(format!("Failed to serialize JSON: {e}")),
-                },
-                _ => {
-                    let mut md = crate::crawler::format_crawl_report_markdown(&report);
-                    if let Some(limit) = max_tokens {
-                        let current_tokens =
-                            crate::token::count_tokens(&md, TokenizerKind::default());
-                        if current_tokens > limit {
-                            let (truncated_md, _) = crate::token::truncate_to_tokens(
-                                &md,
-                                limit,
-                                TokenizerKind::default(),
-                            );
-                            md = truncated_md;
+            Ok(report) => {
+                if is_jsonl {
+                    McpToolCallResult::success(crate::crawler::format_crawl_report_jsonl(&report))
+                } else {
+                    match format {
+                        OutputFormat::Json => match serde_json::to_string_pretty(&report) {
+                            Ok(json_str) => McpToolCallResult::success(json_str),
+                            Err(e) => {
+                                McpToolCallResult::error(format!("Failed to serialize JSON: {e}"))
+                            }
+                        },
+                        _ => {
+                            let mut md = crate::crawler::format_crawl_report_markdown(&report);
+                            if let Some(limit) = max_tokens {
+                                let current_tokens =
+                                    crate::token::count_tokens(&md, TokenizerKind::default());
+                                if current_tokens > limit {
+                                    let (truncated_md, _) = crate::token::truncate_to_tokens(
+                                        &md,
+                                        limit,
+                                        TokenizerKind::default(),
+                                    );
+                                    md = truncated_md;
+                                }
+                            }
+                            McpToolCallResult::success(md)
                         }
                     }
-                    McpToolCallResult::success(md)
                 }
-            },
+            }
             Err(e) => McpToolCallResult::error(format!("Site crawl failed: {e}")),
         }
     }

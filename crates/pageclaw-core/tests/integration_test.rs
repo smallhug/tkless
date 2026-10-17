@@ -573,3 +573,46 @@ fn test_integration_extraction_metrics_telemetry() {
     );
     assert_eq!(metrics.final_token_count, doc.token_count);
 }
+
+#[test]
+fn test_integration_rss_feed_parsing_and_markdown() {
+    let engine = PageclawEngine::new().expect("Failed to initialize engine");
+
+    let sample_rss = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rss version="2.0">
+            <channel>
+                <title>Rust Security Announcements</title>
+                <link>https://blog.rust-lang.org</link>
+                <description>Official security advisories and release notes.</description>
+                <item>
+                    <title>Security Advisory 2026-01</title>
+                    <link>https://blog.rust-lang.org/2026/01/adv.html</link>
+                    <pubDate>Wed, 14 Jan 2026 12:00:00 GMT</pubDate>
+                    <creator>Rust Security WG</creator>
+                    <description>Critical vulnerability remediation details.</description>
+                </item>
+            </channel>
+        </rss>
+    "#;
+
+    let doc = engine
+        .process_html(
+            sample_rss,
+            Some("https://blog.rust-lang.org/feed.xml"),
+            &ExtractionOptions::default(),
+        )
+        .expect("Failed to process RSS feed XML");
+
+    assert_eq!(doc.title.as_deref(), Some("Rust Security Announcements"));
+    assert!(doc
+        .content
+        .contains("# 📰 订阅源聚合 (RSS): Rust Security Announcements"));
+    assert!(doc.content.contains("Security Advisory 2026-01"));
+    assert!(doc.content.contains("Rust Security WG"));
+    assert!(doc
+        .content
+        .contains("https://blog.rust-lang.org/2026/01/adv.html"));
+    assert!(doc
+        .content
+        .contains("Critical vulnerability remediation details."));
+}

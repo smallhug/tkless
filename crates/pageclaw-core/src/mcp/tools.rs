@@ -216,6 +216,11 @@ pub fn get_available_tools() -> Vec<McpTool> {
                         "type": "boolean",
                         "default": false,
                         "description": "Whether to compute and include telemetry performance and token economy metrics"
+                    },
+                    "auto_cdp": {
+                        "type": "boolean",
+                        "default": false,
+                        "description": "Whether to automatically detect anti-scraping challenges (Cloudflare, captcha) and fall back to CDP headless rendering"
                     }
                 },
                 "required": ["url"]
@@ -466,9 +471,9 @@ pub fn get_available_tools() -> Vec<McpTool> {
                     },
                     "format": {
                         "type": "string",
-                        "enum": ["markdown", "json"],
+                        "enum": ["markdown", "json", "jsonl"],
                         "default": "markdown",
-                        "description": "Output presentation format: 'markdown' (assembled knowledge base with TOC) or 'json'"
+                        "description": "Output presentation format: 'markdown' (assembled knowledge base with TOC), 'json', or 'jsonl' (line-delimited JSON for RAG vector databases)"
                     }
                 },
                 "required": ["seed_url"]

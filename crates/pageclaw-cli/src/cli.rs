@@ -14,6 +14,8 @@ pub enum CliFormat {
     Html,
     /// Raw unmodified HTML
     Raw,
+    /// Line-delimited JSON (JSONL / ndjson) for streaming RAG vector database ingestion
+    Jsonl,
 }
 
 impl From<CliFormat> for OutputFormat {
@@ -24,6 +26,7 @@ impl From<CliFormat> for OutputFormat {
             CliFormat::Text => OutputFormat::Text,
             CliFormat::Html => OutputFormat::Html,
             CliFormat::Raw => OutputFormat::Raw,
+            CliFormat::Jsonl => OutputFormat::Json,
         }
     }
 }
@@ -570,6 +573,10 @@ pub struct CliArgs {
         help_heading = "网络与身份认证 (Network & Auth)"
     )]
     pub cdp_wait_ms: Option<u64>,
+
+    /// 自动探测 Cloudflare / 验证码等反爬挑战，受阻时自动降级到 CDP 无头浏览器渲染
+    #[arg(long = "auto-cdp", help_heading = "网络与身份认证 (Network & Auth)")]
+    pub auto_cdp: bool,
 
     /// Do not fail with non-zero exit code on HTTP 4xx or 5xx error responses (returns body with exit 0)
     #[arg(
