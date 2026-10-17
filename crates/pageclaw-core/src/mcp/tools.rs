@@ -350,9 +350,14 @@ pub fn get_available_tools() -> Vec<McpTool> {
                     },
                     "scope": {
                         "type": "string",
-                        "enum": ["all", "wechat", "zhihu", "github", "juejin", "csdn", "medium"],
+                        "enum": ["all", "wechat", "zhihu", "github", "juejin", "csdn", "medium", "substack"],
                         "default": "all",
-                        "description": "Search scope limitation: 'all' (entire web), 'wechat' (WeChat Official Accounts), 'zhihu' (Zhihu questions and articles), 'github' (GitHub repositories and issues), 'juejin' (Juejin tech posts), 'csdn' (CSDN blog posts), or 'medium' (Medium articles)"
+                        "description": "Search scope limitation: 'all' (entire web), 'wechat' (WeChat Official Accounts), 'zhihu' (Zhihu questions and articles), 'github' (GitHub repositories and issues), 'juejin' (Juejin tech posts), 'csdn' (CSDN blog posts), 'medium' (Medium articles), or 'substack' (Substack newsletters)"
+                    },
+                    "dedup": {
+                        "type": "boolean",
+                        "default": false,
+                        "description": "Whether to filter out near-duplicate and mirror pages using 64-bit SimHash when fetch_content is enabled"
                     },
                     "fetch_content": {
                         "type": "boolean",
@@ -657,6 +662,29 @@ pub fn get_available_tools() -> Vec<McpTool> {
                         "description": "Optional Chrome DevTools Protocol endpoint (e.g. 'http://127.0.0.1:9222') for JS-rendered dynamic pages"
                     }
                 }
+            }),
+        },
+        McpTool {
+            name: "compare_similarity".to_string(),
+            description: "Calculates the 64-bit SimHash and Hamming distance between two texts (or HTML snippets) to detect near-duplicates, syndicated copies, or plagiarism (Hamming distance <= 3 is considered a near-duplicate).".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "text1": {
+                        "type": "string",
+                        "description": "First text or HTML string"
+                    },
+                    "text2": {
+                        "type": "string",
+                        "description": "Second text or HTML string"
+                    },
+                    "max_hamming_distance": {
+                        "type": "integer",
+                        "default": 3,
+                        "description": "Maximum Hamming distance threshold to qualify as near-duplicate (default: 3)"
+                    }
+                },
+                "required": ["text1", "text2"]
             }),
         }
     ]

@@ -359,6 +359,13 @@ async fn run(args: CliArgs) -> Result<()> {
             } else {
                 format!("site:medium.com {clean}")
             }
+        } else if search_args.substack {
+            let clean = search_args.query.trim();
+            if clean.starts_with("site:") {
+                clean.to_string()
+            } else {
+                format!("site:substack.com {clean}")
+            }
         } else {
             search_args.query.clone()
         };
@@ -377,6 +384,7 @@ async fn run(args: CliArgs) -> Result<()> {
                 search_args.engine.into(),
                 &search_opts,
                 search_args.max_tokens_per_page,
+                search_args.dedup,
             )
             .await
             .context("Failed to perform search and fetch")?;

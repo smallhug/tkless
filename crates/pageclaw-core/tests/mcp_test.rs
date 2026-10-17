@@ -42,7 +42,7 @@ async fn test_mcp_protocol_lifecycle() {
     let tools_array = tools_val["tools"]
         .as_array()
         .expect("Tools should be an array");
-    assert_eq!(tools_array.len(), 10);
+    assert_eq!(tools_array.len(), 11);
 
     let tool_names: Vec<&str> = tools_array
         .iter()
@@ -58,6 +58,7 @@ async fn test_mcp_protocol_lifecycle() {
     assert!(tool_names.contains(&"clean_html"));
     assert!(tool_names.contains(&"login_platform"));
     assert!(tool_names.contains(&"scaffold_schema"));
+    assert!(tool_names.contains(&"compare_similarity"));
 
     // Verify web_search schema contains scope, cdp_endpoint, schema
     let search_tool = tools_array
@@ -70,6 +71,7 @@ async fn test_mcp_protocol_lifecycle() {
     assert!(search_props.get("schema").is_some());
     assert!(search_props.get("proxy").is_some());
     assert!(search_props.get("mobile").is_some());
+    assert!(search_props.get("dedup").is_some());
 
     // Verify crawl_site schema contains max_tokens, cdp_endpoint, schema, sitemap, dedup, proxy, mobile
     let crawl_tool = tools_array
@@ -192,6 +194,18 @@ async fn test_mcp_protocol_lifecycle() {
     assert!(table_text.contains("Product,Price"));
     assert!(table_text.contains("Widget A,100"));
     assert!(!table_text.contains("Unwanted article text"));
+
+    // 5g. Tool Call: compare_similarity
+    let sim_req = r#"{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"compare_similarity","arguments":{"text1":"PageClaw is a high-performance, token-efficient web content extraction engine designed specifically for Large Language Models and AI Agents. It removes navigation bars, scripts, advertisements, and boilerplate using heuristic algorithms, converting the core content into LLM-optimized Markdown. Native adapters for Bilibili, WeChat, Zhihu, and GitHub are supported out of the box with zero overhead.","text2":"PageClaw is a high-performance, token-efficient web content extraction engine designed specifically for Large Language Models and AI Agents. It removes navigation bars, scripts, advertisements, and boilerplate using heuristic algorithms, converting the core content into LLM-optimized Markdown. Native adapters for Bilibili, WeChat, Zhihu, and GitHub are supported out of the box with low memory."}}}"#;
+    let sim_res = server
+        .handle_message(sim_req)
+        .await
+        .expect("Should return response");
+    let sim_val = sim_res.result.expect("Similarity result should be present");
+    let sim_text = sim_val["content"][0]["text"].as_str().unwrap();
+    let parsed_sim: serde_json::Value = serde_json::from_str(sim_text).unwrap();
+    assert_eq!(parsed_sim["is_near_duplicate"], true);
+    assert!(parsed_sim["hamming_distance"].as_u64().unwrap() <= 3);
 
     // 5. Unknown Method Error
     let unknown_req = r#"{"jsonrpc":"2.0","id":4,"method":"unknown/method"}"#;

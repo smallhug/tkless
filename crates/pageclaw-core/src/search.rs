@@ -59,6 +59,7 @@ pub async fn web_search_and_fetch(
     search_engine: SearchEngineKind,
     base_options: &ExtractionOptions,
     max_tokens_per_page: Option<usize>,
+    dedup: bool,
 ) -> Result<Vec<SearchFetchItem>, PageclawError> {
     let clean_query = query.trim();
     if clean_query.is_empty() {
@@ -138,6 +139,27 @@ pub async fn web_search_and_fetch(
 
     // Sort by original search rank to preserve ranking order
     fetched_items.sort_by_key(|item| item.rank);
+
+    if dedup {
+        let mut seen_simhashes: Vec<u64> = Vec::new();
+        let mut deduplicated = Vec::new();
+        for item in fetched_items {
+            if let Some(ref text) = item.content {
+                let h = crate::dedup::simhash(text);
+                if seen_simhashes
+                    .iter()
+                    .any(|&prev| crate::dedup::is_near_duplicate(prev, h, 3))
+                {
+                    debug!(url = %item.url, "Filtered out near-duplicate search result via SimHash");
+                    continue;
+                }
+                seen_simhashes.push(h);
+            }
+            deduplicated.push(item);
+        }
+        return Ok(deduplicated);
+    }
+
     Ok(fetched_items)
 }
 
@@ -602,5 +624,78 @@ mod tests {
 
         let direct_url = "https://example.com/page";
         assert_eq!(unwrap_google_url(direct_url), "https://example.com/page");
+    }
+
+    #[test]
+    fn test_search_simhash_deduplication() {
+        let text_orig = r#"
+            PageClaw is a high-performance, token-efficient web content extraction engine designed specifically
+            for Large Language Models and AI Agents. It removes navigation bars, scripts, advertisements, and
+            boilerplate using heuristic algorithms, converting the core content into LLM-optimized Markdown.
+            Native adapters for Bilibili, WeChat, Zhihu, and GitHub are supported out of the box with zero overhead.
+        "#;
+        let text_mirror = r#"
+            PageClaw is a high-performance, token-efficient web content extraction engine designed specifically
+            for Large Language Models and AI Agents. It removes navigation bars, scripts, advertisements, and
+            boilerplate using heuristic algorithms, converting the core content into LLM-optimized Markdown.
+            Native adapters for Bilibili, WeChat, Zhihu, and GitHub are supported out of the box with low memory.
+        "#;
+        let text_diff = "Tokio is an asynchronous runtime for the Rust programming language, providing event-driven non-blocking I/O.";
+
+        let items = vec![
+            SearchFetchItem {
+                rank: 1,
+                title: "Original Post".to_string(),
+                url: "https://example.com/original".to_string(),
+                snippet: "Snippet 1".to_string(),
+                engine: "bing".to_string(),
+                content: Some(text_orig.to_string()),
+                token_count: 50,
+                status: 200,
+                error: None,
+            },
+            SearchFetchItem {
+                rank: 2,
+                title: "Mirror Site Copy".to_string(),
+                url: "https://mirror.example/repost".to_string(),
+                snippet: "Snippet 2".to_string(),
+                engine: "bing".to_string(),
+                content: Some(text_mirror.to_string()),
+                token_count: 50,
+                status: 200,
+                error: None,
+            },
+            SearchFetchItem {
+                rank: 3,
+                title: "Different Subject".to_string(),
+                url: "https://tokio.rs/overview".to_string(),
+                snippet: "Snippet 3".to_string(),
+                engine: "bing".to_string(),
+                content: Some(text_diff.to_string()),
+                token_count: 40,
+                status: 200,
+                error: None,
+            },
+        ];
+
+        let mut seen = Vec::new();
+        let mut deduped = Vec::new();
+        for item in items {
+            if let Some(ref text) = item.content {
+                let h = crate::dedup::simhash(text);
+                if seen
+                    .iter()
+                    .any(|&prev| crate::dedup::is_near_duplicate(prev, h, 3))
+                {
+                    continue;
+                }
+                seen.push(h);
+            }
+            deduped.push(item);
+        }
+
+        assert_eq!(deduped.len(), 2);
+        assert_eq!(deduped[0].url, "https://example.com/original");
+        assert_eq!(deduped[1].url, "https://tokio.rs/overview");
     }
 }
