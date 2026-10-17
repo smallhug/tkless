@@ -376,7 +376,7 @@ fn test_integration_schema_driven_entity_extraction() {
 #[tokio::test]
 async fn test_integration_cdp_connection_failure_actionable_error() {
     let cdp_options = tkless_core::cdp::CdpOptions {
-        endpoint: "http://127.0.0.1:59999".to_string(), // Unused port
+        endpoint: "http://192.0.2.1:59999".to_string(), // Unreachable remote IP (TEST-NET)
         wait_ms: Some(100),
         timeout_ms: Some(5000),
         user_agent: None,

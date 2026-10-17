@@ -61,8 +61,9 @@ pub use schema::{
     ScaffoldReport,
 };
 pub use search::{
-    format_search_fetch_markdown, format_search_results_markdown, search_bing,
-    search_bing_with_options, web_search, web_search_and_fetch, web_search_with_engine,
+    format_search_fetch_markdown, format_search_results_markdown, search_baike, search_bing,
+    search_bing_with_options, search_wechat_sogou, web_search, web_search_and_fetch,
+    web_search_and_fetch_scoped, web_search_scoped, web_search_with_engine,
     web_search_with_options, SearchFetchItem, SearchResultItem,
 };
 pub use splitter::{export_sections_to_dir, split_markdown_by_headings, DocumentSection};
@@ -217,11 +218,15 @@ impl TklessEngine {
                             error = %err,
                             "Platform adapter extraction failed, attempting fallback"
                         );
-                        // Adaptive CDP fallback: If adapter failed (e.g. anti-scraping challenge) and CDP is available, fallback to CDP!
-                        if let Some(ref cdp_endpoint) = options.cdp_endpoint {
-                            debug!(endpoint = %cdp_endpoint, "平台适配器受阻，自适应回退至 CDP 渲染会话");
+                        // Seamless CDP fallback: If adapter failed (e.g. anti-scraping challenge, 403 WAF) and CDP is enabled, fallback to CDP!
+                        let cdp_ep = cdp::resolve_cdp_endpoint(
+                            options.cdp_endpoint.as_deref(),
+                            options.auto_cdp,
+                        );
+                        if let Some(ep) = cdp_ep {
+                            debug!(endpoint = %ep, "平台适配器受阻，自动无缝回退至 CDP 渲染会话");
                             if let Ok(doc) = self
-                                .fetch_via_cdp_and_process(url, &parsed_url, options, cdp_endpoint)
+                                .fetch_via_cdp_and_process(url, &parsed_url, options, &ep)
                                 .await
                             {
                                 return Ok(doc);
@@ -246,7 +251,6 @@ impl TklessEngine {
 
         let response = match self.fetcher.fetch(url).await {
             Ok(resp) => {
-                // If anti-scraping challenge detected and auto_cdp enabled or CDP endpoint resolvable
                 let is_challenge = cdp::is_anti_scraping_challenge(&resp.html, resp.status);
                 let cdp_ep =
                     cdp::resolve_cdp_endpoint(options.cdp_endpoint.as_deref(), options.auto_cdp);
@@ -268,18 +272,17 @@ impl TklessEngine {
             Err(err) => {
                 let cdp_ep =
                     cdp::resolve_cdp_endpoint(options.cdp_endpoint.as_deref(), options.auto_cdp);
-                if options.auto_cdp {
-                    if let Some(ep) = cdp_ep {
-                        debug!(
-                            url = url,
-                            endpoint = %ep,
-                            error = %err,
-                            "Static fetch failed with network error; auto falling back to CDP headless browser"
-                        );
-                        return self
-                            .fetch_via_cdp_and_process(url, &parsed_url, options, &ep)
-                            .await;
-                    }
+                // If CDP endpoint is configured or auto_cdp is enabled, seamlessly fall back to CDP on HTTP client/server errors
+                if let Some(ep) = cdp_ep {
+                    debug!(
+                        url = url,
+                        endpoint = %ep,
+                        error = %err,
+                        "Static fetch failed with HTTP or network error; auto falling back to CDP headless browser"
+                    );
+                    return self
+                        .fetch_via_cdp_and_process(url, &parsed_url, options, &ep)
+                        .await;
                 }
                 return Err(err);
             }

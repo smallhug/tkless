@@ -21,6 +21,9 @@ static WECHAT_NOISE_SELECTOR: LazyLock<Selector> = LazyLock::new(|| {
         .unwrap()
 });
 
+static SOGOU_JS_URL_REGEX: LazyLock<regex::Regex> =
+    LazyLock::new(|| regex::Regex::new(r#"url\s*\+?=\s*['"]([^'"]*)['"]"#).unwrap());
+
 pub struct WechatAdapter;
 
 impl Default for WechatAdapter {
@@ -42,8 +45,15 @@ impl WechatAdapter {
     ) -> Result<PageDocument, TklessError> {
         debug!(url = %url, "Executing WeChat Official Accounts adapter extraction");
 
+        // Decrypt intermediate Sogou redirect link if applicable
+        let target_url = if url.host_str().unwrap_or("").contains("weixin.sogou.com") {
+            Self::decrypt_sogou_wechat_redirect(fetcher, url, options).await?
+        } else {
+            url.clone()
+        };
+
         let resp = fetcher
-            .get(url)
+            .get(&target_url)
             .header(
                 "Accept",
                 "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
@@ -52,7 +62,123 @@ impl WechatAdapter {
             .await?;
 
         let html = resp.text().await?;
-        self.parse_article(&html, url, options)
+        self.parse_article(&html, &target_url, options)
+    }
+
+    /// Automatically decrypts and unpacks Sogou WeChat intermediate redirect URLs (`/link?url=...`)
+    /// into the genuine `https://mp.weixin.qq.com/s?...` destination article URL.
+    pub async fn decrypt_sogou_wechat_redirect(
+        fetcher: &crate::fetcher::Fetcher,
+        sogou_url: &Url,
+        options: &ExtractionOptions,
+    ) -> Result<Url, TklessError> {
+        debug!(sogou_url = %sogou_url, "正在逆向解析搜狗微信重定向中间跳转页");
+
+        // 1. Warm up session cookies by hitting the search endpoint for the query
+        let query_val = sogou_url
+            .query_pairs()
+            .find(|(k, _)| k == "query")
+            .map(|(_, v)| v.to_string())
+            .unwrap_or_else(|| "news".to_string());
+        let encoded_q =
+            url::form_urlencoded::byte_serialize(query_val.as_bytes()).collect::<String>();
+        let search_ref = format!("https://weixin.sogou.com/weixin?type=2&query={encoded_q}");
+
+        let mut cookie_header = String::new();
+        if let Ok(warmup_resp) = fetcher
+            .get_str(&search_ref)
+            .header(
+                "User-Agent",
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36 Edg/133.0.0.0",
+            )
+            .send()
+            .await
+        {
+            let mut cookies = Vec::new();
+            for (name, value) in warmup_resp.headers() {
+                if name == reqwest::header::SET_COOKIE {
+                    if let Ok(v_str) = value.to_str() {
+                        let c_part = v_str.split(';').next().unwrap_or("").trim();
+                        if !c_part.is_empty() {
+                            cookies.push(c_part);
+                        }
+                    }
+                }
+            }
+            cookie_header = cookies.join("; ");
+        }
+
+        let mut req = fetcher
+            .get(sogou_url)
+            .header("Referer", &search_ref)
+            .header(
+                "User-Agent",
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36 Edg/133.0.0.0",
+            )
+            .header(
+                "Accept",
+                "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            );
+        if !cookie_header.is_empty() {
+            req = req.header("Cookie", cookie_header);
+        }
+
+        let resp = req.send().await?;
+        let status_u16 = resp.status().as_u16();
+        let html = resp.text().await?;
+
+        // 2. Static regex extraction of dynamic JavaScript string concatenations
+        let mut parts = Vec::new();
+        for cap in SOGOU_JS_URL_REGEX.captures_iter(&html) {
+            if let Some(m) = cap.get(1) {
+                parts.push(m.as_str());
+            }
+        }
+
+        if !parts.is_empty() {
+            let assembled = parts.concat().replace('@', "");
+            if let Ok(real_url) = Url::parse(&assembled) {
+                if real_url.host_str() == Some("mp.weixin.qq.com") {
+                    debug!(real_url = %real_url, "成功从搜狗 JS 片段中逆向还原微信真实文章直达链接");
+                    return Ok(real_url);
+                }
+            }
+        }
+
+        // 3. If Sogou anti-spider challenge was served, fall back to auto-managed CDP browser navigation
+        let is_challenge = crate::cdp::is_anti_scraping_challenge(&html, status_u16);
+        let cdp_ep =
+            crate::cdp::resolve_cdp_endpoint(options.cdp_endpoint.as_deref(), options.auto_cdp);
+
+        if is_challenge || parts.is_empty() {
+            if let Some(ep) = cdp_ep {
+                debug!(endpoint = %ep, "搜狗重定向受阻，自动无缝启动无头浏览器 CDP 执行重定向跟踪");
+                let cdp_opts = crate::cdp::CdpOptions {
+                    endpoint: ep,
+                    wait_ms: Some(2000),
+                    timeout_ms: Some(30_000),
+                    ..Default::default()
+                };
+                if let Ok(rendered_html) =
+                    crate::cdp::fetch_html_via_cdp(sogou_url.as_str(), &cdp_opts).await
+                {
+                    for cap in SOGOU_JS_URL_REGEX.captures_iter(&rendered_html) {
+                        if let Some(m) = cap.get(1) {
+                            parts.push(m.as_str());
+                        }
+                    }
+                    if !parts.is_empty() {
+                        let assembled = parts.concat().replace('@', "");
+                        if let Ok(real_url) = Url::parse(&assembled) {
+                            return Ok(real_url);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Return original URL if decryption was unable to resolve
+        Ok(sogou_url.clone())
     }
 
     pub fn parse_article(
@@ -209,7 +335,8 @@ impl PlatformAdapter for WechatAdapter {
 
     fn matches(&self, url: &Url) -> bool {
         let host = url.host_str().unwrap_or("");
-        host == "mp.weixin.qq.com" && url.path().starts_with("/s")
+        (host == "mp.weixin.qq.com" && url.path().starts_with("/s"))
+            || (host.contains("weixin.sogou.com") && url.path().starts_with("/link"))
     }
 
     fn extract<'a>(
@@ -564,5 +691,53 @@ mod tests {
             .parse_article(sample_html, &url, &html_options)
             .unwrap();
         assert!(doc_html.content.contains("<strong>加粗文本</strong>"));
+    }
+
+    #[test]
+    fn test_sogou_wechat_redirect_matching_and_js_extraction() {
+        let adapter = WechatAdapter::new();
+        let sogou_url = Url::parse(
+            "https://weixin.sogou.com/link?url=dn9a_-gY295K0Rci_xozVXfdMkSQTLW6cwJThYulHEtVjX",
+        )
+        .unwrap();
+
+        assert!(
+            adapter.matches(&sogou_url),
+            "WechatAdapter must match Sogou redirect links"
+        );
+
+        // Verify JavaScript string slice reconstruction logic
+        let mock_redirect_html = r#"
+            <!DOCTYPE HTML>
+            <html>
+            <head><title>搜狗搜索</title></head>
+            <body>
+            <script>
+                var url = '';
+                url += 'https://mp.';
+                url += 'weixin.qq.c';
+                url += 'om/s?src=11';
+                url += '&timestamp=1792273021';
+                url += '&ver=7033';
+                url += '&signature=abcdef123456';
+                url += '&new=1';
+                url.replace("@", "");
+                window.location.replace(url);
+            </script>
+            </body>
+            </html>
+        "#;
+
+        let mut parts = Vec::new();
+        for cap in SOGOU_JS_URL_REGEX.captures_iter(mock_redirect_html) {
+            if let Some(m) = cap.get(1) {
+                parts.push(m.as_str());
+            }
+        }
+        let assembled = parts.concat().replace('@', "");
+        let parsed = Url::parse(&assembled).expect("Should parse as valid URL");
+        assert_eq!(parsed.host_str(), Some("mp.weixin.qq.com"));
+        assert!(parsed.query().unwrap().contains("timestamp=1792273021"));
+        assert!(parsed.query().unwrap().contains("signature=abcdef123456"));
     }
 }

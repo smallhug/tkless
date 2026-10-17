@@ -64,11 +64,11 @@ impl BaikeAdapter {
     ) -> Result<PageDocument, TklessError> {
         debug!(url = %url, "Executing Baidu Baike adapter extraction");
 
-        let resp = fetcher
+        let fetch_res = fetcher
             .get(url)
             .header(
                 "User-Agent",
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36 TkLess/0.1",
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36 Edg/133.0.0.0",
             )
             .header("Referer", "https://baike.baidu.com/")
             .header(
@@ -76,10 +76,156 @@ impl BaikeAdapter {
                 "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
             )
             .send()
-            .await?;
+            .await;
 
-        let html = resp.text().await?;
+        let html = match fetch_res {
+            Ok(resp) => {
+                let status = resp.status();
+                if status.is_success() {
+                    let text = resp.text().await?;
+                    if text.contains("__PARIS_CHALLENGE_START__")
+                        || text.contains("百度安全验证")
+                        || text.contains("mkdjump")
+                    {
+                        // Challenge page detected, attempt OpenAPI lemma recovery
+                        if let Some(doc) = self.try_openapi_recovery(fetcher, url, options).await {
+                            return Ok(doc);
+                        }
+                        return Err(TklessError::AdapterError {
+                            platform: "baike",
+                            message: "Baidu Baike Paris/Heicha WAF anti-scraping challenge triggered (百度安全验证)".to_string(),
+                        });
+                    }
+                    text
+                } else if status == reqwest::StatusCode::FORBIDDEN || status.as_u16() == 429 {
+                    if let Some(doc) = self.try_openapi_recovery(fetcher, url, options).await {
+                        return Ok(doc);
+                    }
+                    return Err(TklessError::AdapterError {
+                        platform: "baike",
+                        message: format!("Baidu Baike blocked with HTTP status {status}"),
+                    });
+                } else {
+                    return Err(TklessError::HttpStatusError {
+                        status: status.as_u16(),
+                        url: url.to_string(),
+                    });
+                }
+            }
+            Err(err) => {
+                if let Some(doc) = self.try_openapi_recovery(fetcher, url, options).await {
+                    return Ok(doc);
+                }
+                return Err(TklessError::Network(err));
+            }
+        };
+
         self.parse_page(&html, url, options)
+    }
+
+    /// Attempts to recover article content directly via Baidu Baike's LemmaCard OpenAPI
+    /// when the standard web page is intercepted by WAF 403 or Paris anti-scraping challenges.
+    async fn try_openapi_recovery(
+        &self,
+        fetcher: &crate::fetcher::Fetcher,
+        url: &Url,
+        options: &ExtractionOptions,
+    ) -> Option<PageDocument> {
+        let lemma_name = extract_lemma_name_from_url(url)?;
+        debug!(lemma = %lemma_name, "Attempting Baidu Baike OpenAPI recovery for lemma");
+
+        let encoded =
+            url::form_urlencoded::byte_serialize(lemma_name.as_bytes()).collect::<String>();
+        let api_url = format!(
+            "https://baike.baidu.com/api/openapi/BaikeLemmaCardApi?scope=103&format=json&appid=379020&bk_key={encoded}"
+        );
+
+        let resp = fetcher.client().get(&api_url).send().await.ok()?;
+        if !resp.status().is_success() {
+            return None;
+        }
+
+        let data = resp.json::<serde_json::Value>().await.ok()?;
+        let title = data.get("title").and_then(|v| v.as_str())?.to_string();
+        let abstract_text = data
+            .get("abstract")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .trim();
+        let desc = data
+            .get("desc")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .trim();
+
+        let mut markdown = format!("# {title}\n\n");
+        if !desc.is_empty() {
+            markdown.push_str(&format!("> {desc}\n\n"));
+        }
+        if !abstract_text.is_empty() {
+            markdown.push_str("## 概述\n\n");
+            markdown.push_str(abstract_text);
+            markdown.push_str("\n\n");
+        }
+
+        // Add infobox card if present
+        if let Some(card_arr) = data.get("card").and_then(|v| v.as_array()) {
+            if !card_arr.is_empty() {
+                markdown.push_str("## 基本信息\n\n");
+                for item in card_arr {
+                    let name = item
+                        .get("name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default()
+                        .trim();
+                    let val = item
+                        .get("value")
+                        .and_then(|v| v.as_array())
+                        .map(|arr| {
+                            arr.iter()
+                                .filter_map(|x| x.as_str())
+                                .collect::<Vec<_>>()
+                                .join("、")
+                        })
+                        .unwrap_or_default();
+                    if !name.is_empty() && !val.is_empty() {
+                        markdown.push_str(&format!("- **{name}**: {val}\n"));
+                    }
+                }
+                markdown.push('\n');
+            }
+        }
+
+        let token_count = count_tokens(&markdown, options.tokenizer);
+
+        Some(PageDocument {
+            url: url.to_string(),
+            final_url: url.to_string(),
+            status: 200,
+            title: Some(format!("{title}_百度百科")),
+            byline: Some("百度百科".to_string()),
+            content: markdown,
+            metadata: PageMetadata {
+                description: Some(abstract_text.to_string()),
+                canonical_url: Some(url.to_string()),
+                ..Default::default()
+            },
+            json_ld: Vec::new(),
+            token_count,
+            tokenizer: options.tokenizer.as_str().to_string(),
+            truncated: false,
+            subtitles: None,
+            danmaku: None,
+            comments: None,
+            conclusion: None,
+            links: None,
+            images: None,
+            tables: None,
+            entity: None,
+            chunks: None,
+            content_hash: None,
+            metrics: None,
+        })
     }
 
     pub fn parse_page(
@@ -268,6 +414,21 @@ pub fn preprocess_baike_html(raw_html: &str) -> String {
     BAIKE_NOISE_RE.replace_all(&s1, "").to_string()
 }
 
+/// Extracts and URL-decodes the lemma entry name from a Baidu Baike item URL path.
+pub fn extract_lemma_name_from_url(url: &Url) -> Option<String> {
+    let path = url.path();
+    let stripped = path.strip_prefix("/item/")?;
+    let first_segment = stripped.split('/').next()?;
+    if first_segment.is_empty() {
+        return None;
+    }
+    let decoded = url::form_urlencoded::parse(first_segment.as_bytes())
+        .map(|(k, _)| k.to_string())
+        .next()
+        .unwrap_or_else(|| first_segment.to_string());
+    Some(decoded)
+}
+
 fn baike_html_to_plain_text(html: &str) -> String {
     let doc = Html::parse_fragment(html);
     let mut text_parts = Vec::new();
@@ -343,5 +504,28 @@ mod tests {
         assert!(doc.content.contains("Rust是一门由Mozilla主导开发"));
         assert!(!doc.content.contains("[1]"));
         assert!(!doc.content.contains("编辑词条"));
+    }
+
+    #[test]
+    fn test_extract_lemma_name_from_url() {
+        let u1 =
+            Url::parse("https://baike.baidu.com/item/Rust%E8%AF%AD%E8%A8%80/20349806").unwrap();
+        assert_eq!(
+            extract_lemma_name_from_url(&u1),
+            Some("Rust语言".to_string())
+        );
+
+        let u2 = Url::parse("https://baike.baidu.com/item/%E5%85%89%E5%90%88%E4%BD%9C%E7%94%A8")
+            .unwrap();
+        assert_eq!(
+            extract_lemma_name_from_url(&u2),
+            Some("光合作用".to_string())
+        );
+
+        let u3 = Url::parse("https://baike.baidu.com/item/Python").unwrap();
+        assert_eq!(extract_lemma_name_from_url(&u3), Some("Python".to_string()));
+
+        let u4 = Url::parse("https://baike.baidu.com/other/path").unwrap();
+        assert_eq!(extract_lemma_name_from_url(&u4), None);
     }
 }
