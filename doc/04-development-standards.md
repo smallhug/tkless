@@ -116,26 +116,70 @@ tkless/
 
 ---
 
-## 🤖 五、Model Context Protocol (MCP) 扩展规范
+## 📋 五、CLI 命令行帮助信息 (-h/--help) 输出规范
 
-1. **前缀自适应 (Prefix-Agnostic)**：
-   - 所有在 MCP 服务端公开的工具调用，均需在 `server.rs` 调度层统一执行前缀归一化：
-     ```rust
-     let raw_tool_name = params.get("name").and_then(|v| v.as_str()).unwrap_or("");
-     let tool_name = raw_tool_name
-         .strip_prefix("tkless_")
-         .or_else(|| raw_tool_name.strip_prefix("pageclaw_"))
-         .unwrap_or(raw_tool_name);
-     ```
-2. **原子工具设计原则**：
-   - 暴露给大模型的工具入参必须收敛，优先提供语义清晰的专用原子工具（如 `export_tables`, `chunk_markdown`, `summarize_content`）；
-   - 支持多源入参兼容（例如同时支持直接传入 `url` 自动抓取，或传入本地 `html`/`text` 直接处理）。
-3. **长任务推流**：
-   - 针对爬虫（`crawl_site`）或并发流水线，必须通过标准 JSON-RPC 2.0 `$/progress` 持续推送当前处理进度与实时消息。
+TkLess 作为兼具人类开发者直接交互与 AI Agent 自动探索（Command Line Discovery / Function Calling）双重场景的生产级工具，其命令行帮助信息的清晰度与规范性至关重要：
+
+### 1. 结构化功能分组 (`help_heading`)
+- 顶层命令及拥有较多参数的子命令（如 `tkless` 根命令、`crawl`、`search`、`batch`），**严禁将所有参数平铺堆砌**。
+- 必须使用 `help_heading` 属性将选项清晰归类到明确的业务维度：
+  - `通用提取选项 (General Options)`：输出格式、正文模式、Token 上限、正负向 CSS 选择器、Schema 抽取、分块、表格过滤等；
+  - `哔哩哔哩专属 (Bilibili Options)`：仅影响特定站点的专属功能参数；
+  - `网络与身份认证 (Network & Auth)`：Cookie、请求头、代理、超时重试、CDP 无头端点、移动端模拟排版等；
+  - `缓存与运行诊断 (Cache & Diagnostics)`：本地二级缓存开关、TTL、分词器选择、遥测统计、详细日志调试等。
+
+### 2. 参数命名与短选项唯一性硬约束
+- **短选项 (`short`) 全局唯一**：在同一命令或同一子命令结构体（如 `CrawlArgs`）内部，短选项必须严格唯一，**严禁不同参数使用相同的字母**（例如严禁 `--max-pages` 与 `--proxy` 同时占用 `-p`，应分别采用 `-P` 与 `-p`），否则将触发 Clap 运行期冲突断言 Panic。
+- **长选项 (`long`) 风格**：统一使用小写连字符 `kebab-case`（如 `--max-tokens`, `--table-format`），禁止驼峰或下划线命名。
+- **参数值占位符 (`value_name`)**：必须提供大写且具备清晰业务含义的名词（如 `N`, `DIR`, `CSS_SELECTOR`, `PROXY_URL`, `FILE`），严禁使用无意义的 `<val>`。
+
+### 3. 信息密度与文案标准
+- **首行摘要简明扼要**：用于 `-h` 快速展示，首行不得超过 40 字；
+- **显式标注默认值与取值范围**：凡存在默认值或枚举范围的参数，必须在帮助文本中明确提示（如 `[默认: 500]`、`[默认: markdown]`、`[范围: 1-10]`）；
+- **版本号与品牌 Banner**：帮助信息 Banner 必须完整嵌入产品定位与口号：
+  ```rust
+  version = concat!(env!("CARGO_PKG_VERSION"), " (built ", env!("TKLESS_BUILD_DATE"), ")"),
+  about = "TkLess: Spend less tokens, perceive more web.",
+  long_about = "TkLess — Spend less tokens, perceive more web.\n专为大语言模型与 AI Agent 量身定制的高性能网页抓取、降噪清洗与搜索提取引擎。..."
+  ```
 
 ---
 
-## 🧪 六、质量门禁与测试标准
+## 🤖 六、Model Context Protocol (MCP) 服务端交互与输出规范
+
+TkLess 原生实现了基于标准 stdio 的 JSON-RPC 2.0 MCP 协议，为确保被 Cursor、Claude Desktop、Zed 及各大 Agent 框架稳定调用，必须遵守以下通信与输出数据契约：
+
+### 1. stdio 通道绝对纯净原则 (Zero Stream Pollution)
+- **严格的标准流隔离**：在 MCP 模式（`tkless mcp`）下，**标准输出 (`stdout`) 必须且只能输出严格符合 JSON-RPC 2.0 规范的单行 JSON 字符串**。
+- **严禁向 stdout 输出裸文本**：全库任何模块、第三方依赖的 `println!`、调试追踪或 Panic 栈追踪严禁流向 stdout。任何非法字符（如裸字符串、警告、未封装的 JSON）都会直接导致 Cursor 或 Claude Desktop 的 MCP 客户端解析失败并强制断连。
+- 所有的运行日志、调试 Trace 必须经由 `tracing` 输出到 `stderr`。
+
+### 2. 工具调用响应格式与数据契约 (`tools/call`)
+- **成功响应 (`isError: false`)**：
+  - 必须符合标准结构：`{"content": [{"type": "text", "text": "..."}], "isError": false}`；
+  - 返回的文本内容必须高密度提纯，根据请求格式自适应输出纯净 Markdown、格式化 JSON、SQL DDL/INSERT 或 CSV，**绝不包裹冗余的客套欢迎语或对话型废话**，最大限度为宿主大模型节约上下文 Token。
+- **失败响应 (`isError: true`) 与自愈引导**：
+  - 工具执行异常（网络失败、解析失败、参数非法、SSRF 阻断）时，必须设置 `"isError": true`；
+  - 错误文本必须遵循**“故障定位 + 可操作指引”**原则，指导 AI Agent 自行调用修复工具或调整参数重试，例如：
+    - 凭据失效时：`"⚠️ [BILIBILI] 凭据已失效或已过期。建议操作: 调用 login_platform(platform='bilibili') 或执行 tkless login bilibili 重新授权。"`
+    - 反爬阻断时：`"❌ 遭遇目标站点反爬挑战。建议操作: 在参数中配置 cdp_endpoint (如 'http://127.0.0.1:9222') 启用无头浏览器渲染绕过。"`
+    - SSRF 拦截时：明确提示目标地址属于私有保留网段，严禁内网嗅探。
+
+### 3. 流式进度通知规范 (`$/progress`)
+- **Token 关联性**：仅当客户端在请求的 `_meta.progressToken` 中提供了标记时，服务端才触发进度通知。通知必须携带对应的 `progressToken`。
+- **推流频次节流 (Throttle)**：
+  - 对于整站爬虫（`crawl_site`）或大批量并发抓取（`batch_fetch_webpages`），必须进行进度推流频率控制（节流间隔不低于 `100ms` 或按完成条数步进）；
+  - **严禁毫秒级或按字节密集狂刷进度通知**，避免引发宿主 IDE/客户端的 UI 渲染卡死。
+- **进度消息语义化**：
+  - 必须提供明确的数值指标：`progress: 当前已完成数`, `total: 目标总数`；
+  - `message` 必须具备上下文含义，例如 `"Crawling page 15/50: https://example.com/docs/api"`。
+
+### 4. 前缀自适应与兼容性保障 (Prefix-Agnostic)
+- 客户端调用工具时，无论传入原生原子名（如 `export_tables`）还是带前缀名（如 `tkless_export_tables` 或历史前缀 `pageclaw_export_tables`），服务端必须自动执行前缀剥离与归一化路由，对客户端命名习惯保持最大容忍度。
+
+---
+
+## 🧪 七、质量门禁与测试标准
 
 在向仓库提交任何代码之前，必须确保在工作区根目录下执行并通过以下检查：
 
@@ -155,7 +199,7 @@ cargo build --release -p tkless-cli
 
 ---
 
-## 📝 七、Git 提交信息规范 (Commit Guidelines)
+## 📝 八、Git 提交信息规范 (Commit Guidelines)
 
 遵循清晰、简明且规范的 Git 提交风格：
 
