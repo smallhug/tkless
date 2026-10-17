@@ -391,6 +391,7 @@ COMMANDS:
     shell                      启动交互式 REPL 会话命令行
     diff <OLD> <NEW>           对比两个文本文件或网页版本，输出统一 Diff 格式与行级变更比例
     tables <TARGET>            提取网页或 HTML 中的全部数据表格并导出为 SQL/CSV/TSV/JSON
+    completions <SHELL>        生成 Shell (Bash, Zsh, Fish, PowerShell) 终端自动补全脚本
 
 ARGS:
     <TARGET>                   目标 URL、短 BV 号或 '-' (从标准输入读取 HTML)
