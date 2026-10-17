@@ -540,6 +540,7 @@ impl BilibiliAdapter {
                 referer: Some("https://www.bilibili.com/"),
                 cookie: cookie_str.as_deref(),
                 reporter,
+                concurrency: None,
             },
         )
         .await?;
@@ -594,11 +595,28 @@ impl BilibiliAdapter {
         candidate_urls.push(durl_item.url.clone());
         candidate_urls.extend(durl_item.backup_url.clone());
 
+        // Sort candidate URLs by CDN quality:
+        // Tier 0: High-speed backbone CDNs (Aliyun, Tencent, Baidu, Akamai)
+        // Tier 1: General official CDN mirrors
+        // Tier 2: Deprioritized PCDN/P2P/low-upload nodes (mcdn, mountaintoys, p2p, :4483)
         candidate_urls.sort_by_key(|u| {
-            if u.contains("mountaintoys") || u.contains("mcdn") || u.contains(":4483") {
-                1
-            } else {
+            let u_lower = u.to_lowercase();
+            if u_lower.contains("mountaintoys")
+                || u_lower.contains("mcdn")
+                || u_lower.contains("szbdyd")
+                || u_lower.contains(":4483")
+                || u_lower.contains("p2p")
+            {
+                2
+            } else if u_lower.contains("mirrorali")
+                || u_lower.contains("mirrortencent")
+                || u_lower.contains("mirrorbos")
+                || u_lower.contains("mirrorakam")
+                || u_lower.contains("bilivideo.com")
+            {
                 0
+            } else {
+                1
             }
         });
 
@@ -619,6 +637,7 @@ impl BilibiliAdapter {
                     referer: Some("https://www.bilibili.com/"),
                     cookie: cookie_str.as_deref(),
                     reporter,
+                    concurrency: Some(4), // 4-thread concurrent HTTP Range download to saturate bandwidth
                 },
             )
             .await
