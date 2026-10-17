@@ -221,7 +221,7 @@ impl V2exAdapter {
                     md.push_str("---\n\n### 💬 社区精选回帖 (Replies):\n\n");
                     for rep in replies {
                         md.push_str(&rep);
-                        md.push_str("\n");
+                        md.push('\n');
                     }
                 }
 

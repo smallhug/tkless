@@ -793,8 +793,10 @@ pub fn save_platform_cookies_to_file(
 }
 
 /// Parses raw cookie string content into "key1=val1; key2=val2" strictly by platform prefix:
+///
 /// 1. Line prefix syntax: `platform: key1=val1; key2=val2`
 /// 2. Section syntax: `[platform]\nkey1=val1; key2=val2`
+///
 /// If target platform is specified, strictly extracts only the credentials matching that platform.
 pub fn parse_cookie_content_for_platform(content: &str, target_platform: Option<&str>) -> String {
     let clean_target = target_platform.map(|p| p.trim().to_lowercase());

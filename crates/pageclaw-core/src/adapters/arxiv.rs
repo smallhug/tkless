@@ -46,10 +46,8 @@ impl ArxivAdapter {
             rest
         } else if let Some(rest) = path.strip_prefix("pdf/") {
             rest.strip_suffix(".pdf").unwrap_or(rest)
-        } else if let Some(rest) = path.strip_prefix("html/") {
-            rest
         } else {
-            return None;
+            path.strip_prefix("html/")?
         };
 
         let clean_id = stripped.trim_matches('/');
@@ -227,7 +225,7 @@ impl ArxivAdapter {
                 md.push_str(&meta_lines.iter().map(|l| format!("> {l}")).collect::<Vec<_>>().join("\n>\n"));
                 md.push_str("\n\n## Abstract\n\n");
                 md.push_str(clean_abstract_md.trim());
-                md.push_str("\n");
+                md.push('\n');
                 md
             }
         };

@@ -214,7 +214,7 @@ pub fn preprocess_juejin_html(raw_html: &str) -> String {
             url::form_urlencoded::parse(target.as_bytes())
                 .map(|(k, _)| k.to_string())
                 .next()
-                .unwrap_or_else(|| decoded)
+                .unwrap_or(decoded)
         })
         .to_string()
 }

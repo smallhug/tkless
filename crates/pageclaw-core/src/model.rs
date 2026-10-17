@@ -580,9 +580,8 @@ impl ExtractedTable {
 
             for row in &self.rows {
                 let mut vals = Vec::new();
-                for i in 0..num_cols {
+                for (i, &t) in col_types.iter().enumerate().take(num_cols) {
                     let cell = row.get(i).map(|s| s.as_str()).unwrap_or("");
-                    let t = col_types[i];
                     let trimmed = cell.trim();
                     if trimmed.is_empty() {
                         vals.push("NULL".to_string());
@@ -712,12 +711,7 @@ fn sanitize_sql_identifier(s: &str) -> String {
         .collect::<Vec<_>>()
         .join("_");
 
-    if collapsed.is_empty()
-        || collapsed
-            .chars()
-            .next()
-            .map_or(false, |c| c.is_ascii_digit())
-    {
+    if collapsed.is_empty() || collapsed.chars().next().is_some_and(|c| c.is_ascii_digit()) {
         format!("col_{collapsed}")
     } else {
         collapsed
@@ -732,7 +726,7 @@ fn parse_sql_cell_as_int(s: &str) -> Option<i64> {
 fn parse_sql_cell_as_float(s: &str) -> Option<f64> {
     let clean = s
         .trim()
-        .trim_start_matches(|c| c == '$' || c == '¥' || c == '€' || c == '£')
+        .trim_start_matches(['$', '¥', '€', '£'])
         .trim_end_matches('%')
         .replace(',', "");
     clean.parse::<f64>().ok()

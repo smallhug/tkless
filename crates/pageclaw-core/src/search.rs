@@ -440,7 +440,7 @@ pub fn unwrap_google_url(raw_href: &str) -> String {
         return url::form_urlencoded::parse(encoded.as_bytes())
             .map(|(k, _)| k.to_string())
             .next()
-            .unwrap_or_else(|| decoded);
+            .unwrap_or(decoded);
     }
 
     raw_href.to_string()

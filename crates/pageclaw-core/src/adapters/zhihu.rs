@@ -689,7 +689,7 @@ pub fn preprocess_zhihu_html(raw_html: &str) -> String {
         url::form_urlencoded::parse(target.as_bytes())
             .map(|(k, _)| k.to_string())
             .next()
-            .unwrap_or_else(|| decoded)
+            .unwrap_or(decoded)
     });
 
     with_links.to_string()

@@ -277,6 +277,7 @@ impl GithubAdapter {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn extract_issue_discussion(
         &self,
         raw_html: &str,

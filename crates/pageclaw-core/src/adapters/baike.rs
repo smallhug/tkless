@@ -140,7 +140,7 @@ impl BaikeAdapter {
             .map(|el| el.text().collect::<Vec<_>>().join(" ").trim().to_string())
             .collect();
 
-        for (k, v) in names.into_iter().zip(values.into_iter()) {
+        for (k, v) in names.into_iter().zip(values) {
             if !k.is_empty() && !v.is_empty() {
                 infobox.push((k, v));
             }

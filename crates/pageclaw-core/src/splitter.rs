@@ -113,7 +113,7 @@ pub fn export_sections_to_dir(
     dir: &Path,
     doc_title: Option<&str>,
 ) -> Result<Vec<String>, PageclawError> {
-    fs::create_dir_all(dir).map_err(|e| PageclawError::Io(e))?;
+    fs::create_dir_all(dir).map_err(PageclawError::Io)?;
 
     let mut written_files = Vec::new();
     let title_str = doc_title.unwrap_or("Document Index");
