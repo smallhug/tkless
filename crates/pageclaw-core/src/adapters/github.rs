@@ -20,6 +20,23 @@ static GITHUB_ISSUE_STATE_SELECTOR: LazyLock<Selector> =
     LazyLock::new(|| Selector::parse("span[title^='Status:'], .State, span.IssueLabel").unwrap());
 static GITHUB_COMMENT_SELECTOR: LazyLock<Selector> =
     LazyLock::new(|| Selector::parse(".timeline-comment-group, .timeline-comment").unwrap());
+static GITHUB_TRENDING_ROW_SELECTOR: LazyLock<Selector> =
+    LazyLock::new(|| Selector::parse("article.Box-row, .Box-row").unwrap());
+static GITHUB_TRENDING_TITLE_SELECTOR: LazyLock<Selector> =
+    LazyLock::new(|| Selector::parse("h2 a, h1 a").unwrap());
+static GITHUB_TRENDING_DESC_SELECTOR: LazyLock<Selector> =
+    LazyLock::new(|| Selector::parse("p").unwrap());
+static GITHUB_TRENDING_LANG_SELECTOR: LazyLock<Selector> = LazyLock::new(|| {
+    Selector::parse("span[itemprop='programmingLanguage'], [itemprop='programmingLanguage']")
+        .unwrap()
+});
+static GITHUB_TRENDING_STARS_SELECTOR: LazyLock<Selector> =
+    LazyLock::new(|| Selector::parse("a[href*='/stargazers']").unwrap());
+static GITHUB_TRENDING_FORKS_SELECTOR: LazyLock<Selector> =
+    LazyLock::new(|| Selector::parse("a[href*='/forks'], a[href*='/network/members']").unwrap());
+static GITHUB_TRENDING_PERIOD_STARS_SELECTOR: LazyLock<Selector> = LazyLock::new(|| {
+    Selector::parse("span.d-inline-block.float-sm-right, .float-sm-right").unwrap()
+});
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GithubRoute {
@@ -34,6 +51,11 @@ pub enum GithubRoute {
     },
     /// Release notes (/owner/repo/releases)
     Releases { owner: String, repo: String },
+    /// GitHub Trending discovery (/trending or /trending/rust?since=daily)
+    Trending {
+        language: Option<String>,
+        since: Option<String>,
+    },
 }
 
 pub struct GithubAdapter;
@@ -56,6 +78,19 @@ impl GithubAdapter {
         }
 
         let segments: Vec<&str> = url.path().split('/').filter(|s| !s.is_empty()).collect();
+        if segments.is_empty() {
+            return None;
+        }
+
+        if segments[0] == "trending" {
+            let language = segments.get(1).map(|s| s.to_string());
+            let since = url
+                .query_pairs()
+                .find(|(k, _)| k == "since")
+                .map(|(_, v)| v.to_string());
+            return Some(GithubRoute::Trending { language, since });
+        }
+
         if segments.len() < 2 {
             return None;
         }
@@ -146,6 +181,13 @@ impl GithubAdapter {
             GithubRoute::Releases { owner, repo } => {
                 self.extract_repo_readme(raw_html, &owner, &repo, url, options)
             }
+            GithubRoute::Trending { language, since } => self.extract_trending_repos(
+                raw_html,
+                url,
+                language.as_deref(),
+                since.as_deref(),
+                options,
+            ),
         }
     }
 
@@ -341,6 +383,157 @@ impl GithubAdapter {
             metrics: None,
         })
     }
+
+    fn extract_trending_repos(
+        &self,
+        raw_html: &str,
+        url: &Url,
+        language: Option<&str>,
+        since: Option<&str>,
+        options: &ExtractionOptions,
+    ) -> Result<PageDocument, PageclawError> {
+        let doc = Html::parse_document(raw_html);
+        let mut repos = Vec::new();
+
+        let period_label = since.unwrap_or("daily");
+        let lang_label = language.unwrap_or("All Languages");
+        let title = format!("GitHub Trending ({lang_label}, {period_label})");
+
+        for (rank, row) in doc.select(&GITHUB_TRENDING_ROW_SELECTOR).enumerate() {
+            let repo_name = row
+                .select(&GITHUB_TRENDING_TITLE_SELECTOR)
+                .next()
+                .map(|el| {
+                    el.text()
+                        .collect::<Vec<_>>()
+                        .join("")
+                        .replace(['\r', '\n', ' '], "")
+                        .trim()
+                        .to_string()
+                })
+                .unwrap_or_default();
+
+            if repo_name.is_empty() {
+                continue;
+            }
+
+            let repo_url = format!("https://github.com/{}", repo_name.trim_start_matches('/'));
+
+            let desc = row
+                .select(&GITHUB_TRENDING_DESC_SELECTOR)
+                .next()
+                .map(|el| el.text().collect::<Vec<_>>().join(" ").trim().to_string())
+                .unwrap_or_default();
+
+            let lang = row
+                .select(&GITHUB_TRENDING_LANG_SELECTOR)
+                .next()
+                .map(|el| el.text().collect::<Vec<_>>().join(" ").trim().to_string())
+                .unwrap_or_else(|| "Unknown".to_string());
+
+            let stars = row
+                .select(&GITHUB_TRENDING_STARS_SELECTOR)
+                .next()
+                .map(|el| el.text().collect::<Vec<_>>().join(" ").trim().to_string())
+                .unwrap_or_default();
+
+            let forks = row
+                .select(&GITHUB_TRENDING_FORKS_SELECTOR)
+                .next()
+                .map(|el| el.text().collect::<Vec<_>>().join(" ").trim().to_string())
+                .unwrap_or_default();
+
+            let period_stars = row
+                .select(&GITHUB_TRENDING_PERIOD_STARS_SELECTOR)
+                .next()
+                .map(|el| el.text().collect::<Vec<_>>().join(" ").trim().to_string())
+                .unwrap_or_default();
+
+            repos.push((
+                rank + 1,
+                repo_name,
+                repo_url,
+                desc,
+                lang,
+                stars,
+                forks,
+                period_stars,
+            ));
+        }
+
+        let content = match options.format {
+            OutputFormat::Json => {
+                let json_list: Vec<_> = repos
+                    .iter()
+                    .map(|(rank, name, u, desc, lang, stars, forks, period_stars)| {
+                        serde_json::json!({
+                            "rank": rank,
+                            "repository": name,
+                            "url": u,
+                            "description": desc,
+                            "language": lang,
+                            "stars": stars,
+                            "forks": forks,
+                            "stars_today": period_stars
+                        })
+                    })
+                    .collect();
+                serde_json::to_string_pretty(&json_list).unwrap_or_default()
+            }
+            _ => {
+                let mut md = String::new();
+                md.push_str(&format!("# 🌟 {title}\n\n"));
+                md.push_str(&format!(
+                    "> **榜单语言**: `{lang_label}` | **周期**: `{period_label}` | **上榜项目**: {}\n\n",
+                    repos.len()
+                ));
+                md.push_str(
+                    "| 排名 | 开源项目 (Repository) | 主要语言 | Stars | 新增 Stars | 简介 |\n",
+                );
+                md.push_str("|---|---|---|---|---|---|\n");
+
+                for (rank, name, u, desc, lang, stars, _forks, period_stars) in &repos {
+                    let desc_clean = desc.replace('|', "\\|").replace('\n', " ");
+                    md.push_str(&format!(
+                        "| {} | [**{}**]({}) | `{}` | {} | {} | {} |\n",
+                        rank, name, u, lang, stars, period_stars, desc_clean
+                    ));
+                }
+
+                md
+            }
+        };
+
+        let token_count = count_tokens(&content, options.tokenizer);
+
+        Ok(PageDocument {
+            url: url.to_string(),
+            final_url: url.to_string(),
+            status: 200,
+            title: Some(title),
+            byline: Some("GitHub Trending".to_string()),
+            content,
+            metadata: PageMetadata {
+                canonical_url: Some(url.to_string()),
+                ..Default::default()
+            },
+            json_ld: Vec::new(),
+            token_count,
+            tokenizer: options.tokenizer.as_str().to_string(),
+            truncated: false,
+            subtitles: None,
+            danmaku: None,
+            comments: None,
+            conclusion: None,
+            links: None,
+            images: None,
+            tables: None,
+            entity: None,
+            chunks: None,
+            content_hash: None,
+            metrics: None,
+        })
+    }
 }
 
 impl PlatformAdapter for GithubAdapter {
@@ -432,5 +625,45 @@ mod tests {
         assert!(doc.content.contains("A runtime for writing reliable"));
         assert!(doc.content.contains("## Overview"));
         assert!(doc.content.contains("Tokio provides event-driven"));
+    }
+
+    #[test]
+    fn test_github_trending_extraction() {
+        let adapter = GithubAdapter::new();
+        let sample_html = r##"
+            <!DOCTYPE html>
+            <html>
+            <head><title>Trending Repositories on GitHub today</title></head>
+            <body>
+                <main>
+                    <article class="Box-row">
+                        <h2 class="h3 lh-condensed">
+                            <a href="/rust-lang/rust">rust-lang / rust</a>
+                        </h2>
+                        <p class="col-9 color-fg-muted my-1 pr-4">Empowering everyone to build reliable and efficient software.</p>
+                        <div class="f6 color-fg-muted mt-2">
+                            <span itemprop="programmingLanguage">Rust</span>
+                            <a href="/rust-lang/rust/stargazers">98,500</a>
+                            <a href="/rust-lang/rust/forks">12,300</a>
+                            <span class="d-inline-block float-sm-right">342 stars today</span>
+                        </div>
+                    </article>
+                </main>
+            </body>
+            </html>
+        "##;
+
+        let url = Url::parse("https://github.com/trending/rust?since=daily").unwrap();
+        let doc = adapter
+            .parse_page(sample_html, &url, &ExtractionOptions::default())
+            .unwrap();
+
+        assert!(doc.title.as_deref().unwrap().contains("GitHub Trending"));
+        assert!(doc.content.contains("rust-lang/rust"));
+        assert!(doc.content.contains("98,500"));
+        assert!(doc.content.contains("342 stars today"));
+        assert!(doc
+            .content
+            .contains("Empowering everyone to build reliable and efficient software."));
     }
 }
