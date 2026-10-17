@@ -27,6 +27,9 @@ qrcode.workspace = true
 tokio-tungstenite = "0.30.0"
 futures-util = { version = "0.3.34", features = ["sink"] }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+openssl = { workspace = true }
+
 [features]
 default = ["tiktoken"]
 tiktoken = ["dep:tiktoken-rs"]
