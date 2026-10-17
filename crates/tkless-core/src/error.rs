@@ -52,6 +52,9 @@ pub enum TklessError {
 
     #[error("Schema extraction error: {0}")]
     SchemaError(String),
+
+    #[error("Search anti-scraping challenge: {0}")]
+    SearchAntiScraping(String),
 }
 
 impl TklessError {
@@ -71,6 +74,7 @@ impl TklessError {
             | Self::CacheError(_)
             | Self::CdpError(_)
             | Self::SchemaError(_)
+            | Self::SearchAntiScraping(_)
             | Self::McpError { .. } => 1,
         }
     }
