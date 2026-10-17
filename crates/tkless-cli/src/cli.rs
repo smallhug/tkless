@@ -804,8 +804,8 @@ pub struct UpgradeArgs {
     #[arg(short = 'f', long = "force")]
     pub force: bool,
 
-    /// 自定义 GitHub 仓库所有者与项目 (默认: 'smallhug/cli')
-    #[arg(long = "repo", default_value = "smallhug/cli")]
+    /// 自定义 GitHub 仓库所有者与项目 (默认: 'smallhug/tkless')
+    #[arg(long = "repo", default_value = "smallhug/tkless")]
     pub repo: String,
 }
 

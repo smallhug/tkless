@@ -138,7 +138,7 @@ tkless https://httpbin.org/html
 
 ### 2. 下载预编译独立二进制放入口径 PATH
 
-如果您在没有 Rust 开发环境的机器上部署，可直接从 [GitHub Releases](https://github.com/smallhug/cli/releases/latest) 下载单文件直接使用（无需解压或安装运行时）：
+如果您在没有 Rust 开发环境的机器上部署，可直接从 [GitHub Releases](https://github.com/smallhug/tkless/releases/latest) 下载单文件直接使用（无需解压或安装运行时）：
 
 | 操作系统 / 架构 | 发布产物名称 | 全局使用方式 |
 | :--- | :--- | :--- |

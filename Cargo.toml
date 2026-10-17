@@ -11,6 +11,8 @@ edition = "2021"
 authors = ["TkLess Contributors"]
 license = "MIT OR Apache-2.0"
 description = "TkLess: Spend less tokens, perceive more web."
+repository = "https://github.com/smallhug/tkless"
+homepage = "https://github.com/smallhug/tkless"
 
 [workspace.dependencies]
 # Internal workspace crates
