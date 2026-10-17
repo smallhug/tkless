@@ -51,6 +51,9 @@ jobs:
         run: cargo install cross --git https://github.com/cross-rs/cross
 
       - name: Build Release Binary
+        env:
+          OPENSSL_STATIC: 1
+          OPENSSL_VENDORED: 1
         run: |
           if [ "${{ matrix.use_cross }}" = "true" ]; then
             cross build --release --target ${{ matrix.target }} -p tkless-cli
