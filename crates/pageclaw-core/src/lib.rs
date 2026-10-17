@@ -28,7 +28,7 @@ pub use adapters::{
 pub use auth::{
     execute_login_flow, generate_qrcode, poll_qrcode_status, LoginOptions, QrPollStatus,
 };
-pub use cache::DocumentCache;
+pub use cache::{CacheStats, DocumentCache};
 pub use cdp::{fetch_html_via_cdp, CdpOptions};
 pub use chunker::chunk_markdown;
 pub use crawler::{
@@ -382,7 +382,25 @@ impl PageclawEngine {
         options: &ExtractionOptions,
     ) -> Result<PageDocument, PageclawError> {
         let clean_start = std::time::Instant::now();
-        let parsed_doc = Html::parse_document(raw_html);
+
+        // 0. Optional negative DOM pruning via remove_selector
+        let pruned_html_holder;
+        let effective_html = if let Some(ref rem_sel) = options.remove_selector {
+            match cleaner::prune_unwanted_selectors(raw_html, rem_sel) {
+                Ok(h) => {
+                    pruned_html_holder = h;
+                    &pruned_html_holder
+                }
+                Err(e) => {
+                    warn!(error = %e, "Failed to prune unwanted selectors, continuing with raw HTML");
+                    raw_html
+                }
+            }
+        } else {
+            raw_html
+        };
+
+        let parsed_doc = Html::parse_document(effective_html);
 
         // 1. Extract metadata and JSON-LD
         let metadata = if options.include_metadata {
@@ -419,7 +437,7 @@ impl PageclawEngine {
         // 2b. Extract structured entities if schema is provided
         let entity = if let Some(ref schema_input) = options.schema {
             match schema::ExtractionSchema::parse(schema_input) {
-                Ok(schema) => match schema::extract_entities(raw_html, &schema, base_url) {
+                Ok(schema) => match schema::extract_entities(effective_html, &schema, base_url) {
                     Ok(val) => Some(val),
                     Err(err) => {
                         warn!(error = %err, "Schema 实体提取失败");
@@ -437,9 +455,9 @@ impl PageclawEngine {
 
         // 3. Clean and isolate target content (targeted CSS selector or heuristic cleaning)
         let cleaned = if let Some(ref sel) = options.selector {
-            extract_selector(raw_html, sel, base_url)?
+            extract_selector(effective_html, sel, base_url)?
         } else {
-            clean_html(raw_html, base_url, options.mode)?
+            clean_html(effective_html, base_url, options.mode)?
         };
 
         let title = cleaned.title.or_else(|| {

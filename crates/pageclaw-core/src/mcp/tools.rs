@@ -100,6 +100,10 @@ pub fn get_available_tools() -> Vec<McpTool> {
                         "type": "string",
                         "description": "CSS selector for targeted DOM extraction (e.g. 'article.content, #readme, table')"
                     },
+                    "remove_selector": {
+                        "type": "string",
+                        "description": "CSS selector to prune and exclude unwanted DOM subtrees (e.g. '.ads, .footer, #comments, .author-bio')"
+                    },
                     "extract_links": {
                         "type": "boolean",
                         "default": false,
@@ -500,6 +504,10 @@ pub fn get_available_tools() -> Vec<McpTool> {
                         "type": "string",
                         "description": "CSS selector for targeted DOM extraction across all pages"
                     },
+                    "remove_selector": {
+                        "type": "string",
+                        "description": "CSS selector to prune and exclude unwanted DOM subtrees across all pages"
+                    },
                     "schema": {
                         "type": "string",
                         "description": "Optional extraction schema (JSON string) for structured entity extraction"
@@ -554,6 +562,10 @@ pub fn get_available_tools() -> Vec<McpTool> {
                     "selector": {
                         "type": "string",
                         "description": "CSS selector for targeted DOM extraction"
+                    },
+                    "remove_selector": {
+                        "type": "string",
+                        "description": "CSS selector to prune and exclude unwanted DOM subtrees"
                     },
                     "schema": {
                         "type": "string",
@@ -685,6 +697,25 @@ pub fn get_available_tools() -> Vec<McpTool> {
                     }
                 },
                 "required": ["text1", "text2"]
+            }),
+        },
+        McpTool {
+            name: "manage_cache".to_string(),
+            description: "Inspects telemetry statistics (memory/disk entries and disk space usage) or purges/clears the local HTTP response and document cache.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["stats", "clear", "prune_expired"],
+                        "default": "stats",
+                        "description": "Cache operation: 'stats' (query cache size/entries), 'clear' (empty all cache), 'prune_expired' (remove stale records)"
+                    },
+                    "cache_dir": {
+                        "type": "string",
+                        "description": "Optional custom cache directory path override"
+                    }
+                }
             }),
         }
     ]

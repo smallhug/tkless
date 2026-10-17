@@ -172,6 +172,8 @@ pub struct ExtractionOptions {
     pub feed: bool,
     /// CSS selector for targeted DOM extraction (e.g. 'article.content, #readme').
     pub selector: Option<String>,
+    /// CSS selector for pruning and excluding unwanted DOM elements (e.g. '.ads, .footer, #comments').
+    pub remove_selector: Option<String>,
     /// Whether to extract structured links list.
     pub extract_links: bool,
     /// Whether to extract structured images list.
@@ -229,6 +231,7 @@ impl Default for ExtractionOptions {
             no_adapter: false,
             feed: false,
             selector: None,
+            remove_selector: None,
             extract_links: false,
             extract_images: false,
             extract_tables: false,

@@ -277,7 +277,38 @@ async fn run(args: CliArgs) -> Result<()> {
         tables_only: args.tables_only,
         table_format: args.table_format.into(),
         stats: args.stats,
+        remove_selector: args.remove_selector.clone(),
     };
+
+    // -------------------------------------------------------------------------
+    // Execution Branch 0.5: Local Cache Inspection and Management
+    // -------------------------------------------------------------------------
+    if let Some(SubCommand::Cache(ref cache_args)) = args.command {
+        let dir = cache_args
+            .cache_dir
+            .clone()
+            .or_else(|| args.cache_dir.clone());
+        let cache = DocumentCache::new(dir, args.cache_ttl);
+        if cache_args.clear {
+            cache.clear().context("Failed to clear cache")?;
+            println!("✅ 本地缓存已成功清空。");
+            return Ok(());
+        }
+
+        let stats = cache.stats();
+        println!("# 🗄️ PageClaw 本地响应缓存状态 (Cache Status)\n");
+        println!(
+            "- **存储路径**: {}",
+            stats.cache_dir.unwrap_or_else(|| "内存缓存".to_string())
+        );
+        println!("- **内存活跃条目数 (L1)**: {}", stats.memory_entries);
+        println!("- **磁盘条目总数 (L2)**: {}", stats.disk_entries);
+        println!(
+            "- **磁盘总占用空间**: {}",
+            pageclaw_core::downloader::format_bytes(stats.disk_bytes)
+        );
+        return Ok(());
+    }
 
     // -------------------------------------------------------------------------
     // Execution Branch 1: Native MCP (Model Context Protocol) Server over Stdio
@@ -501,6 +532,7 @@ async fn run(args: CliArgs) -> Result<()> {
             tables_only: false,
             table_format: pageclaw_core::model::TableExportFormat::default(),
             stats: false,
+            remove_selector: args.remove_selector.clone(),
         });
 
         let semaphore =
@@ -753,6 +785,7 @@ async fn run(args: CliArgs) -> Result<()> {
                 extraction_options.format,
                 args.json_ld_only,
                 args.output_file.as_deref(),
+                args.stream,
             );
         }
     }
@@ -875,6 +908,7 @@ async fn run(args: CliArgs) -> Result<()> {
         extraction_options.format,
         args.json_ld_only,
         args.output_file.as_deref(),
+        args.stream,
     )?;
 
     Ok(())

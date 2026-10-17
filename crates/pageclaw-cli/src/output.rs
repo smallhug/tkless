@@ -11,6 +11,7 @@ pub fn render_output(
     format: OutputFormat,
     json_ld_only: bool,
     output_path: Option<&Path>,
+    stream: bool,
 ) -> Result<()> {
     let payload = if json_ld_only {
         serde_json::to_string_pretty(&doc.json_ld)
@@ -31,7 +32,7 @@ pub fn render_output(
         }
     };
 
-    write_payload(&payload, output_path)
+    write_payload_streaming(&payload, output_path, stream)
 }
 
 /// Renders cover image URL directly to stdout or output file.
@@ -41,12 +42,32 @@ pub fn render_cover(cover_url: &str, output_path: Option<&Path>) -> Result<()> {
 
 /// Writes arbitrary payload text to stdout or a designated output file.
 pub fn write_payload(payload: &str, output_path: Option<&Path>) -> Result<()> {
+    write_payload_streaming(payload, output_path, false)
+}
+
+/// Writes arbitrary payload text to stdout or a designated output file with optional real-time line streaming.
+pub fn write_payload_streaming(
+    payload: &str,
+    output_path: Option<&Path>,
+    stream: bool,
+) -> Result<()> {
     if let Some(path) = output_path {
         let mut file = File::create(path)
             .with_context(|| format!("Failed to create output file: {}", path.display()))?;
         file.write_all(payload.as_bytes())
             .with_context(|| format!("Failed to write output to file: {}", path.display()))?;
         file.write_all(b"\n")?;
+    } else if stream {
+        let stdout = io::stdout();
+        let mut handle = stdout.lock();
+        for line in payload.split_inclusive('\n') {
+            handle.write_all(line.as_bytes())?;
+            handle.flush()?;
+        }
+        if !payload.ends_with('\n') {
+            handle.write_all(b"\n")?;
+            handle.flush()?;
+        }
     } else {
         let stdout = io::stdout();
         let mut handle = stdout.lock();
