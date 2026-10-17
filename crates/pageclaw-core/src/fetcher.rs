@@ -663,6 +663,10 @@ pub fn detect_platform_from_host(host: &str) -> Option<&'static str> {
         Some("substack")
     } else if is_subdomain_or_exact(&host_lower, "arxiv.org") {
         Some("arxiv")
+    } else if is_subdomain_or_exact(&host_lower, "huggingface.co")
+        || is_subdomain_or_exact(&host_lower, "hf.co")
+    {
+        Some("huggingface")
     } else {
         None
     }
@@ -1008,6 +1012,14 @@ mod tests {
             detect_platform_from_url("https://arxiv.org/abs/2401.12345"),
             Some("arxiv")
         );
+        assert_eq!(
+            detect_platform_from_url("https://huggingface.co/deepseek-ai/DeepSeek-R1"),
+            Some("huggingface")
+        );
+        assert_eq!(
+            detect_platform_from_url("https://hf.co/meta-llama/Llama-3.1-8B"),
+            Some("huggingface")
+        );
 
         // Security check: spoofed / typosquatted domains MUST NOT leak cookies!
         assert_eq!(
@@ -1028,6 +1040,10 @@ mod tests {
         );
         assert_eq!(
             detect_platform_from_url("https://evilarxiv.org/abs/2401.12345"),
+            None
+        );
+        assert_eq!(
+            detect_platform_from_url("https://evilhuggingface.co/model"),
             None
         );
         assert_eq!(

@@ -405,6 +405,13 @@ async fn run(args: CliArgs) -> Result<()> {
             } else {
                 format!("site:arxiv.org {clean}")
             }
+        } else if search_args.hf {
+            let clean = search_args.query.trim();
+            if clean.starts_with("site:") {
+                clean.to_string()
+            } else {
+                format!("site:huggingface.co {clean}")
+            }
         } else {
             search_args.query.clone()
         };

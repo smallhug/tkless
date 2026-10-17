@@ -807,6 +807,14 @@ pub struct SearchSubArgs {
     )]
     pub arxiv: bool,
 
+    /// Scope search to Hugging Face models, datasets, papers, and blogs (huggingface.co)
+    #[arg(
+        long = "hf",
+        alias = "huggingface",
+        help = "Scope search to Hugging Face models, datasets, papers, and blogs (huggingface.co)"
+    )]
+    pub hf: bool,
+
     /// Search engine provider: bing (default), google, auto (failover)
     #[arg(
         short = 'e',
