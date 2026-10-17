@@ -12,6 +12,7 @@ path = "src/main.rs"
 
 [dependencies]
 pageclaw-core.workspace = true
+scraper.workspace = true
 clap.workspace = true
 tokio.workspace = true
 serde.workspace = true

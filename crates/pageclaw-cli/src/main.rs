@@ -349,6 +349,82 @@ async fn run(args: CliArgs) -> Result<()> {
     }
 
     // -------------------------------------------------------------------------
+    // Execution Branch 1.3: Document Version Diff Analysis
+    // -------------------------------------------------------------------------
+    if let Some(SubCommand::Diff(ref diff_args)) = args.command {
+        let engine = PageclawEngine::with_options(fetch_options)
+            .context("Failed to initialize PageClaw engine")?;
+        let old_text = load_target_text(&diff_args.old_target, &engine).await?;
+        let new_text = load_target_text(&diff_args.new_target, &engine).await?;
+        let report = pageclaw_core::diff::compute_diff(&old_text, &new_text);
+
+        if matches!(diff_args.format, CliFormat::Json | CliFormat::Jsonl) {
+            println!("{}", serde_json::to_string_pretty(&report)?);
+        } else {
+            println!("# 🔄 文档版本差异与变更分析 (Content Diff Report)\n");
+            println!(
+                "> 新增行数: `+{}` | 删除行数: `-{}` | 未变行数: `{}` | 变更比例: `{:.1}%`\n",
+                report.added_lines,
+                report.removed_lines,
+                report.unchanged_lines,
+                report.change_ratio
+            );
+            println!("```diff\n{}\n```", report.unified_diff);
+        }
+        return Ok(());
+    }
+
+    // -------------------------------------------------------------------------
+    // Execution Branch 1.4: Webpage Tables Extraction & SQL/CSV Export
+    // -------------------------------------------------------------------------
+    if let Some(SubCommand::Tables(ref tables_args)) = args.command {
+        let engine = PageclawEngine::with_options(fetch_options)
+            .context("Failed to initialize PageClaw engine")?;
+        let html = load_target_html(&tables_args.target, &engine).await?;
+        let doc = scraper::Html::parse_document(&html);
+        let mut tables = pageclaw_core::extractor::extract_tables(&doc);
+
+        if tables.is_empty() {
+            bail!("未在目标网页或 HTML 中检测到有效的 <table> 表格元素");
+        }
+
+        if let Some(idx) = tables_args.table_index {
+            if idx >= tables.len() {
+                bail!(
+                    "table_index {} 超出范围，页面仅包含 {} 个表格 (有效索引: 0-{})",
+                    idx,
+                    tables.len(),
+                    tables.len().saturating_sub(1)
+                );
+            }
+            tables = vec![tables.swap_remove(idx)];
+        }
+
+        let table_format: pageclaw_core::model::TableExportFormat = tables_args.format.into();
+        if table_format == pageclaw_core::model::TableExportFormat::Sql {
+            let ddl = tables
+                .iter()
+                .enumerate()
+                .map(|(idx, t)| {
+                    let name = if tables.len() > 1 {
+                        format!("{}_{}", tables_args.table_name, idx + 1)
+                    } else {
+                        tables_args.table_name.clone()
+                    };
+                    t.to_sql(&name)
+                })
+                .collect::<Vec<_>>()
+                .join("\n\n");
+            println!("{ddl}");
+        } else {
+            let formatted =
+                pageclaw_core::model::ExtractedTable::format_tables(&tables, table_format);
+            println!("{formatted}");
+        }
+        return Ok(());
+    }
+
+    // -------------------------------------------------------------------------
     // Execution Branch 1.5: Zero-API-Key Web Search
     // -------------------------------------------------------------------------
     if let Some(SubCommand::Search(ref search_args)) = args.command {
@@ -1044,6 +1120,52 @@ fn apply_search_params(url_str: &str, page: Option<u32>, order: Option<&str>) ->
     }
 }
 
+async fn load_target_text(target: &str, engine: &PageclawEngine) -> Result<String> {
+    if target.starts_with("http://") || target.starts_with("https://") {
+        let doc = engine
+            .process_url(
+                target,
+                &ExtractionOptions {
+                    mode: pageclaw_core::model::ExtractionMode::Article,
+                    format: pageclaw_core::model::OutputFormat::Markdown,
+                    ..Default::default()
+                },
+            )
+            .await
+            .context("Failed to process URL")?;
+        Ok(doc.content)
+    } else {
+        std::fs::read_to_string(target)
+            .with_context(|| format!("Failed to read target file '{target}'"))
+    }
+}
+
+async fn load_target_html(target: &str, engine: &PageclawEngine) -> Result<String> {
+    if target == "-" {
+        let mut buffer = String::new();
+        io::stdin()
+            .read_to_string(&mut buffer)
+            .context("Failed to read HTML from stdin")?;
+        Ok(buffer)
+    } else if target.starts_with("http://") || target.starts_with("https://") {
+        let parsed = Url::parse(target).context("Invalid target URL")?;
+        engine
+            .fetcher()
+            .validate_ssrf(&parsed)
+            .await
+            .context("SSRF blocked")?;
+        let resp = engine
+            .fetcher()
+            .fetch(target)
+            .await
+            .context("Failed to fetch target URL")?;
+        Ok(resp.html)
+    } else {
+        std::fs::read_to_string(target)
+            .with_context(|| format!("Failed to read HTML file '{target}'"))
+    }
+}
+
 /// Interactive REPL shell session for exploratory scraping, search, and feed inspection.
 async fn run_shell(engine: &PageclawEngine, base_options: &ExtractionOptions) -> Result<()> {
     println!("╔════════════════════════════════════════════════════════════════╗");
@@ -1082,6 +1204,10 @@ async fn run_shell(engine: &PageclawEngine, base_options: &ExtractionOptions) ->
                 println!("  fetch <url>         - 抓取网页并输出清洗后的 Markdown");
                 println!("  search <query>      - 免 API Key 全网搜索并返回结果列表");
                 println!("  feed <url>          - 解析并展示 RSS 2.0 / Atom 1.0 订阅源");
+                println!("  tables <url>        - 提取页面中的全部表格并以 GFM Markdown 输出");
+                println!("  summarize <url>     - 本地启发式提取页面核心观点要点速览");
+                println!("  chunk <url>         - 将长文档按标题与 Token 预算语义感知切块");
+                println!("  diff <url1> <url2>  - 对比两个网页或文档版本的版本差异与变更比例");
                 println!("  help                - 显示此帮助信息");
                 println!("  exit / quit         - 退出交互式会话\n");
             }
@@ -1138,6 +1264,101 @@ async fn run_shell(engine: &PageclawEngine, base_options: &ExtractionOptions) ->
                     }
                 } else {
                     eprintln!("用法: feed <url>");
+                }
+            }
+            "tables" | "table" => {
+                if let Some(target_url) = rest.first() {
+                    match engine.fetcher().fetch(target_url).await {
+                        Ok(resp) => {
+                            let doc = scraper::Html::parse_document(&resp.html);
+                            let tables = pageclaw_core::extractor::extract_tables(&doc);
+                            if tables.is_empty() {
+                                eprintln!("⚠️ 未在页面中检测到 <table> 表格元素");
+                            } else {
+                                let formatted = pageclaw_core::model::ExtractedTable::format_tables(
+                                    &tables,
+                                    pageclaw_core::model::TableExportFormat::Markdown,
+                                );
+                                println!("\n{formatted}\n");
+                            }
+                        }
+                        Err(e) => eprintln!("❌ 获取网页失败: {e}"),
+                    }
+                } else {
+                    eprintln!("用法: tables <url>");
+                }
+            }
+            "summarize" | "summary" => {
+                if let Some(target_url) = rest.first() {
+                    match engine.process_url(target_url, base_options).await {
+                        Ok(doc) => {
+                            let bullets =
+                                pageclaw_core::summarizer::extract_key_takeaways(&doc.content, 4);
+                            println!("\n### 💡 核心要点速览 (Key Takeaways):\n");
+                            for b in bullets {
+                                println!("- {}", b.trim());
+                            }
+                            println!();
+                        }
+                        Err(e) => eprintln!("❌ 提取失败: {e}"),
+                    }
+                } else {
+                    eprintln!("用法: summarize <url>");
+                }
+            }
+            "chunk" => {
+                if let Some(target_url) = rest.first() {
+                    match engine.process_url(target_url, base_options).await {
+                        Ok(doc) => {
+                            let chunks = pageclaw_core::chunker::chunk_markdown(
+                                &doc.content,
+                                500,
+                                50,
+                                pageclaw_core::model::TokenizerKind::O200k,
+                            );
+                            println!("\n# ✂️ 语义分块输出 (共 {} 块):\n", chunks.len());
+                            for c in chunks {
+                                let path = if c.heading_path.is_empty() {
+                                    "正文".to_string()
+                                } else {
+                                    c.heading_path.join(" > ")
+                                };
+                                println!(
+                                    "### 📦 [Chunk {}] Tokens: {} | 标题: {}\n\n{}\n",
+                                    c.index + 1,
+                                    c.token_count,
+                                    path,
+                                    c.content
+                                );
+                            }
+                        }
+                        Err(e) => eprintln!("❌ 提取切块失败: {e}"),
+                    }
+                } else {
+                    eprintln!("用法: chunk <url>");
+                }
+            }
+            "diff" => {
+                if rest.len() >= 2 {
+                    let url1 = rest[0];
+                    let url2 = rest[1];
+                    let doc1 = engine.process_url(url1, base_options).await;
+                    let doc2 = engine.process_url(url2, base_options).await;
+                    match (doc1, doc2) {
+                        (Ok(d1), Ok(d2)) => {
+                            let rep = pageclaw_core::diff::compute_diff(&d1.content, &d2.content);
+                            println!("\n# 🔄 页面差异比对结果:\n");
+                            println!(
+                                "> 新增: +{} | 删除: -{} | 变更比例: {:.1}%\n",
+                                rep.added_lines, rep.removed_lines, rep.change_ratio
+                            );
+                            println!("```diff\n{}\n```\n", rep.unified_diff);
+                        }
+                        (Err(e), _) => eprintln!("❌ 抓取第一篇失败: {e}"),
+                        (_, Err(e)) => eprintln!("❌ 抓取第二篇失败: {e}"),
+                    }
+                } else {
+                    eprintln!("用法: diff <url1> <url2>");
                 }
             }
             other => {

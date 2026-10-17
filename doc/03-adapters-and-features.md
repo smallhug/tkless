@@ -112,10 +112,41 @@ pageclaw search "大模型 Agent 架构设计" --wechat --limit 5
 pageclaw search "DeepSeek v3 架构解析" --limit 3 --fetch-content
 ```
 
-### 2.8 交互式 REPL 调研命令行
+### 2.8 交互式 REPL 探索会话命令行 (pageclaw shell)
 ```bash
-# 进入交互式 Shell，支持连续交互式 fetch、search、cache 查看与测试
+# 启动交互式终端 REPL，无需重复冷启动进程即可执行一系列探索操作
 pageclaw shell
+
+# 交互式会话支持指令：
+#   fetch <url>         - 抓取目标网页并输出清洗后的 Markdown
+#   search <query>      - 全网免 Key 检索并以 Markdown 呈现结果列表
+#   feed <url>          - 解析并排版输出 RSS 2.0 / Atom 1.0 订阅源列表
+#   tables <url>        - 提取页面中的全部表格并以 GFM Markdown 表格输出
+#   summarize <url>     - 本地启发式提取页面核心要点速览
+#   chunk <url>         - 将长文档按标题与 Token 预算进行语义感知切块
+#   diff <url1> <url2>  - 对比两个网页版本的差异与行级变更比例
+#   help / exit         - 查看帮助或退出会话
+```
+
+### 2.9 网页表格提取与格式转换子命令 (pageclaw tables)
+```bash
+# 提取网页中的全部表格并直接导出为 SQLite/PostgreSQL 兼容的 SQL DDL 与 INSERT
+pageclaw tables https://finance.example.com/report --format sql
+
+# 从本地 HTML 文件或管道提取表格并转为 CSV
+pageclaw tables ./report.html --format csv --index 0
+
+# 指定自定义 SQL 数据表名称
+pageclaw tables https://example.com/stats --format sql --table-name "annual_metrics"
+```
+
+### 2.10 文档版本差异分析子命令 (pageclaw diff)
+```bash
+# 对比两个网页版本，输出统一 Diff 视图与增删行级指标
+pageclaw diff https://example.com/v1.0 https://example.com/v2.0
+
+# 对比本地两份 Markdown 文档并输出结构化 JSON 报表
+pageclaw diff ./spec_v1.md ./spec_v2.md -f json
 ```
 
 ---

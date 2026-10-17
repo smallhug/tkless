@@ -746,10 +746,59 @@ pub enum SubCommand {
         about = "启动交互式 REPL 会话命令行 (支持 fetch/search/cache/links 交互式快速调研)"
     )]
     Shell(ShellArgs),
+
+    /// 对比两个文档/页面版本，输出行级变更分析与 Diff 报表
+    #[command(
+        name = "diff",
+        about = "对比两个文本文件或网页版本，输出统一 Diff 格式与行级变更比例"
+    )]
+    Diff(DiffArgs),
+
+    /// 提取网页或 HTML 文件中的全部表格，并导出为 SQL、CSV、TSV、JSON 或 Markdown
+    #[command(
+        name = "tables",
+        alias = "table",
+        about = "提取网页或 HTML 中的全部数据表格，并直接导出为 SQL DDL/INSERT、CSV、TSV 或 JSON"
+    )]
+    Tables(TablesArgs),
 }
 
 #[derive(clap::Args, Debug, Clone, Default)]
 pub struct ShellArgs {}
+
+#[derive(clap::Args, Debug, Clone)]
+pub struct DiffArgs {
+    /// Original (old) text file path or URL
+    #[arg(value_name = "OLD_TARGET")]
+    pub old_target: String,
+
+    /// Updated (new) text file path or URL
+    #[arg(value_name = "NEW_TARGET")]
+    pub new_target: String,
+
+    /// Output presentation format [default: markdown]
+    #[arg(short = 'f', long = "format", value_enum, default_value_t = CliFormat::Markdown)]
+    pub format: CliFormat,
+}
+
+#[derive(clap::Args, Debug, Clone)]
+pub struct TablesArgs {
+    /// Target webpage URL, path to local HTML file, or '-' to read from stdin
+    #[arg(value_name = "TARGET")]
+    pub target: String,
+
+    /// Table export presentation format [default: sql]
+    #[arg(short = 'f', long = "format", value_enum, default_value_t = CliTableFormat::Sql)]
+    pub format: CliTableFormat,
+
+    /// Custom SQL table name identifier when format is 'sql' [default: 'extracted_table']
+    #[arg(long = "table-name", default_value = "extracted_table")]
+    pub table_name: String,
+
+    /// Optional 0-indexed specific table to extract
+    #[arg(long = "index")]
+    pub table_index: Option<usize>,
+}
 
 #[derive(clap::Args, Debug, Clone)]
 pub struct CacheSubArgs {
