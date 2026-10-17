@@ -27,7 +27,19 @@
 - **🌐 智能网络获取**：
   - 基于 `reqwest` + `rustls`，原生支持 HTTP/2、连接池与多重压缩算法（Gzip / Brotli）。
   - 流式读取防内存溢出（OOM Guard），自动探测网页编码（UTF-8、GBK、Shift-JIS、Windows-1252 等）。
-- **🏗️ 模块化多包架构**：采用 Cargo Workspace 组织，核心逻辑作为 `pageclaw-core` 库与 CLI 解耦，并预留了 MCP（Model Context Protocol）协议扩展点。
+- **🏗️ 模块化多包架构**：采用 Cargo Workspace 组织，核心逻辑作为 `pageclaw-core` 库与 CLI 解耦，并内置原生轻量级 MCP（Model Context Protocol）stdio 服务器。
+- **🧩 15+ 深度平台适配器**：原生适配 B站、知乎、微信公众号、小红书、GitHub、Hugging Face、Stack Overflow、V2EX、Reddit、维基百科、百度百科、ArXiv、Medium、CSDN、Substack、掘金等。
+
+---
+
+## 📚 开发与设计文档 (Documentation)
+
+项目深度设计与开发规范已归档至 `doc/` 目录：
+
+- 📖 **[doc/README.md](doc/README.md)**：开发文档导航与快速指引
+- 🚀 **[01-ci-cd-and-release.md](doc/01-ci-cd-and-release.md)**：发布流程与 CI/CD 自动化构建指南（GitHub Actions 多平台交叉编译、Release 打包与瘦身）
+- 🔌 **[02-mcp-tools-extension.md](doc/02-mcp-tools-extension.md)**：Model Context Protocol (MCP) 工具扩展架构设计（专用原子工具、进度推流与宿主配置）
+- 🛠️ **[03-adapters-and-features.md](doc/03-adapters-and-features.md)**：平台适配器矩阵与功能特性实战手册（15+ 平台参数速查、SQL 表格导出、RAG 分块与实战案例）
 
 ---
 
@@ -37,6 +49,15 @@
 pageclaw/
 ├── Cargo.toml                          # Workspace 根配置与依赖版本锁定
 ├── README.md                           # 项目说明文档
+├── .github/
+│   └── workflows/                      # GitHub Actions CI/CD 自动化工作流
+│       ├── ci.yml                      # PR/Push 三端测试与 Lint
+│       └── release.yml                 # Git Tag 多平台交叉编译与 Release 发版
+├── doc/                                # 核心开发、架构与使用文档
+│   ├── README.md                       # 文档索引与快速指引
+│   ├── 01-ci-cd-and-release.md         # CI/CD 与多平台构建发布指南
+│   ├── 02-mcp-tools-extension.md       # MCP 工具扩展与协议规范
+│   └── 03-adapters-and-features.md     # 适配器矩阵与全量功能使用手册
 └── crates/
     ├── pageclaw-core/                  # 核心提取与清洗引擎库 (可独立引入)
     │   ├── src/

@@ -1,0 +1,131 @@
+# 03 - 平台适配器矩阵与功能特性实战手册
+
+本文档是 PageClaw 的全量功能特性、15+ 平台适配器与 CLI 命令行使用手册，旨在为开发者与 AI Agent 管道集成提供完整的参考标准。
+
+---
+
+## 1. 平台专属适配器矩阵 (15+ Platforms)
+
+PageClaw 内置自动化平台识别调度器，当输入的 URL 命中受支持的主流平台时，会自动激活专属的数据提取与降噪策略：
+
+| 平台名称 | 匹配域名规则 | 核心支持能力与专属选项 |
+| :--- | :--- | :--- |
+| **哔哩哔哩 (Bilibili)** | `bilibili.com`, `b23.tv` | - 提取 CC 官方/AI 字幕轨 (`--bili-sub`)<br>- 提取 AI 视频大纲总结 (`--bili-sum`)<br>- 提取时间轴弹幕表 (`--bili-dm`)<br>- 提取高赞精选热评 (`--bili-cm`)<br>- 视频与高清封面下载 (`--bili-dl`, `--bili-dl-cover`) |
+| **知乎 (Zhihu)** | `zhihu.com`, `zhuanlan.zhihu.com` | - 问题、回答、想法、专栏文章高保真纯净抓取<br>- 防外链重定向拦截解包（还原真实目标 URL）<br>- 自动替换高清原图与 LaTeX 数学公式标准化<br>- 智能探测知乎安全验证码与反爬挑战 |
+| **微信公众号 (WeChat)** | `mp.weixin.qq.com` | - 自动解析 `data-src` 懒加载真实高清图片<br>- 提取精准作者名与发布时间戳<br>- 智能识别“该内容已被发布者删除”与反爬风控页面 |
+| **小红书 (Xiaohongshu)** | `xiaohongshu.com`, `xhslink.com` | - 提取笔记正文、话题标签与发布者信息<br>- 自动提取高清无水印多图画廊列表 |
+| **GitHub** | `github.com` | - 仓库 README 深度降噪与代码块语言标识保留<br>- Release 发版说明解析<br>- **Trending 热榜抽取**（支持每日/每周/每月及编程语言过滤） |
+| **Hugging Face** | `huggingface.co` | - 模型主页 Model Card、数据集主页与论文正文提取<br>- 提取头部 YAML Frontmatter 元数据（任务分类、下载量、许可证等） |
+| **Stack Overflow** | `stackoverflow.com` | - 问题正文与精简代码块提纯<br>- 采纳答案（Accepted Answer）高亮标记与点赞得分统计 |
+| **V2EX** | `v2ex.com` | - 楼主主楼与 Append 附言合并整合<br>- 楼层回复按 Markdown 结构化表格导出 |
+| **Reddit** | `reddit.com` | - 帖子正文与 Markdown 格式转换<br>- 评论树递归扁平化与层级引用标注 |
+| **Wikipedia (维基百科)** | `*.wikipedia.org` | - 正文层级标题保留，自动剔除编辑链接 `[edit]` 与上标引用 `[1][2]`<br>- 信息盒（Infobox）与维基表格结构化保留 |
+| **百度百科 (Baike)** | `baike.baidu.com` | - 词条核心摘要（Lemma Summary）提纯<br>- 基础信息表格（Basic Info）键值化抽取<br>- 多义词列表识别与参考资料降噪 |
+| **ArXiv** | `arxiv.org` | - 论文 Abstract 摘要、作者列表、分类标签与 PDF 下载链接提取<br>- 支持 ArXiv Atom 订阅源解析与论文快讯追踪 |
+| **Medium & Substack** | `medium.com`, `*.substack.com` | - 专栏博文高保真图文排版提纯，剥离付费弹窗遮罩与推荐流广告 |
+| **掘金 (Juejin) & CSDN** | `juejin.cn`, `blog.csdn.net` | - 外链跳转中间页自动解包<br>- 代码块行号、一键复制按钮与广告占位容器彻底清除 |
+
+> 💡 **提示**：若希望禁用平台内置适配器并强制走通用 Readability HTML 清洗流水线，只需追加 `--no-adapter` 参数。
+
+---
+
+## 2. 核心功能与 CLI 命令速查
+
+### 2.1 基础网页抓取与输出控制
+```bash
+# 抓取网页并输出纯净 GFM Markdown
+pageclaw https://example.com/article
+
+# 限制上下文 Token 预算（段落安全断句，自动闭合未封闭的代码块）
+pageclaw https://example.com/long-page --max-tokens 1500
+
+# 输出带 YAML 前置元数据的 Markdown (Title, URL, Date, Author)
+pageclaw https://example.com/article --frontmatter
+
+# 剔除正文中的图片或超链接（大幅压减 Token 消耗）
+pageclaw https://example.com/article --no-images --no-links
+
+# 输出完整的结构化 JSON（包含 content, metadata, tokens 等字段）
+pageclaw https://example.com/article -f json
+```
+
+### 2.2 DOM 定向提取与负向剪枝
+```bash
+# 仅提取特定 CSS 选择器容器内容
+pageclaw https://docs.rs/tokio/latest/tokio/ --selector "div.docblock"
+
+# 剔除正文中的指定噪音容器（负向选择器，支持逗号分隔多个选择器）
+pageclaw https://example.com/article -R ".advertisement, .comment-box, #author-sidebar"
+```
+
+### 2.3 网页表格一键提取与 SQL/CSV 转换
+```bash
+# 仅提取网页中的全部数据表，并转为 SQLite/PostgreSQL 兼容的 DDL 与 INSERT 语句
+pageclaw https://finance.example.com/report --tables-only --table-format sql
+
+# 将数据表导出为标准 CSV 格式
+pageclaw https://en.wikipedia.org/wiki/List_of_countries --tables-only --table-format csv
+```
+
+### 2.4 Schema 驱动的结构化实体抽取 (免 LLM 消耗)
+```bash
+# 自动探测页面的重复列表容器并生成推荐的 Schema 模版
+pageclaw https://news.ycombinator.com/ --scaffold
+
+# 使用内联 Schema 直接抽取特定结构化实体数组
+pageclaw https://news.ycombinator.com/ --schema '{
+  "items": {
+    "selector": "tr.athing",
+    "fields": {
+      "title": ".titleline > a",
+      "url": ".titleline > a@href",
+      "rank": ".rank | default: 0"
+    }
+  }
+}'
+```
+
+### 2.5 语义感知分块与长文档目录拆分 (RAG 增强)
+```bash
+# 启用语义切块（保护代码块与段落完整性，输出切块 JSON 流）
+pageclaw https://docs.rs/tokio/latest/tokio/ --chunk --chunk-size 500
+
+# 将长篇文档按标题拆分为多个独立 Markdown 文件并生成 index.md 导航索引
+pageclaw https://en.wikipedia.org/wiki/Rust_(programming_language) --out-dir ./rust_doc
+```
+
+### 2.6 CDP 无头浏览器渲染与高清长截图
+```bash
+# 针对复杂 SPA 动态页面，调用本地 Chrome 渲染并抓取高清整页截图
+pageclaw https://dashboard.example.com/app --screenshot ./dashboard.png
+```
+
+### 2.7 免 API Key 全网搜索与即搜即抓
+```bash
+# 使用 Bing/Google 检索关键词并以 Markdown 呈现结果
+pageclaw search "Rust async tokio tutorial" --limit 5
+
+# 针对微信公众号定向检索
+pageclaw search "大模型 Agent 架构设计" --wechat --limit 5
+
+# 搜索前 3 条结果并在一次调用中直接抓取其清洗后的正文内容
+pageclaw search "DeepSeek v3 架构解析" --limit 3 --fetch-content
+```
+
+### 2.8 交互式 REPL 调研命令行
+```bash
+# 进入交互式 Shell，支持连续交互式 fetch、search、cache 查看与测试
+pageclaw shell
+```
+
+---
+
+## 3. Agent 管道典型集成范例
+
+### 3.1 Claude Code / Cursor 自动化调研 Prompt 模板
+```text
+请使用 pageclaw 命令行工具，针对用户提出的技术问题进行深度调研：
+1. 优先使用 `pageclaw search "<关键词>" --limit 3 --fetch-content` 获取前 3 篇核心文章。
+2. 若遇到长篇文档，使用 `pageclaw "<URL>" --max-tokens 2000 --summarize` 提取要点。
+3. 若需提取对比表格，使用 `pageclaw "<URL>" --tables-only --table-format markdown`。
+```
