@@ -332,6 +332,14 @@ pub struct CliArgs {
     #[arg(long = "summarize", help_heading = "通用提取选项 (General Options)")]
     pub summarize: bool,
 
+    /// 将提取的 Markdown 按标题层级自动拆分为多文件目录并生成 index.md 导航索引
+    #[arg(
+        long = "out-dir",
+        value_name = "DIR",
+        help_heading = "通用提取选项 (General Options)"
+    )]
+    pub out_dir: Option<PathBuf>,
+
     // =========================================================================
     // 哔哩哔哩专属选项 (Bilibili Options)
     // =========================================================================
@@ -967,6 +975,10 @@ pub struct BatchArgs {
     /// 模拟移动端设备 User-Agent
     #[arg(long = "mobile")]
     pub mobile: bool,
+
+    /// 批量抓取单任务间歇延迟等待时间 (毫秒)，防止触发服务端 429 速率限制
+    #[arg(long = "delay-ms", default_value_t = 0, value_name = "MS")]
+    pub delay_ms: u64,
 }
 
 #[derive(clap::Args, Debug, Clone)]
@@ -1080,4 +1092,8 @@ pub struct CrawlArgs {
     /// 模拟移动端设备 User-Agent
     #[arg(long = "mobile")]
     pub mobile: bool,
+
+    /// 递归爬取单页面间歇延迟等待时间 (毫秒)，防止触发服务端 429 速率限制
+    #[arg(long = "delay-ms", default_value_t = 0, value_name = "MS")]
+    pub delay_ms: u64,
 }

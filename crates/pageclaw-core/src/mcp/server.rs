@@ -131,6 +131,7 @@ impl McpServer {
                     "inspect_links" => self.call_inspect_links(&arguments).await,
                     "check_auth" => self.call_check_auth(&arguments).await,
                     "summarize_text" => self.call_summarize_text(&arguments).await,
+                    "split_document" => self.call_split_document(&arguments).await,
                     _ => McpToolCallResult::error(format!("Unknown tool: '{tool_name}'")),
                 };
 
@@ -966,6 +967,7 @@ impl McpServer {
         let dedup = args.get("dedup").and_then(|v| v.as_bool()).unwrap_or(false);
 
         let is_jsonl = args.get("format").and_then(|v| v.as_str()) == Some("jsonl");
+        let delay_ms = args.get("delay_ms").and_then(|v| v.as_u64()).unwrap_or(0);
         let format = match args.get("format").and_then(|v| v.as_str()) {
             Some("json") => OutputFormat::Json,
             _ => OutputFormat::Markdown,
@@ -1006,6 +1008,7 @@ impl McpServer {
             exclude_patterns: crate::crawler::CrawlOptions::default().exclude_patterns,
             sitemap,
             dedup,
+            delay_ms,
         };
 
         let extraction_options = ExtractionOptions {
@@ -1147,6 +1150,7 @@ impl McpServer {
             .get("remove_selector")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
+        let delay_ms = args.get("delay_ms").and_then(|v| v.as_u64()).unwrap_or(0);
 
         let schema = args.get("schema").map(|v| {
             if let Some(s) = v.as_str() {
@@ -1213,6 +1217,9 @@ impl McpServer {
 
             join_set.spawn(async move {
                 let _permit = sem.acquire().await.unwrap();
+                if delay_ms > 0 && idx > 0 {
+                    tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+                }
                 let res = eng.process_url(&url, &opts).await;
                 (idx, url, res)
             });
@@ -1923,6 +1930,24 @@ impl McpServer {
                 }
                 McpToolCallResult::success(md)
             }
+        }
+    }
+
+    async fn call_split_document(&self, args: &Value) -> McpToolCallResult {
+        let markdown = match args.get("markdown").and_then(|v| v.as_str()) {
+            Some(m) if !m.trim().is_empty() => m,
+            _ => return McpToolCallResult::error("Missing required parameter 'markdown'"),
+        };
+
+        let max_level = args
+            .get("max_heading_level")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(2) as usize;
+
+        let sections = crate::splitter::split_markdown_by_headings(markdown, max_level);
+        match serde_json::to_string_pretty(&sections) {
+            Ok(json_str) => McpToolCallResult::success(json_str),
+            Err(e) => McpToolCallResult::error(format!("Serialization error: {e}")),
         }
     }
 }

@@ -20,6 +20,7 @@ pub mod mcp;
 pub mod model;
 pub mod schema;
 pub mod search;
+pub mod splitter;
 pub mod summarizer;
 pub mod token;
 
@@ -59,6 +60,7 @@ pub use search::{
     format_search_fetch_markdown, format_search_results_markdown, search_bing, search_google,
     web_search, web_search_and_fetch, web_search_with_engine, SearchFetchItem, SearchResultItem,
 };
+pub use splitter::{export_sections_to_dir, split_markdown_by_headings, DocumentSection};
 pub use summarizer::{extract_key_takeaways, summarize_markdown};
 
 use cleaner::{clean_html, extract_selector};

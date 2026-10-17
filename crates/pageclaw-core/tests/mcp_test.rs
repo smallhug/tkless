@@ -42,7 +42,7 @@ async fn test_mcp_protocol_lifecycle() {
     let tools_array = tools_val["tools"]
         .as_array()
         .expect("Tools should be an array");
-    assert_eq!(tools_array.len(), 16);
+    assert_eq!(tools_array.len(), 17);
 
     let tool_names: Vec<&str> = tools_array
         .iter()
@@ -64,6 +64,7 @@ async fn test_mcp_protocol_lifecycle() {
     assert!(tool_names.contains(&"inspect_links"));
     assert!(tool_names.contains(&"check_auth"));
     assert!(tool_names.contains(&"summarize_text"));
+    assert!(tool_names.contains(&"split_document"));
 
     // Verify web_search schema contains scope, cdp_endpoint, schema
     let search_tool = tools_array
@@ -344,6 +345,32 @@ async fn test_mcp_protocol_lifecycle() {
     let standalone_sum_text = standalone_sum_val["content"][0]["text"].as_str().unwrap();
     assert!(standalone_sum_text.contains("核心要点速览 (Key Takeaways)"));
     assert!(standalone_sum_text.contains("- "));
+
+    // 5n. Tool Call: split_document
+    let split_req = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 18,
+        "method": "tools/call",
+        "params": {
+            "name": "split_document",
+            "arguments": {
+                "markdown": "# Chapter 1: Introduction\nThis is chapter 1.\n## Subchapter 1.1\nDetails here.\n# Chapter 2: Conclusion\nFinal remarks.",
+                "max_heading_level": 2
+            }
+        }
+    });
+    let split_res = server
+        .handle_message(&split_req.to_string())
+        .await
+        .expect("Should return response");
+    let split_val = split_res.result.expect("Split result should be present");
+    let split_text = split_val["content"][0]["text"].as_str().unwrap();
+    let parsed_sections: serde_json::Value = serde_json::from_str(split_text).unwrap();
+    let sections_arr = parsed_sections.as_array().unwrap();
+    assert_eq!(sections_arr.len(), 3);
+    assert_eq!(sections_arr[0]["title"], "Chapter 1: Introduction");
+    assert_eq!(sections_arr[1]["title"], "Subchapter 1.1");
+    assert_eq!(sections_arr[2]["title"], "Chapter 2: Conclusion");
 
     // 5. Unknown Method Error
     let unknown_req = r#"{"jsonrpc":"2.0","id":4,"method":"unknown/method"}"#;
