@@ -1,12 +1,13 @@
 # 02 - Model Context Protocol (MCP) 工具扩展架构设计
 
-本文档详细描述 PageClaw 的原生 Model Context Protocol (MCP) 服务端架构，以及向主流 AI Agent（Claude Desktop、Cursor、Zed 等）暴露的高级工具扩展方案。
+本文档详细描述 TkLess 的原生 Model Context Protocol (MCP) 服务端架构，以及向主流 AI Agent（Claude Desktop、Cursor、Zed 等）暴露的高级工具扩展方案。
+> **Spend less tokens, perceive more web.**
 
 ---
 
 ## 1. 架构总览
 
-PageClaw 内置原生轻量级 MCP 服务端（位于 `crates/pageclaw-core/src/mcp`），无需 Node.js 或 Python 运行时，直接通过标准输入输出（`stdio`）以 JSON-RPC 2.0 协议与 AI 宿主进程高效通信：
+TkLess 内置原生轻量级 MCP 服务端（位于 `crates/tkless-core/src/mcp`），无需 Node.js 或 Python 运行时，直接通过标准输入输出（`stdio`）以 JSON-RPC 2.0 协议与 AI 宿主进程高效通信：
 
 ```text
 ┌────────────────────────────────────────────────────────┐
@@ -14,8 +15,8 @@ PageClaw 内置原生轻量级 MCP 服务端（位于 `crates/pageclaw-core/src/
 └───────────────────────────┬────────────────────────────┘
                             │ JSON-RPC 2.0 (stdio)
 ┌───────────────────────────▼────────────────────────────┐
-│              PageClaw MCP Server (Rust)                │
-│  crates/pageclaw-core/src/mcp/server.rs                │
+│              TkLess MCP Server (Rust)                  │
+│  crates/tkless-core/src/mcp/server.rs                  │
 ├────────────────────────────────────────────────────────┤
 │ 核心调度层:                                            │
 │ - initialize / ping / tools/list / tools/call          │
@@ -35,13 +36,13 @@ PageClaw 内置原生轻量级 MCP 服务端（位于 `crates/pageclaw-core/src/
 ```
 
 > 💡 **前缀自适应 (Prefix-Agnostic Dispatch)**：
-> 服务端对所有工具调用均支持前缀自适应处理。无论是调用 `export_tables` 还是 `pageclaw_export_tables`，服务端内部均会自动归一化分发，无缝兼容各类 MCP 宿主。
+> 服务端对所有工具调用均支持前缀自适应处理。无论是调用 `export_tables` 还是 `tkless_export_tables`（亦兼容历史 `pageclaw_export_tables` 前缀），服务端内部均会自动归一化分发，无缝兼容各类 MCP 宿主。
 
 ---
 
 ## 2. 核心专属 MCP 工具规范 (已全部落地)
 
-为提升 Agent 调用时的决策精准度与参数收敛性，PageClaw 提供了 5 个高频专用原子工具：
+为提升 Agent 调用时的决策精准度与参数收敛性，TkLess 提供了 5 个高频专用原子工具：
 
 ### 2.1 `export_tables` (表格提取与数据转换)
 - **定位**：专门处理财经财报、数据榜单、维基百科信息表，直接产出开箱即用的 SQL 或 CSV，免除大模型繁重的数据格式重排负担。
@@ -164,8 +165,8 @@ PageClaw 内置原生轻量级 MCP 服务端（位于 `crates/pageclaw-core/src/
 ```json
 {
   "mcpServers": {
-    "pageclaw": {
-      "command": "pageclaw",
+    "tkless": {
+      "command": "tkless",
       "args": ["mcp"]
     }
   }
@@ -177,8 +178,8 @@ PageClaw 内置原生轻量级 MCP 服务端（位于 `crates/pageclaw-core/src/
 ```json
 {
   "mcpServers": {
-    "pageclaw": {
-      "command": "pageclaw",
+    "tkless": {
+      "command": "tkless",
       "args": ["mcp"]
     }
   }
@@ -189,7 +190,7 @@ PageClaw 内置原生轻量级 MCP 服务端（位于 `crates/pageclaw-core/src/
 
 ## 4. MCP 流式进度通知规范 (`$/progress`)
 
-在处理长耗时任务（如整站爬取 `crawl_site`、大批量并发检索或 CDP 截图时），PageClaw 服务端会通过标准 JSON-RPC 2.0 异步推流进度事件：
+在处理长耗时任务（如整站爬取 `crawl_site`、大批量并发检索或 CDP 截图时），TkLess 服务端会通过标准 JSON-RPC 2.0 异步推流进度事件：
 
 ```json
 {

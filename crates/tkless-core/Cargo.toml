@@ -1,10 +1,10 @@
 [package]
-name = "pageclaw-core"
+name = "tkless-core"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
-description = "Core engine for pageclaw web content extraction"
+description = "Core engine for tkless web content extraction"
 
 [dependencies]
 reqwest.workspace = true

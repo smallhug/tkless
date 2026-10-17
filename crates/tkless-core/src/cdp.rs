@@ -581,11 +581,18 @@ pub fn is_anti_scraping_challenge(html: &str, status: u16) -> bool {
 
 /// Resolves effective Chrome DevTools Protocol endpoint:
 /// 1. Explicitly configured parameter
-/// 2. `PAGECLAW_CDP_ENDPOINT` or `CDP_ENDPOINT` environment variables
+/// 2. `TKLESS_CDP_ENDPOINT`, `PAGECLAW_CDP_ENDPOINT`, or `CDP_ENDPOINT` environment variables
 /// 3. Default fallback "http://127.0.0.1:9222" if auto-cdp requested
 pub fn resolve_cdp_endpoint(configured: Option<&str>, auto_cdp: bool) -> Option<String> {
     if let Some(endpoint) = configured {
         let trimmed = endpoint.trim();
+        if !trimmed.is_empty() {
+            return Some(trimmed.to_string());
+        }
+    }
+
+    if let Ok(env_ep) = std::env::var("TKLESS_CDP_ENDPOINT") {
+        let trimmed = env_ep.trim();
         if !trimmed.is_empty() {
             return Some(trimmed.to_string());
         }

@@ -74,7 +74,7 @@ impl McpServer {
                         "logging": {}
                     },
                     "serverInfo": {
-                        "name": "pageclaw",
+                        "name": "tkless",
                         "version": env!("CARGO_PKG_VERSION")
                     }
                 });
@@ -96,7 +96,8 @@ impl McpServer {
                 let params = request.params.unwrap_or(Value::Null);
                 let raw_tool_name = params.get("name").and_then(|v| v.as_str()).unwrap_or("");
                 let tool_name = raw_tool_name
-                    .strip_prefix("pageclaw_")
+                    .strip_prefix("tkless_")
+                    .or_else(|| raw_tool_name.strip_prefix("pageclaw_"))
                     .unwrap_or(raw_tool_name);
                 let arguments = params
                     .get("arguments")
@@ -159,7 +160,7 @@ impl McpServer {
                 req_id,
                 METHOD_NOT_FOUND,
                 format!(
-                    "Method '{}' is not supported by PageClaw MCP server",
+                    "Method '{}' is not supported by TkLess MCP server",
                     request.method
                 ),
             )),

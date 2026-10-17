@@ -145,7 +145,7 @@ impl MathPlaceholderProtector {
             let formula = clean_tex_code(&caps[1]);
             let id = self.formulas.len();
             self.formulas.push((true, formula));
-            format!("<p>PAGECLAWMATHBLOCK{id}</p>")
+            format!("<p>TKLESSMATHBLOCK{id}</p>")
         });
 
         // 2. KaTeX display span blocks
@@ -153,7 +153,7 @@ impl MathPlaceholderProtector {
             let formula = clean_tex_code(&caps[1]);
             let id = self.formulas.len();
             self.formulas.push((true, formula));
-            format!("<p>PAGECLAWMATHBLOCK{id}</p>")
+            format!("<p>TKLESSMATHBLOCK{id}</p>")
         });
 
         // 3. MathJax display formula blocks
@@ -161,7 +161,7 @@ impl MathPlaceholderProtector {
             let formula = clean_tex_code(&caps[1]);
             let id = self.formulas.len();
             self.formulas.push((true, formula));
-            format!("<p>PAGECLAWMATHBLOCK{id}</p>")
+            format!("<p>TKLESSMATHBLOCK{id}</p>")
         });
 
         // 4. Math display divs (\\[ ... \\])
@@ -169,7 +169,7 @@ impl MathPlaceholderProtector {
             let formula = clean_tex_code(&caps[1]);
             let id = self.formulas.len();
             self.formulas.push((true, formula));
-            format!("<p>PAGECLAWMATHBLOCK{id}</p>")
+            format!("<p>TKLESSMATHBLOCK{id}</p>")
         });
 
         // 5. KaTeX inline formula spans
@@ -177,7 +177,7 @@ impl MathPlaceholderProtector {
             let formula = clean_tex_code(&caps[1]);
             let id = self.formulas.len();
             self.formulas.push((false, formula));
-            format!(" PAGECLAWMATHINLINE{id} ")
+            format!(" TKLESSMATHINLINE{id} ")
         });
 
         // 6. MathJax inline formula scripts
@@ -185,7 +185,7 @@ impl MathPlaceholderProtector {
             let formula = clean_tex_code(&caps[1]);
             let id = self.formulas.len();
             self.formulas.push((false, formula));
-            format!(" PAGECLAWMATHINLINE{id} ")
+            format!(" TKLESSMATHINLINE{id} ")
         });
 
         // 7. Math inline spans (\\( ... \\))
@@ -193,7 +193,7 @@ impl MathPlaceholderProtector {
             let formula = clean_tex_code(&caps[1]);
             let id = self.formulas.len();
             self.formulas.push((false, formula));
-            format!(" PAGECLAWMATHINLINE{id} ")
+            format!(" TKLESSMATHINLINE{id} ")
         });
 
         s7.to_string()
@@ -203,11 +203,11 @@ impl MathPlaceholderProtector {
         let mut result = markdown.to_string();
         for (id, (is_block, formula)) in self.formulas.iter().enumerate() {
             if *is_block {
-                let token = format!("PAGECLAWMATHBLOCK{id}");
+                let token = format!("TKLESSMATHBLOCK{id}");
                 let replacement = format!("\n\n$$\n{formula}\n$$\n\n");
                 result = result.replace(&token, &replacement);
             } else {
-                let token = format!("PAGECLAWMATHINLINE{id}");
+                let token = format!("TKLESSMATHINLINE{id}");
                 let replacement = format!("${formula}$");
                 result = result.replace(&token, &replacement);
             }

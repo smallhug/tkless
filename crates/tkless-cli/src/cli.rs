@@ -1,6 +1,6 @@
 use clap::{Parser, Subcommand, ValueEnum};
-use pageclaw_core::model::{ExtractionMode, OutputFormat};
 use std::path::PathBuf;
+use tkless_core::model::{ExtractionMode, OutputFormat};
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
 pub enum CliFormat {
@@ -62,12 +62,12 @@ pub enum CliQuality {
     Q360p,
 }
 
-impl From<CliQuality> for pageclaw_core::model::VideoQuality {
+impl From<CliQuality> for tkless_core::model::VideoQuality {
     fn from(q: CliQuality) -> Self {
         match q {
-            CliQuality::Q720p => pageclaw_core::model::VideoQuality::Q720p,
-            CliQuality::Q480p => pageclaw_core::model::VideoQuality::Q480p,
-            CliQuality::Q360p => pageclaw_core::model::VideoQuality::Q360p,
+            CliQuality::Q720p => tkless_core::model::VideoQuality::Q720p,
+            CliQuality::Q480p => tkless_core::model::VideoQuality::Q480p,
+            CliQuality::Q360p => tkless_core::model::VideoQuality::Q360p,
         }
     }
 }
@@ -81,11 +81,11 @@ pub enum CliOnTooLarge {
     Truncate,
 }
 
-impl From<CliOnTooLarge> for pageclaw_core::model::OnTooLarge {
+impl From<CliOnTooLarge> for tkless_core::model::OnTooLarge {
     fn from(v: CliOnTooLarge) -> Self {
         match v {
-            CliOnTooLarge::Error => pageclaw_core::model::OnTooLarge::Error,
-            CliOnTooLarge::Truncate => pageclaw_core::model::OnTooLarge::Truncate,
+            CliOnTooLarge::Error => tkless_core::model::OnTooLarge::Error,
+            CliOnTooLarge::Truncate => tkless_core::model::OnTooLarge::Truncate,
         }
     }
 }
@@ -104,12 +104,12 @@ pub enum CliTokenizer {
     Heuristic,
 }
 
-impl From<CliTokenizer> for pageclaw_core::model::TokenizerKind {
+impl From<CliTokenizer> for tkless_core::model::TokenizerKind {
     fn from(t: CliTokenizer) -> Self {
         match t {
-            CliTokenizer::O200k => pageclaw_core::model::TokenizerKind::O200k,
-            CliTokenizer::Cl100k => pageclaw_core::model::TokenizerKind::Cl100k,
-            CliTokenizer::Heuristic => pageclaw_core::model::TokenizerKind::Heuristic,
+            CliTokenizer::O200k => tkless_core::model::TokenizerKind::O200k,
+            CliTokenizer::Cl100k => tkless_core::model::TokenizerKind::Cl100k,
+            CliTokenizer::Heuristic => tkless_core::model::TokenizerKind::Heuristic,
         }
     }
 }
@@ -126,12 +126,12 @@ pub enum CliSearchEngine {
     Auto,
 }
 
-impl From<CliSearchEngine> for pageclaw_core::model::SearchEngineKind {
+impl From<CliSearchEngine> for tkless_core::model::SearchEngineKind {
     fn from(e: CliSearchEngine) -> Self {
         match e {
-            CliSearchEngine::Bing => pageclaw_core::model::SearchEngineKind::Bing,
-            CliSearchEngine::Google => pageclaw_core::model::SearchEngineKind::Google,
-            CliSearchEngine::Auto => pageclaw_core::model::SearchEngineKind::Auto,
+            CliSearchEngine::Bing => tkless_core::model::SearchEngineKind::Bing,
+            CliSearchEngine::Google => tkless_core::model::SearchEngineKind::Google,
+            CliSearchEngine::Auto => tkless_core::model::SearchEngineKind::Auto,
         }
     }
 }
@@ -152,24 +152,25 @@ pub enum CliTableFormat {
     Sql,
 }
 
-impl From<CliTableFormat> for pageclaw_core::model::TableExportFormat {
+impl From<CliTableFormat> for tkless_core::model::TableExportFormat {
     fn from(f: CliTableFormat) -> Self {
         match f {
-            CliTableFormat::Markdown => pageclaw_core::model::TableExportFormat::Markdown,
-            CliTableFormat::Csv => pageclaw_core::model::TableExportFormat::Csv,
-            CliTableFormat::Tsv => pageclaw_core::model::TableExportFormat::Tsv,
-            CliTableFormat::Json => pageclaw_core::model::TableExportFormat::Json,
-            CliTableFormat::Sql => pageclaw_core::model::TableExportFormat::Sql,
+            CliTableFormat::Markdown => tkless_core::model::TableExportFormat::Markdown,
+            CliTableFormat::Csv => tkless_core::model::TableExportFormat::Csv,
+            CliTableFormat::Tsv => tkless_core::model::TableExportFormat::Tsv,
+            CliTableFormat::Json => tkless_core::model::TableExportFormat::Json,
+            CliTableFormat::Sql => tkless_core::model::TableExportFormat::Sql,
         }
     }
 }
 
 #[derive(Parser, Debug)]
 #[command(
-    name = "pageclaw",
-    version = concat!(env!("CARGO_PKG_VERSION"), " (built ", env!("PAGECLAW_BUILD_DATE"), ")"),
-    about = "PageClaw: 高性能、Token 经济型的 AI Agent 网页提取与搜索引擎",
-    long_about = "PageClaw（爪页）是一个专为大语言模型与 AI Agent 设计的高性能网页抓取、降噪清洗与搜索提取引擎。\n\
+    name = "tkless",
+    version = concat!(env!("CARGO_PKG_VERSION"), " (built ", env!("TKLESS_BUILD_DATE"), ")"),
+    about = "TkLess: Spend less tokens, perceive more web.",
+    long_about = "TkLess — Spend less tokens, perceive more web.\n\
+专为大语言模型与 AI Agent 量身定制的高性能网页抓取、降噪清洗与搜索提取引擎。\n\
 自动剥离导航、脚本与广告噪音，将正文转化为 LLM 友好的 Markdown 或结构化 JSON，支持段落断句平滑截断与 Token 预算控制。\n\
 原生集成 B站/知乎/微信公众号/小红书/掘金/GitHub 平台适配器，内置 Bing/Google 双引擎检索，并提供原生 MCP 服务模式。",
     subcommand_precedence_over_arg = true

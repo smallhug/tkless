@@ -1,7 +1,7 @@
 use thiserror::Error;
 
 #[derive(Error, Debug)]
-pub enum PageclawError {
+pub enum TklessError {
     #[error("Network error: {0}")]
     Network(#[from] reqwest::Error),
 
@@ -54,26 +54,27 @@ pub enum PageclawError {
     SchemaError(String),
 }
 
-impl PageclawError {
+impl TklessError {
     /// Maps internal error types to standardized process exit codes for AI Agent orchestration.
     pub fn exit_code(&self) -> i32 {
         match self {
-            PageclawError::InvalidArgument(_) | PageclawError::UrlParse(_) => 2,
-            PageclawError::Network(_) | PageclawError::ConnectionTimeout(_) => 3,
-            PageclawError::HttpStatusError { status, .. } if *status >= 500 => 3,
-            PageclawError::HttpStatusError { status, .. } if *status >= 400 => 4,
-            PageclawError::HttpStatusError { .. } => 1,
-            PageclawError::CleaningError(_)
-            | PageclawError::ConversionError(_)
-            | PageclawError::EncodingError(_) => 4,
-            PageclawError::ResponseTooLarge { .. } => 5,
-            PageclawError::SsrfBlocked(_) => 6,
-            PageclawError::Io(_)
-            | PageclawError::AdapterError { .. }
-            | PageclawError::CacheError(_)
-            | PageclawError::CdpError(_)
-            | PageclawError::SchemaError(_)
-            | PageclawError::McpError { .. } => 1,
+            Self::InvalidArgument(_) | Self::UrlParse(_) => 2,
+            Self::Network(_) | Self::ConnectionTimeout(_) => 3,
+            Self::HttpStatusError { status, .. } if *status >= 500 => 3,
+            Self::HttpStatusError { status, .. } if *status >= 400 => 4,
+            Self::HttpStatusError { .. } => 1,
+            Self::CleaningError(_) | Self::ConversionError(_) | Self::EncodingError(_) => 4,
+            Self::ResponseTooLarge { .. } => 5,
+            Self::SsrfBlocked(_) => 6,
+            Self::Io(_)
+            | Self::AdapterError { .. }
+            | Self::CacheError(_)
+            | Self::CdpError(_)
+            | Self::SchemaError(_)
+            | Self::McpError { .. } => 1,
         }
     }
 }
+
+/// Backward-compatible type alias for `TklessError`.
+pub type PageclawError = TklessError;

@@ -33,8 +33,8 @@ impl Fetcher {
     pub fn new(options: FetchOptions) -> Result<Self, PageclawError> {
         let mut headers = HeaderMap::new();
 
-        let default_desktop_ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36 PageClaw/0.1";
-        let default_mobile_ua = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1 PageClaw/0.1";
+        let default_desktop_ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36 TkLess/0.1";
+        let default_mobile_ua = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1 TkLess/0.1";
 
         let ua = match options.user_agent.as_deref() {
             Some(custom) => custom,
@@ -781,7 +781,7 @@ pub fn save_platform_cookies_to_file(
 
     // Generate clean output with platform prefixes
     let mut out = String::new();
-    out.push_str("# PageClaw Platform Credentials\n");
+    out.push_str("# TkLess Platform Credentials\n");
     out.push_str("# Format: <platform>: <cookies>\n\n");
 
     for (p, c) in &platform_map {

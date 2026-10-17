@@ -1,12 +1,12 @@
 # 01 - 发布流程与 CI/CD 自动化构建指南
 
-本文档规定 PageClaw 的版本管理规范、多平台自动化交叉编译方案与 GitHub Actions 流水线配置。
+本文档规定 TkLess 的版本管理规范、多平台自动化交叉编译方案与 GitHub Actions 流水线配置。
 
 ---
 
 ## 1. 版本命名规范 (Semantic Versioning)
 
-PageClaw 遵循 [SemVer 2.0.0](https://semver.org/) 规范：
+TkLess 遵循 [SemVer 2.0.0](https://semver.org/) 规范：
 - **主版本号 (Major)**：架构级变更、底层协议不兼容调整（例如 MCP 协议核心定义重构）。
 - **次版本号 (Minor)**：向后兼容的新特性引入（例如新增平台适配器、新增 CLI 子命令或导出格式）。
 - **修订号 (Patch)**：向后兼容的缺陷修复、性能调优或依赖补丁。
@@ -22,7 +22,7 @@ PageClaw 遵循 [SemVer 2.0.0](https://semver.org/) 规范：
 ### 2.1 多平台发布矩阵 (`release.yml`)
 
 ```yaml
-name: Release PageClaw Binary
+name: Release TkLess Binary
 
 on:
   push:
@@ -41,25 +41,25 @@ jobs:
         include:
           - target: x86_64-pc-windows-msvc
             os: windows-latest
-            artifact_name: pageclaw-windows-amd64.zip
-            binary_name: pageclaw.exe
+            artifact_name: tkless-windows-amd64.zip
+            binary_name: tkless.exe
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
-            artifact_name: pageclaw-linux-amd64.tar.gz
-            binary_name: pageclaw
+            artifact_name: tkless-linux-amd64.tar.gz
+            binary_name: tkless
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-latest
-            artifact_name: pageclaw-linux-arm64.tar.gz
-            binary_name: pageclaw
+            artifact_name: tkless-linux-arm64.tar.gz
+            binary_name: tkless
             use_cross: true
           - target: x86_64-apple-darwin
             os: macos-13
-            artifact_name: pageclaw-darwin-amd64.tar.gz
-            binary_name: pageclaw
+            artifact_name: tkless-darwin-amd64.tar.gz
+            binary_name: tkless
           - target: aarch64-apple-darwin
             os: macos-latest
-            artifact_name: pageclaw-darwin-arm64.tar.gz
-            binary_name: pageclaw
+            artifact_name: tkless-darwin-arm64.tar.gz
+            binary_name: tkless
 
     steps:
       - name: Checkout repository
@@ -77,9 +77,9 @@ jobs:
       - name: Build Release Binary
         run: |
           if [ "${{ matrix.use_cross }}" = "true" ]; then
-            cross build --release --target ${{ matrix.target }} -p pageclaw-cli
+            cross build --release --target ${{ matrix.target }} -p tkless-cli
           else
-            cargo build --release --target ${{ matrix.target }} -p pageclaw-cli
+            cargo build --release --target ${{ matrix.target }} -p tkless-cli
           fi
         shell: bash
 
@@ -107,7 +107,7 @@ jobs:
 
 ## 3. 产物二进制优化与瘦身策略
 
-PageClaw 在根目录 `Cargo.toml` 中配置了极速体积优化 profile：
+TkLess 在根目录 `Cargo.toml` 中配置了极速体积优化 profile：
 
 ```toml
 [profile.release]

@@ -7,6 +7,7 @@ fn main() {
         })
         .unwrap_or_else(|_| "2026-10-15".to_string());
 
+    println!("cargo:rustc-env=TKLESS_BUILD_DATE={build_date}");
     println!("cargo:rustc-env=PAGECLAW_BUILD_DATE={build_date}");
 
     #[cfg(windows)]
@@ -15,12 +16,12 @@ fn main() {
         res.set_icon("../../assets/icon.ico");
         res.set(
             "FileDescription",
-            "PageClaw - High-Performance Web Content Extraction Engine & CLI for AI Agents",
+            "TkLess - Spend less tokens, perceive more web",
         );
-        res.set("ProductName", "PageClaw");
-        res.set("CompanyName", "PageClaw Contributors");
-        res.set("OriginalFilename", "pageclaw.exe");
-        res.set("LegalCopyright", "PageClaw Contributors");
+        res.set("ProductName", "TkLess");
+        res.set("CompanyName", "TkLess Contributors");
+        res.set("OriginalFilename", "tkless.exe");
+        res.set("LegalCopyright", "TkLess Contributors");
         res.set("FileVersion", "0.1.0.0");
         res.set("ProductVersion", "0.1.0.0");
         if let Err(e) = res.compile() {

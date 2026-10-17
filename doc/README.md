@@ -1,6 +1,7 @@
-# PageClaw (爪页) 开发与设计文档中心
+# TkLess 开发与设计文档中心
 
-本目录归档 PageClaw 项目的架构设计、开发规范、工具扩展方案与核心使用指南。
+本目录归档 TkLess 项目的架构设计、开发规范、工具扩展方案与核心使用指南。
+> **Spend less tokens, perceive more web.**
 
 ---
 
@@ -28,5 +29,5 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo build --release
 
 # 4. 本地启动 MCP stdio 服务测试
-cargo run -p pageclaw-cli -- mcp
+cargo run -p tkless-cli -- mcp
 ```

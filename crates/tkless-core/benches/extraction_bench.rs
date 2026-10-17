@@ -1,23 +1,23 @@
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
-use pageclaw_core::chunker::chunk_markdown;
-use pageclaw_core::cleaner::clean_html;
-use pageclaw_core::dedup::simhash;
-use pageclaw_core::markdown::MarkdownConverter;
-use pageclaw_core::model::ExtractionMode;
+use tkless_core::chunker::chunk_markdown;
+use tkless_core::cleaner::clean_html;
+use tkless_core::dedup::simhash;
+use tkless_core::markdown::MarkdownConverter;
+use tkless_core::model::ExtractionMode;
 
 fn generate_synthetic_html(target_size_kb: usize) -> String {
     let mut html = String::with_capacity(target_size_kb * 1024);
     html.push_str(
-        "<!DOCTYPE html><html><head><title>PageClaw Benchmark Document</title></head><body>",
+        "<!DOCTYPE html><html><head><title>TkLess Benchmark Document</title></head><body>",
     );
     html.push_str("<header><nav><a href=\"/\">Home</a><a href=\"/docs\">Docs</a></nav></header>");
     html.push_str("<main><article>");
-    html.push_str("<h1>PageClaw 高性能网页提取引擎基准测试</h1>");
-    html.push_str("<div class=\"author\">PageClaw 团队</div>");
+    html.push_str("<h1>TkLess 高性能网页提取引擎基准测试</h1>");
+    html.push_str("<div class=\"author\">TkLess 团队</div>");
     html.push_str("<time>2026-10-20</time>");
 
-    let sample_paragraph = "<p>PageClaw 是专为大模型智能体设计的超轻量、低 Token 消耗的网页内容提取引擎。它通过确定性 DOM 启发式剪枝算法与 Readability 分数系统，能够有效剥离无用的脚本、样式表、导航抽屉与广告容器，提取出最干净的核心 Markdown 知识库内容。</p>";
-    let sample_code_block = "<pre><code class=\"language-rust\">async fn run_pipeline() -> Result<(), PageclawError> {\n    let engine = PageclawEngine::new()?;\n    let doc = engine.process_url(\"https://example.com\", &opts).await?;\n    println!(\"Tokens: {}\", doc.token_count);\n    Ok(())\n}</code></pre>";
+    let sample_paragraph = "<p>TkLess 是专为大模型智能体设计的超轻量、低 Token 消耗的网页内容提取引擎。它通过确定性 DOM 启发式剪枝算法与 Readability 分数系统，能够有效剥离无用的脚本、样式表、导航抽屉与广告容器，提取出最干净的核心 Markdown 知识库内容。</p>";
+    let sample_code_block = "<pre><code class=\"language-rust\">async fn run_pipeline() -> Result<(), TklessError> {\n    let engine = TklessEngine::new()?;\n    let doc = engine.process_url(\"https://example.com\", &opts).await?;\n    println!(\"Tokens: {}\", doc.token_count);\n    Ok(())\n}</code></pre>";
     let sample_table = "<table><thead><tr><th>Metric</th><th>Before</th><th>After</th><th>Savings</th></tr></thead><tbody><tr><td>Payload Size</td><td>1.2 MB</td><td>18 KB</td><td>98.5%</td></tr><tr><td>Token Count</td><td>45,000</td><td>1,250</td><td>97.2%</td></tr></tbody></table>";
     let sample_ad = "<div class=\"advertisement\"><a href=\"#\">Upgrade to Pro plan today for special offers!</a></div>";
 
@@ -36,7 +36,7 @@ fn generate_synthetic_html(target_size_kb: usize) -> String {
     }
 
     html.push_str("</article></main>");
-    html.push_str("<footer><p>&copy; 2026 PageClaw Benchmark</p></footer>");
+    html.push_str("<footer><p>&copy; 2026 TkLess Benchmark</p></footer>");
     html.push_str("</body></html>");
     html
 }
@@ -133,7 +133,7 @@ fn bench_semantic_chunker(c: &mut Criterion) {
                 black_box(&md),
                 400,
                 50,
-                pageclaw_core::model::TokenizerKind::Heuristic,
+                tkless_core::model::TokenizerKind::Heuristic,
             );
             black_box(chunks);
         });

@@ -6,6 +6,7 @@
 .env
 *.txt
 *.rlib
+.tkless_cache/
 .pageclaw_cache/
 cookies.txt
 .trae/
