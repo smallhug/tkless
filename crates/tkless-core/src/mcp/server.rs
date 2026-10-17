@@ -958,7 +958,11 @@ impl McpServer {
             Some("json") => OutputFormat::Json,
             _ => OutputFormat::Markdown,
         };
-        let engine = SearchEngineKind::Bing;
+        let engine = match args.get("engine").and_then(|v| v.as_str()) {
+            Some("bing") => SearchEngineKind::Bing,
+            Some("duckduckgo") | Some("ddg") => SearchEngineKind::DuckDuckGo,
+            _ => SearchEngineKind::All,
+        };
         let scope = args.get("scope").and_then(|v| v.as_str()).unwrap_or("all");
 
         let (effective_scope, effective_query) = match scope {

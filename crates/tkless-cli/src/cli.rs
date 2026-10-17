@@ -118,15 +118,22 @@ impl From<CliTokenizer> for tkless_core::model::TokenizerKind {
 /// Search engine provider choices.
 #[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum CliSearchEngine {
-    /// Microsoft Bing search (default, fast connectivity and great Chinese coverage)
+    /// Concurrent multi-engine search (Bing + DuckDuckGo) with deduplication & merged ranking
     #[default]
+    All,
+    /// Microsoft Bing search only
     Bing,
+    /// DuckDuckGo search only
+    #[value(name = "duckduckgo", alias = "ddg", alias = "duck-duck-go")]
+    DuckDuckGo,
 }
 
 impl From<CliSearchEngine> for tkless_core::model::SearchEngineKind {
     fn from(e: CliSearchEngine) -> Self {
         match e {
+            CliSearchEngine::All => tkless_core::model::SearchEngineKind::All,
             CliSearchEngine::Bing => tkless_core::model::SearchEngineKind::Bing,
+            CliSearchEngine::DuckDuckGo => tkless_core::model::SearchEngineKind::DuckDuckGo,
         }
     }
 }
@@ -1008,13 +1015,13 @@ pub struct SearchSubArgs {
     )]
     pub baike: bool,
 
-    /// Search engine provider: bing (default)
+    /// Search engine provider: all (concurrent Bing + DuckDuckGo, default), bing, duckduckgo (ddg)
     #[arg(
         short = 'e',
         long = "engine",
         value_enum,
-        default_value_t = CliSearchEngine::Bing,
-        help = "Search engine provider: bing (default)"
+        default_value_t = CliSearchEngine::All,
+        help = "Search engine provider: all (concurrent Bing + DuckDuckGo, default), bing, duckduckgo"
     )]
     pub engine: CliSearchEngine,
 

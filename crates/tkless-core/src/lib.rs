@@ -61,8 +61,10 @@ pub use schema::{
     ScaffoldReport,
 };
 pub use search::{
-    format_search_fetch_markdown, format_search_results_markdown, search_baike, search_bing,
-    search_bing_with_options, search_wechat_sogou, web_search, web_search_and_fetch,
+    format_search_fetch_markdown, format_search_results_markdown, merge_and_dedup_search_results,
+    normalize_url_for_dedup, parse_duckduckgo_html, search_baike, search_bing,
+    search_bing_with_options, search_duckduckgo, search_duckduckgo_with_options,
+    search_wechat_sogou, unwrap_duckduckgo_url, web_search, web_search_and_fetch,
     web_search_and_fetch_scoped, web_search_scoped, web_search_with_engine,
     web_search_with_options, SearchFetchItem, SearchResultItem,
 };

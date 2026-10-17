@@ -310,12 +310,16 @@ tkless login zhihu
 # 或指定凭据保存路径与禁止自动拉起浏览器（纯终端字符画二维码，单行文字提示）：
 tkless login bilibili -o ./my_bilibili_cookies.txt --no-browser
 
-# 23. 🌐 免 Key 通用网页搜索与平台定向搜索 (基于 Bing 引擎，直供 AI Agent 全流程搜索闭环)
-# 使用 Bing 搜索引擎（国内网络访问极佳，自动解包去除重定向追踪）
+# 23. 🌐 免 Key 通用网页搜索与平台定向搜索 (并发多引擎 Bing + DuckDuckGo 智能去重聚合，直供 AI Agent 全流程搜索闭环)
+# 默认启用双引擎并发聚合检索 (Bing + DuckDuckGo 交叉去重排名)
 tkless search "Rust 异步编程最佳实践" --limit 5
 tkless search "Tokio 教程" --limit 5 -f json
-# 专享生态定向：一键限定抓取微信公众号、知乎、GitHub、掘金平台
+# 指定独立搜索引擎 (--engine all / bing / duckduckgo)
+tkless search "Python asyncio" --engine duckduckgo --limit 3
+tkless search "Linux kernel" --engine bing --limit 5
+# 专享生态定向：一键限定抓取微信公众号、百度百科、知乎、GitHub、掘金平台
 tkless search "开源项目" --wechat --limit 5
+tkless search "光合作用" --baike --limit 3
 tkless search "Rust 异步运行时" --zhihu --limit 5
 tkless search "mini-redis" --github --limit 5
 tkless search "Vue3 源码解析" --juejin --limit 5
@@ -509,7 +513,7 @@ AI Agent（如 **Claude Desktop**、**Cursor**、**Windsurf** 等）可以直接
 #### 🌐 定向检索与生态发现 (Search)
 | 工具名 | 功能概述 | 核心参数 |
 |---|---|---|
-| **`web_search`** *(Core)* | 免 API Key 的通用全网搜索（基于 Bing 引擎，支持生态定向与 `--fetch-content` 一体化） | `query` (必填), `scope`, `engine`, `fetch_content`, `max_tokens_per_page`, `limit` |
+| **`web_search`** *(Core)* | 免 API Key 的通用全网搜索（支持 Bing + DuckDuckGo 双引擎并发去重聚合，支持生态定向与 `--fetch-content` 一体化） | `query` (必填), `scope`, `engine` (all/bing/duckduckgo), `fetch_content`, `max_tokens_per_page`, `limit` |
 | **`search_bilibili`** | 搜索 B站 视频，输出结构化 GFM 表格或 JSON，支持分页与排序（播放/最新/弹幕/收藏） | `keyword` (必填), `page`, `order`, `format` |
 | **`inspect_links`** | 批量探测超链接可达性、HTTP 状态码、延迟与重定向，具备内网 SSRF 拦截防御 | `urls` (必填数组), `concurrency`, `timeout_secs`, `format` |
 | **`list_adapters`** | 列出当前支持的全部 16+ 平台原生适配器、匹配域名与专属优化能力 | `format` (markdown/json) |

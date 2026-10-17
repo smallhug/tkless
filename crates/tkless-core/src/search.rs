@@ -15,6 +15,14 @@ static BING_SNIPPET_SELECTOR: LazyLock<Selector> = LazyLock::new(|| {
     Selector::parse(".b_caption p, .b_algoSlug, .b_snippet, .b_lineclamp2, .b_lineclamp3, .b_lineclamp4, .b_paractl").unwrap()
 });
 
+// DuckDuckGo Selectors
+static DDG_ITEM_SELECTOR: LazyLock<Selector> =
+    LazyLock::new(|| Selector::parse("div.results_links, div.result, div.web-result").unwrap());
+static DDG_TITLE_SELECTOR: LazyLock<Selector> =
+    LazyLock::new(|| Selector::parse("a.result__a").unwrap());
+static DDG_SNIPPET_SELECTOR: LazyLock<Selector> =
+    LazyLock::new(|| Selector::parse("a.result__snippet, .result__snippet").unwrap());
+
 /// Structured web search result item with provider attribution.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SearchResultItem {
@@ -277,10 +285,36 @@ pub async fn web_search_scoped(
         }
     }
 
-    // 3. General web search via Bing with multi-stage relaxation and anti-degradation
+    // 3. General web search
     match engine {
+        SearchEngineKind::All => {
+            let bing_fut =
+                search_bing_with_options(client, clean_query, limit, cdp_options, auto_cdp);
+            let ddg_fut =
+                search_duckduckgo_with_options(client, clean_query, limit, cdp_options, auto_cdp);
+
+            let (bing_res, ddg_res) = tokio::join!(bing_fut, ddg_fut);
+
+            let bing_items = bing_res.unwrap_or_else(|e| {
+                warn!(error = %e, "Bing search failed during multi-engine search");
+                Vec::new()
+            });
+            let ddg_items = ddg_res.unwrap_or_else(|e| {
+                warn!(error = %e, "DuckDuckGo search failed during multi-engine search");
+                Vec::new()
+            });
+
+            if bing_items.is_empty() && ddg_items.is_empty() {
+                return Ok(Vec::new());
+            }
+
+            Ok(merge_and_dedup_search_results(bing_items, ddg_items, limit))
+        }
         SearchEngineKind::Bing => {
             search_bing_with_options(client, clean_query, limit, cdp_options, auto_cdp).await
+        }
+        SearchEngineKind::DuckDuckGo => {
+            search_duckduckgo_with_options(client, clean_query, limit, cdp_options, auto_cdp).await
         }
     }
 }
@@ -1010,13 +1044,343 @@ fn decode_base64_url_safe(input: &str) -> Option<Vec<u8>> {
     Some(out)
 }
 
+/// Searches DuckDuckGo for the given query without API keys.
+pub async fn search_duckduckgo(
+    client: &reqwest::Client,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<SearchResultItem>, TklessError> {
+    search_duckduckgo_with_options(client, query, limit, None, false).await
+}
+
+/// Searches DuckDuckGo with optional CDP headless browser rendering to bypass anti-scraping challenges.
+pub async fn search_duckduckgo_with_options(
+    client: &reqwest::Client,
+    query: &str,
+    limit: usize,
+    cdp_options: Option<&crate::cdp::CdpOptions>,
+    auto_cdp: bool,
+) -> Result<Vec<SearchResultItem>, TklessError> {
+    let clean_query = query.trim();
+    if clean_query.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let encoded_q: String = url::form_urlencoded::byte_serialize(clean_query.as_bytes()).collect();
+    let search_url = format!("https://html.duckduckgo.com/html/?q={encoded_q}");
+
+    // 1. Direct CDP headless Chrome rendering if explicitly configured
+    if let Some(cdp_opts) = cdp_options {
+        debug!(
+            query = clean_query,
+            url = %search_url,
+            "Fetching DuckDuckGo via explicit CDP endpoint"
+        );
+        let cdp_html = crate::cdp::fetch_html_via_cdp(&search_url, cdp_opts).await?;
+        return parse_duckduckgo_html(&cdp_html, limit);
+    }
+
+    debug!(
+        query = clean_query,
+        "Executing DuckDuckGo search via HTML POST endpoint"
+    );
+
+    let resp = client
+        .post("https://html.duckduckgo.com/html/")
+        .version(reqwest::Version::HTTP_11)
+        .form(&[("q", clean_query)])
+        .header(
+            "User-Agent",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",
+        )
+        .header("Referer", "https://html.duckduckgo.com/")
+        .header(
+            "Accept",
+            "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        )
+        .header("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
+        .send()
+        .await?;
+
+    let is_blocked = resp.status() == reqwest::StatusCode::ACCEPTED;
+    if !resp.status().is_success() && !is_blocked {
+        return Err(TklessError::SearchAntiScraping(format!(
+            "DuckDuckGo search returned HTTP status {}",
+            resp.status()
+        )));
+    }
+
+    let html = resp.text().await?;
+    let has_anomaly = html.contains("anomalyDetectionBlock") || html.contains("anomaly.js");
+
+    // 2. Auto-CDP fallback if anti-scraping challenge is encountered
+    if (is_blocked || has_anomaly) && auto_cdp {
+        warn!(
+            query = clean_query,
+            "Encountered DuckDuckGo anti-scraping challenge, auto-falling back to CDP browser rendering"
+        );
+        let fallback_cdp = crate::cdp::CdpOptions {
+            endpoint: "http://127.0.0.1:9222".to_string(),
+            wait_ms: Some(1500),
+            timeout_ms: Some(30_000),
+            ..Default::default()
+        };
+        let cdp_html = crate::cdp::fetch_html_via_cdp(&search_url, &fallback_cdp).await?;
+        return parse_duckduckgo_html(&cdp_html, limit);
+    }
+
+    if is_blocked || has_anomaly {
+        return Err(TklessError::SearchAntiScraping(
+            "遭遇 DuckDuckGo 搜索反爬拦截 (HTTP 202 Accepted / anomalyDetectionBlock)。建议操作：1. 开启 --auto-cdp 使用本地无头浏览器渲染；2. 使用默认多引擎或 --engine bing 检索。".to_string(),
+        ));
+    }
+
+    parse_duckduckgo_html(&html, limit)
+}
+
+/// Parses DuckDuckGo search results HTML into structured items.
+pub fn parse_duckduckgo_html(
+    html: &str,
+    limit: usize,
+) -> Result<Vec<SearchResultItem>, TklessError> {
+    let doc = Html::parse_document(html);
+    let mut results = Vec::new();
+    let mut seen_urls = std::collections::HashSet::new();
+
+    // 1. DuckDuckGo Lite format (a.result-link, td.result-snippet)
+    let lite_link_sel = Selector::parse("a.result-link").unwrap();
+    let lite_snip_sel = Selector::parse("td.result-snippet").unwrap();
+
+    let lite_links: Vec<_> = doc.select(&lite_link_sel).collect();
+    let lite_snippets: Vec<_> = doc.select(&lite_snip_sel).collect();
+
+    if !lite_links.is_empty() {
+        for (i, link_el) in lite_links.into_iter().enumerate() {
+            let raw_title = link_el
+                .text()
+                .collect::<Vec<_>>()
+                .join(" ")
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ");
+
+            let raw_href = link_el.value().attr("href").unwrap_or("").trim();
+            if raw_title.is_empty() || raw_href.is_empty() {
+                continue;
+            }
+
+            if raw_href.contains("duckduckgo.com/y.js") || raw_href.contains("/y.js?") {
+                continue;
+            }
+
+            let resolved_url = unwrap_duckduckgo_url(raw_href);
+            if !resolved_url.starts_with("http://") && !resolved_url.starts_with("https://") {
+                continue;
+            }
+
+            let norm_url = normalize_url_for_dedup(&resolved_url);
+            if !seen_urls.insert(norm_url) {
+                continue;
+            }
+
+            let snippet = lite_snippets
+                .get(i)
+                .map(|el| {
+                    el.text()
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                        .split_whitespace()
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                })
+                .unwrap_or_default();
+
+            results.push(SearchResultItem {
+                title: raw_title,
+                url: resolved_url,
+                snippet,
+                engine: "duckduckgo".to_string(),
+            });
+
+            if results.len() >= limit {
+                break;
+            }
+        }
+
+        if !results.is_empty() {
+            return Ok(results);
+        }
+    }
+
+    // 2. DuckDuckGo standard HTML format (div.results_links, div.result, div.web-result)
+    for element in doc.select(&DDG_ITEM_SELECTOR) {
+        if let Some(cls) = element.value().attr("class") {
+            let cls_lower = cls.to_lowercase();
+            if cls_lower.contains("result--ad") || cls_lower.contains("badge--ad") {
+                continue;
+            }
+        }
+
+        let title_el = match element.select(&DDG_TITLE_SELECTOR).next() {
+            Some(el) => el,
+            None => continue,
+        };
+
+        let raw_title = title_el
+            .text()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+
+        let raw_href = title_el.value().attr("href").unwrap_or("").trim();
+        if raw_title.is_empty() || raw_href.is_empty() {
+            continue;
+        }
+
+        if raw_href.contains("duckduckgo.com/y.js") || raw_href.contains("/y.js?") {
+            continue;
+        }
+
+        let resolved_url = unwrap_duckduckgo_url(raw_href);
+        if !resolved_url.starts_with("http://") && !resolved_url.starts_with("https://") {
+            continue;
+        }
+
+        let norm_url = normalize_url_for_dedup(&resolved_url);
+        if !seen_urls.insert(norm_url) {
+            continue;
+        }
+
+        let snippet = element
+            .select(&DDG_SNIPPET_SELECTOR)
+            .next()
+            .map(|el| {
+                el.text()
+                    .collect::<Vec<_>>()
+                    .join(" ")
+                    .split_whitespace()
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            })
+            .unwrap_or_default();
+
+        results.push(SearchResultItem {
+            title: raw_title,
+            url: resolved_url,
+            snippet,
+            engine: "duckduckgo".to_string(),
+        });
+
+        if results.len() >= limit {
+            break;
+        }
+    }
+
+    Ok(results)
+}
+
+/// Unwraps DuckDuckGo redirect URLs like `//duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.rust%2Dlang.org%2F&rut=...`
+pub fn unwrap_duckduckgo_url(raw_href: &str) -> String {
+    let trimmed = raw_href.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+
+    let full_url_str = if trimmed.starts_with("//") {
+        format!("https:{trimmed}")
+    } else {
+        trimmed.to_string()
+    };
+
+    if let Ok(parsed) = url::Url::parse(&full_url_str) {
+        for (k, v) in parsed.query_pairs() {
+            if k == "uddg" {
+                let target = v.into_owned();
+                if target.starts_with("http://") || target.starts_with("https://") {
+                    return target;
+                }
+            }
+        }
+        return full_url_str;
+    }
+
+    trimmed.to_string()
+}
+
+/// Normalizes a URL for deduplication across search engines.
+pub fn normalize_url_for_dedup(raw: &str) -> String {
+    let mut norm = raw.trim().to_lowercase();
+    if let Some(stripped) = norm.strip_prefix("http://") {
+        norm = format!("https://{stripped}");
+    }
+    if let Some(stripped) = norm.strip_prefix("https://www.") {
+        norm = format!("https://{stripped}");
+    }
+    norm.trim_end_matches('/').to_string()
+}
+
+/// Merges search results from two engines, interleaving items while deduplicating by normalized URL.
+pub fn merge_and_dedup_search_results(
+    engine1_results: Vec<SearchResultItem>,
+    engine2_results: Vec<SearchResultItem>,
+    limit: usize,
+) -> Vec<SearchResultItem> {
+    let mut merged = Vec::with_capacity(limit);
+    let mut seen = std::collections::HashSet::new();
+
+    let mut iter1 = engine1_results.into_iter();
+    let mut iter2 = engine2_results.into_iter();
+
+    while merged.len() < limit {
+        let mut progress = false;
+
+        // Try to pull one unique item from engine 1
+        for item in iter1.by_ref() {
+            let norm = normalize_url_for_dedup(&item.url);
+            if seen.insert(norm) {
+                merged.push(item);
+                progress = true;
+                break;
+            }
+        }
+
+        if merged.len() >= limit {
+            break;
+        }
+
+        // Try to pull one unique item from engine 2
+        for item in iter2.by_ref() {
+            let norm = normalize_url_for_dedup(&item.url);
+            if seen.insert(norm) {
+                merged.push(item);
+                progress = true;
+                break;
+            }
+        }
+
+        if !progress {
+            break;
+        }
+    }
+
+    merged
+}
+
 /// Formats search results as a clean GitHub Flavored Markdown document with engine source attribution.
 pub fn format_search_results_markdown(query: &str, results: &[SearchResultItem]) -> String {
     let mut out = String::new();
-    let engine_name = results
-        .first()
-        .map(|r| r.engine.as_str())
-        .unwrap_or("search");
+    let engine_name = if results.iter().any(|r| r.engine == "duckduckgo")
+        && results.iter().any(|r| r.engine == "bing")
+    {
+        "all"
+    } else {
+        results
+            .first()
+            .map(|r| r.engine.as_str())
+            .unwrap_or("search")
+    };
 
     out.push_str(&format!("# 网页搜索 ({engine_name}): \"{query}\"\n\n"));
 
@@ -1040,7 +1404,13 @@ pub fn format_search_results_markdown(query: &str, results: &[SearchResultItem])
 /// Formats combined search & fetch results into an integrated research report for LLMs.
 pub fn format_search_fetch_markdown(query: &str, items: &[SearchFetchItem]) -> String {
     let mut out = String::new();
-    let engine_name = items.first().map(|r| r.engine.as_str()).unwrap_or("search");
+    let engine_name = if items.iter().any(|r| r.engine == "duckduckgo")
+        && items.iter().any(|r| r.engine == "bing")
+    {
+        "all"
+    } else {
+        items.first().map(|r| r.engine.as_str()).unwrap_or("search")
+    };
 
     let total_fetched = items.iter().filter(|i| i.content.is_some()).count();
     let total_tokens: usize = items.iter().map(|i| i.token_count).sum();
@@ -1416,5 +1786,136 @@ mod tests {
         );
         assert!(results[0].snippet.contains("以大模型为代表"));
         assert_eq!(results[0].engine, "wechat");
+    }
+
+    #[test]
+    fn test_unwrap_duckduckgo_url() {
+        let ddg_redirect =
+            "//duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.rust%2Dlang.org%2F&rut=abc123xyz";
+        assert_eq!(
+            unwrap_duckduckgo_url(ddg_redirect),
+            "https://www.rust-lang.org/"
+        );
+
+        let direct_url = "https://doc.rust-lang.org/book/";
+        assert_eq!(
+            unwrap_duckduckgo_url(direct_url),
+            "https://doc.rust-lang.org/book/"
+        );
+
+        let proto_rel = "//github.com/rust-lang/rust";
+        assert_eq!(
+            unwrap_duckduckgo_url(proto_rel),
+            "https://github.com/rust-lang/rust"
+        );
+    }
+
+    #[test]
+    fn test_normalize_url_for_dedup() {
+        assert_eq!(
+            normalize_url_for_dedup("https://www.rust-lang.org/"),
+            "https://rust-lang.org"
+        );
+        assert_eq!(
+            normalize_url_for_dedup("http://rust-lang.org"),
+            "https://rust-lang.org"
+        );
+        assert_eq!(
+            normalize_url_for_dedup("HTTPS://RUST-LANG.ORG/"),
+            "https://rust-lang.org"
+        );
+    }
+
+    #[test]
+    fn test_merge_and_dedup_search_results() {
+        let bing_items = vec![
+            SearchResultItem {
+                title: "Rust Official (Bing)".to_string(),
+                url: "https://www.rust-lang.org/".to_string(),
+                snippet: "Empowering everyone...".to_string(),
+                engine: "bing".to_string(),
+            },
+            SearchResultItem {
+                title: "Rust Book (Bing)".to_string(),
+                url: "https://doc.rust-lang.org/book/".to_string(),
+                snippet: "The Book is the primary...".to_string(),
+                engine: "bing".to_string(),
+            },
+        ];
+
+        let ddg_items = vec![
+            SearchResultItem {
+                title: "Rust Official (DDG)".to_string(),
+                url: "https://rust-lang.org".to_string(), // duplicate of bing_items[0]
+                snippet: "Fast, memory-safe...".to_string(),
+                engine: "duckduckgo".to_string(),
+            },
+            SearchResultItem {
+                title: "Rust Wikipedia (DDG)".to_string(),
+                url: "https://en.wikipedia.org/wiki/Rust_(programming_language)".to_string(),
+                snippet: "Rust is a general-purpose...".to_string(),
+                engine: "duckduckgo".to_string(),
+            },
+        ];
+
+        let merged = merge_and_dedup_search_results(bing_items, ddg_items, 5);
+        assert_eq!(merged.len(), 3);
+        assert_eq!(merged[0].title, "Rust Official (Bing)");
+        assert_eq!(merged[0].engine, "bing");
+        // Second item should be ddg Wikipedia because ddg[0] was deduplicated with bing[0]
+        assert_eq!(merged[1].title, "Rust Wikipedia (DDG)");
+        assert_eq!(merged[1].engine, "duckduckgo");
+        assert_eq!(merged[2].title, "Rust Book (Bing)");
+        assert_eq!(merged[2].engine, "bing");
+    }
+
+    #[test]
+    fn test_parse_duckduckgo_html() {
+        let sample_html = r#"
+            <div class="results">
+                <!-- 1. Ad container with result--ad -->
+                <div class="result results_links result--ad">
+                    <a class="result__a" href="https://example.com/ad">Ad Product</a>
+                    <a class="result__snippet">Buy this now</a>
+                </div>
+
+                <!-- 2. Ad container with duckduckgo.com/y.js link -->
+                <div class="result results_links">
+                    <a class="result__a" href="//duckduckgo.com/y.js?u=sponsored">Sponsored Ad</a>
+                    <a class="result__snippet">Sponsored link</a>
+                </div>
+
+                <!-- 3. Organic item with redirect -->
+                <div class="result results_links">
+                    <a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.rust%2Dlang.org%2F&rut=1">
+                        <b>Rust</b> Programming Language
+                    </a>
+                    <a class="result__snippet">
+                        <b>Rust</b> is a fast, memory-safe programming language.
+                    </a>
+                </div>
+
+                <!-- 4. Organic item with direct URL -->
+                <div class="result results_links">
+                    <a class="result__a" href="https://doc.rust-lang.org/book/">
+                        The Rust Book
+                    </a>
+                    <a class="result__snippet">
+                        Official book for learning Rust.
+                    </a>
+                </div>
+            </div>
+        "#;
+
+        let results = parse_duckduckgo_html(sample_html, 5).unwrap();
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].title, "Rust Programming Language");
+        assert_eq!(results[0].url, "https://www.rust-lang.org/");
+        assert!(results[0].snippet.contains("memory-safe"));
+        assert_eq!(results[0].engine, "duckduckgo");
+
+        assert_eq!(results[1].title, "The Rust Book");
+        assert_eq!(results[1].url, "https://doc.rust-lang.org/book/");
+        assert_eq!(results[1].engine, "duckduckgo");
     }
 }
