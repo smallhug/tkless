@@ -451,6 +451,13 @@ async fn run(args: CliArgs) -> Result<()> {
             } else {
                 format!("site:v2ex.com {clean}")
             }
+        } else if search_args.baike {
+            let clean = search_args.query.trim();
+            if clean.starts_with("site:") {
+                clean.to_string()
+            } else {
+                format!("site:baike.baidu.com {clean}")
+            }
         } else {
             search_args.query.clone()
         };
@@ -800,6 +807,32 @@ async fn run(args: CliArgs) -> Result<()> {
 
         if !args.quiet {
             eprintln!("[PageClaw] Saved cover to: {}", saved_path.display());
+        }
+        return Ok(());
+    }
+
+    // -------------------------------------------------------------------------
+    // Dedicated Visual Action: Capture Screenshot via CDP Headless Browser
+    // -------------------------------------------------------------------------
+    if let Some(ref shot_path) = args.screenshot {
+        let cdp_ep = pageclaw_core::cdp::resolve_cdp_endpoint(args.cdp.as_deref(), true)
+            .unwrap_or_else(|| "http://127.0.0.1:9222".to_string());
+        let parsed_url = url::Url::parse(&target)?;
+        let cdp_opts = pageclaw_core::cdp::CdpOptions {
+            endpoint: cdp_ep,
+            wait_ms: args.cdp_wait_ms.or(Some(1000)),
+            timeout_ms: None,
+            user_agent: args.user_agent.clone(),
+            cookie: engine.fetcher().resolve_cookie_for_url(&parsed_url),
+        };
+        let img_bytes = pageclaw_core::capture_screenshot_via_cdp(&target, &cdp_opts, None).await?;
+        std::fs::write(shot_path, &img_bytes)?;
+        if !args.quiet {
+            eprintln!(
+                "[PageClaw] Successfully saved visual screenshot ({}) to: {}",
+                pageclaw_core::downloader::format_bytes(img_bytes.len() as u64),
+                shot_path.display()
+            );
         }
         return Ok(());
     }

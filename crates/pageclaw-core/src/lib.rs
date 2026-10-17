@@ -33,7 +33,7 @@ pub use auth::{
     execute_login_flow, generate_qrcode, poll_qrcode_status, LoginOptions, QrPollStatus,
 };
 pub use cache::{CacheStats, DocumentCache};
-pub use cdp::{fetch_html_via_cdp, CdpOptions};
+pub use cdp::{capture_screenshot_via_cdp, encode_base64, fetch_html_via_cdp, CdpOptions};
 pub use chunker::chunk_markdown;
 pub use crawler::{
     crawl_site, format_crawl_report_jsonl, format_crawl_report_markdown, CrawlOptions, CrawledPage,

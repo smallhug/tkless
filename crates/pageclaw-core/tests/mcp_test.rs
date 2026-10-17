@@ -42,7 +42,7 @@ async fn test_mcp_protocol_lifecycle() {
     let tools_array = tools_val["tools"]
         .as_array()
         .expect("Tools should be an array");
-    assert_eq!(tools_array.len(), 18);
+    assert_eq!(tools_array.len(), 19);
 
     let tool_names: Vec<&str> = tools_array
         .iter()
@@ -66,6 +66,7 @@ async fn test_mcp_protocol_lifecycle() {
     assert!(tool_names.contains(&"summarize_text"));
     assert!(tool_names.contains(&"split_document"));
     assert!(tool_names.contains(&"diff_content"));
+    assert!(tool_names.contains(&"capture_screenshot"));
 
     // Verify web_search schema contains scope, cdp_endpoint, schema
     let search_tool = tools_array
@@ -400,6 +401,29 @@ async fn test_mcp_protocol_lifecycle() {
         .as_str()
         .unwrap()
         .contains("+Release 2.0"));
+
+    // 5p. Tool Call: capture_screenshot (SSRF rejection guard test)
+    let shot_req = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 20,
+        "method": "tools/call",
+        "params": {
+            "name": "capture_screenshot",
+            "arguments": {
+                "url": "http://169.254.169.254/latest/meta-data/"
+            }
+        }
+    });
+    let shot_res = server
+        .handle_message(&shot_req.to_string())
+        .await
+        .expect("Should return response");
+    let shot_val = shot_res
+        .result
+        .expect("Screenshot result should be present");
+    assert_eq!(shot_val["isError"], true);
+    let shot_text = shot_val["content"][0]["text"].as_str().unwrap();
+    assert!(shot_text.contains("SSRF"));
 
     // 5. Unknown Method Error
     let unknown_req = r#"{"jsonrpc":"2.0","id":4,"method":"unknown/method"}"#;
