@@ -716,7 +716,17 @@ pub enum SubCommand {
         about = "本地响应缓存查看与清理维护 (查看磁盘占用/条目统计，或清空缓存)"
     )]
     Cache(CacheSubArgs),
+
+    /// 启动交互式 REPL 探索会话命令行 (支持 fetch/search/cache/links 交互式快速调研)
+    #[command(
+        name = "shell",
+        about = "启动交互式 REPL 会话命令行 (支持 fetch/search/cache/links 交互式快速调研)"
+    )]
+    Shell(ShellArgs),
 }
+
+#[derive(clap::Args, Debug, Clone, Default)]
+pub struct ShellArgs {}
 
 #[derive(clap::Args, Debug, Clone)]
 pub struct CacheSubArgs {
@@ -814,6 +824,14 @@ pub struct SearchSubArgs {
         help = "Scope search to Hugging Face models, datasets, papers, and blogs (huggingface.co)"
     )]
     pub hf: bool,
+
+    /// Scope search to Wikipedia encyclopedic articles (wikipedia.org)
+    #[arg(
+        long = "wiki",
+        alias = "wikipedia",
+        help = "Scope search to Wikipedia encyclopedic articles (wikipedia.org)"
+    )]
+    pub wiki: bool,
 
     /// Search engine provider: bing (default), google, auto (failover)
     #[arg(

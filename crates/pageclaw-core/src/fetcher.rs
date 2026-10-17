@@ -667,6 +667,8 @@ pub fn detect_platform_from_host(host: &str) -> Option<&'static str> {
         || is_subdomain_or_exact(&host_lower, "hf.co")
     {
         Some("huggingface")
+    } else if is_subdomain_or_exact(&host_lower, "wikipedia.org") {
+        Some("wikipedia")
     } else {
         None
     }
@@ -1020,6 +1022,14 @@ mod tests {
             detect_platform_from_url("https://hf.co/meta-llama/Llama-3.1-8B"),
             Some("huggingface")
         );
+        assert_eq!(
+            detect_platform_from_url("https://en.wikipedia.org/wiki/Rust_(programming_language)"),
+            Some("wikipedia")
+        );
+        assert_eq!(
+            detect_platform_from_url("https://zh.wikipedia.org/wiki/AI"),
+            Some("wikipedia")
+        );
 
         // Security check: spoofed / typosquatted domains MUST NOT leak cookies!
         assert_eq!(
@@ -1044,6 +1054,10 @@ mod tests {
         );
         assert_eq!(
             detect_platform_from_url("https://evilhuggingface.co/model"),
+            None
+        );
+        assert_eq!(
+            detect_platform_from_url("https://evilwikipedia.org/wiki/Fake"),
             None
         );
         assert_eq!(

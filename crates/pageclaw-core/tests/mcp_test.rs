@@ -42,7 +42,7 @@ async fn test_mcp_protocol_lifecycle() {
     let tools_array = tools_val["tools"]
         .as_array()
         .expect("Tools should be an array");
-    assert_eq!(tools_array.len(), 14);
+    assert_eq!(tools_array.len(), 15);
 
     let tool_names: Vec<&str> = tools_array
         .iter()
@@ -62,6 +62,7 @@ async fn test_mcp_protocol_lifecycle() {
     assert!(tool_names.contains(&"manage_cache"));
     assert!(tool_names.contains(&"fetch_feed"));
     assert!(tool_names.contains(&"inspect_links"));
+    assert!(tool_names.contains(&"check_auth"));
 
     // Verify web_search schema contains scope, cdp_endpoint, schema
     let search_tool = tools_array
@@ -273,6 +274,28 @@ async fn test_mcp_protocol_lifecycle() {
     let parsed_links: serde_json::Value = serde_json::from_str(inspect_text).unwrap();
     assert_eq!(parsed_links.as_array().unwrap().len(), 2);
     assert!(parsed_links[0]["error"].as_str().unwrap().contains("SSRF"));
+
+    // 5k. Tool Call: check_auth
+    let auth_req = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 15,
+        "method": "tools/call",
+        "params": {
+            "name": "check_auth",
+            "arguments": {
+                "platform": "zhihu",
+                "cookie": "d_c0=device_sample; z_c0=session_sample"
+            }
+        }
+    });
+    let auth_res = server
+        .handle_message(&auth_req.to_string())
+        .await
+        .expect("Should return response");
+    let auth_val = auth_res.result.expect("Auth result should be present");
+    let auth_text = auth_val["content"][0]["text"].as_str().unwrap();
+    assert!(auth_text.contains("ZHIHU"));
+    assert!(auth_text.contains("完整登录态"));
 
     // 5. Unknown Method Error
     let unknown_req = r#"{"jsonrpc":"2.0","id":4,"method":"unknown/method"}"#;

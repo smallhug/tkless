@@ -780,6 +780,30 @@ pub fn get_available_tools() -> Vec<McpTool> {
                 },
                 "required": ["urls"]
             }),
+        },
+        McpTool {
+            name: "check_auth".to_string(),
+            description: "Verifies whether authenticated session cookies for a platform (e.g. 'bilibili', 'zhihu', 'github') are present and valid, reporting login status, user profile info, or expiration warnings.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "platform": {
+                        "type": "string",
+                        "enum": ["bilibili", "zhihu", "github", "wechat"],
+                        "description": "Target platform to check authentication status ('bilibili', 'zhihu', 'github', or 'wechat')"
+                    },
+                    "cookie_file": {
+                        "type": "string",
+                        "default": "./cookies.txt",
+                        "description": "Path to cookie file (default: ./cookies.txt)"
+                    },
+                    "cookie": {
+                        "type": "string",
+                        "description": "Optional direct cookie header string to check"
+                    }
+                },
+                "required": ["platform"]
+            }),
         }
     ]
 }
