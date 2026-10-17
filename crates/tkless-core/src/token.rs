@@ -103,7 +103,7 @@ pub fn truncate_to_tokens(text: &str, max_tokens: usize, kind: TokenizerKind) ->
         truncated.push_str("\n```");
     }
 
-    truncated.push_str("\n\n[Content truncated by PageClaw: token limit reached]");
+    truncated.push_str("\n\n[Content truncated by TkLess: token limit reached]");
 
     (truncated, true)
 }
@@ -140,7 +140,7 @@ mod tests {
         let (truncated, is_truncated) = truncate_to_tokens(text, 10, TokenizerKind::default());
 
         assert!(is_truncated);
-        assert!(truncated.contains("[Content truncated by PageClaw"));
+        assert!(truncated.contains("[Content truncated by TkLess"));
 
         // If a code block was started, it must be closed
         let fence_count = truncated.matches("```").count();

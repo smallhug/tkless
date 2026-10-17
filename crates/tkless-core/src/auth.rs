@@ -1,4 +1,4 @@
-use crate::error::PageclawError;
+use crate::error::TklessError;
 use qrcode::render::svg;
 use qrcode::QrCode;
 use serde::Deserialize;
@@ -69,9 +69,7 @@ impl Default for LoginOptions {
 }
 
 /// Requests a new QR code URL and key from Bilibili passport API.
-pub async fn generate_qrcode(
-    client: &reqwest::Client,
-) -> Result<BiliQrGenerateData, PageclawError> {
+pub async fn generate_qrcode(client: &reqwest::Client) -> Result<BiliQrGenerateData, TklessError> {
     let api_url = "https://passport.bilibili.com/x/passport-login/web/qrcode/generate";
     let resp: BiliApiResponse<BiliQrGenerateData> = client
         .get(api_url)
@@ -82,7 +80,7 @@ pub async fn generate_qrcode(
         .await?;
 
     if resp.code != 0 {
-        return Err(PageclawError::AdapterError {
+        return Err(TklessError::AdapterError {
             platform: "bilibili",
             message: format!(
                 "Failed to generate QR code (code={}): {}",
@@ -91,7 +89,7 @@ pub async fn generate_qrcode(
         });
     }
 
-    resp.data.ok_or_else(|| PageclawError::AdapterError {
+    resp.data.ok_or_else(|| TklessError::AdapterError {
         platform: "bilibili",
         message: "Empty QR code generate payload received".to_string(),
     })
@@ -101,7 +99,7 @@ pub async fn generate_qrcode(
 pub async fn poll_qrcode_status(
     client: &reqwest::Client,
     qrcode_key: &str,
-) -> Result<QrPollStatus, PageclawError> {
+) -> Result<QrPollStatus, TklessError> {
     let api_url = format!(
         "https://passport.bilibili.com/x/passport-login/web/qrcode/poll?qrcode_key={qrcode_key}"
     );
@@ -118,7 +116,7 @@ pub async fn poll_qrcode_status(
     let poll_resp: BiliApiResponse<BiliPollData> = resp.json().await?;
 
     if poll_resp.code != 0 {
-        return Err(PageclawError::AdapterError {
+        return Err(TklessError::AdapterError {
             platform: "bilibili",
             message: format!(
                 "QR poll API returned error (code={}): {}",
@@ -127,7 +125,7 @@ pub async fn poll_qrcode_status(
         });
     }
 
-    let data = poll_resp.data.ok_or_else(|| PageclawError::AdapterError {
+    let data = poll_resp.data.ok_or_else(|| TklessError::AdapterError {
         platform: "bilibili",
         message: "Empty QR code poll payload".to_string(),
     })?;
@@ -167,17 +165,17 @@ pub async fn poll_qrcode_status(
 }
 
 /// Renders a QR code as an SVG string for inline HTML embedding.
-pub fn render_svg_qrcode(url: &str) -> Result<String, PageclawError> {
+pub fn render_svg_qrcode(url: &str) -> Result<String, TklessError> {
     let code = QrCode::new(url.as_bytes())
-        .map_err(|e| PageclawError::InvalidArgument(format!("Failed to generate QR code: {e}")))?;
+        .map_err(|e| TklessError::InvalidArgument(format!("Failed to generate QR code: {e}")))?;
     let svg_str = code.render::<svg::Color>().min_dimensions(260, 260).build();
     Ok(svg_str)
 }
 
 /// Renders a QR code for terminal console display.
-pub fn render_terminal_qrcode(url: &str) -> Result<String, PageclawError> {
+pub fn render_terminal_qrcode(url: &str) -> Result<String, TklessError> {
     let code = QrCode::new(url.as_bytes())
-        .map_err(|e| PageclawError::InvalidArgument(format!("Failed to generate QR code: {e}")))?;
+        .map_err(|e| TklessError::InvalidArgument(format!("Failed to generate QR code: {e}")))?;
     let rendered = code
         .render::<char>()
         .quiet_zone(true)
@@ -187,13 +185,13 @@ pub fn render_terminal_qrcode(url: &str) -> Result<String, PageclawError> {
 }
 
 /// Launches the default system browser opening the given URL.
-pub fn open_browser(url: &str) -> Result<(), PageclawError> {
+pub fn open_browser(url: &str) -> Result<(), TklessError> {
     #[cfg(target_os = "windows")]
     {
         std::process::Command::new("rundll32")
             .args(["url.dll,FileProtocolHandler", url])
             .spawn()
-            .map_err(PageclawError::Io)?;
+            .map_err(TklessError::Io)?;
     }
 
     #[cfg(target_os = "macos")]
@@ -201,7 +199,7 @@ pub fn open_browser(url: &str) -> Result<(), PageclawError> {
         std::process::Command::new("open")
             .arg(url)
             .spawn()
-            .map_err(PageclawError::Io)?;
+            .map_err(TklessError::Io)?;
     }
 
     #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
@@ -209,7 +207,7 @@ pub fn open_browser(url: &str) -> Result<(), PageclawError> {
         std::process::Command::new("xdg-open")
             .arg(url)
             .spawn()
-            .map_err(PageclawError::Io)?;
+            .map_err(TklessError::Io)?;
     }
 
     Ok(())
@@ -219,11 +217,11 @@ pub fn open_browser(url: &str) -> Result<(), PageclawError> {
 pub async fn start_login_server(
     qr_svg: String,
     status_rx: watch::Receiver<String>,
-) -> Result<(u16, tokio::task::JoinHandle<()>), PageclawError> {
+) -> Result<(u16, tokio::task::JoinHandle<()>), TklessError> {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
-        .map_err(PageclawError::Io)?;
-    let port = listener.local_addr().map_err(PageclawError::Io)?.port();
+        .map_err(TklessError::Io)?;
+    let port = listener.local_addr().map_err(TklessError::Io)?.port();
 
     let server_handle = tokio::spawn(async move {
         let html_content = format!(
@@ -232,7 +230,7 @@ pub async fn start_login_server(
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>PageClaw - 哔哩哔哩登录</title>
+  <title>TkLess - 哔哩哔哩登录</title>
   <style>
     * {{ box-sizing: border-box; }}
     body {{
@@ -270,7 +268,7 @@ pub async fn start_login_server(
 <body>
   <div class="card">
     <div class="brand">
-      <h1>PageClaw</h1>
+      <h1>TkLess</h1>
     </div>
     <p class="subtitle">请使用 <strong>哔哩哔哩 手机客户端</strong> 扫码登录</p>
     <div class="qr-container">
@@ -358,7 +356,7 @@ pub async fn start_login_server(
 pub async fn execute_login_flow(
     client: Option<&reqwest::Client>,
     options: LoginOptions,
-) -> Result<String, PageclawError> {
+) -> Result<String, TklessError> {
     info!("Initializing Bilibili interactive QR code login...");
 
     let default_client;
@@ -387,7 +385,7 @@ pub async fn execute_login_flow(
 
     // 4. Output guidance to terminal
     if options.no_browser {
-        eprintln!("[PageClaw] 请使用 哔哩哔哩 手机客户端扫描下方二维码授权登录：");
+        eprintln!("[TkLess] 请使用 哔哩哔哩 手机客户端扫描下方二维码授权登录：");
         let terminal_qr = render_terminal_qrcode(&qr_data.url).unwrap_or_default();
         if !terminal_qr.is_empty() {
             eprintln!("{terminal_qr}");
@@ -413,7 +411,7 @@ pub async fn execute_login_flow(
         if start_time.elapsed().as_secs() > options.timeout_secs {
             let _ = status_tx.send("expired".to_string());
             server_handle.abort();
-            return Err(PageclawError::AdapterError {
+            return Err(TklessError::AdapterError {
                 platform: "bilibili",
                 message: format!(
                     "Login timed out after {} seconds without confirmation",
@@ -435,20 +433,20 @@ pub async fn execute_login_flow(
                 if last_status != "scanned" {
                     last_status = "scanned";
                     let _ = status_tx.send("scanned".to_string());
-                    eprintln!("[PageClaw] 已扫码，等待手机端点击确认登录...");
+                    eprintln!("[TkLess] 已扫码，等待手机端点击确认登录...");
                 }
             }
             Ok(QrPollStatus::Expired) => {
                 let _ = status_tx.send("expired".to_string());
                 server_handle.abort();
-                return Err(PageclawError::AdapterError {
+                return Err(TklessError::AdapterError {
                     platform: "bilibili",
                     message: "二维码已过期失效，请重新执行登录命令".to_string(),
                 });
             }
             Ok(QrPollStatus::Success { cookies }) => {
                 let _ = status_tx.send("success".to_string());
-                eprintln!("[PageClaw] 扫码确认成功，已获取用户登录凭证！");
+                eprintln!("[TkLess] 扫码确认成功，已获取用户登录凭证！");
                 break cookies;
             }
             Err(e) => {
@@ -464,7 +462,7 @@ pub async fn execute_login_flow(
         &final_cookies,
     )?;
     eprintln!(
-        "[PageClaw] bilibili 凭据已成功保存至: {} (已添加 bilibili: 前缀区分，多网站互不覆盖)",
+        "[TkLess] bilibili 凭据已成功保存至: {} (已添加 bilibili: 前缀区分，多网站互不覆盖)",
         options.output_path.display()
     );
     eprintln!("========================================================");
@@ -478,11 +476,11 @@ pub async fn execute_login_flow(
 }
 
 /// Saves cookie header string to disk.
-pub fn save_cookies_to_file(path: &Path, cookies: &str) -> Result<(), PageclawError> {
+pub fn save_cookies_to_file(path: &Path, cookies: &str) -> Result<(), TklessError> {
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    std::fs::write(path, cookies.trim()).map_err(PageclawError::Io)
+    std::fs::write(path, cookies.trim()).map_err(TklessError::Io)
 }
 
 fn extract_set_cookie_headers(headers: &reqwest::header::HeaderMap) -> String {

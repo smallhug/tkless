@@ -432,7 +432,7 @@ mod tests {
                 <head>
                     <meta name="description" content="A page about Rust">
                     <meta name="keywords" content="rust, cli, agent">
-                    <meta name="author" content="PageClaw">
+                    <meta name="author" content="TkLess">
                     <meta property="og:title" content="Rust CLI">
                     <meta property="og:article:published_time" content="2026-03-01T12:00:00Z">
                     <meta name="twitter:card" content="summary_large_image">
@@ -447,7 +447,7 @@ mod tests {
 
         assert_eq!(meta.description.as_deref(), Some("A page about Rust"));
         assert_eq!(meta.keywords, vec!["rust", "cli", "agent"]);
-        assert_eq!(meta.author.as_deref(), Some("PageClaw"));
+        assert_eq!(meta.author.as_deref(), Some("TkLess"));
         assert_eq!(
             meta.canonical_url.as_deref(),
             Some("https://example.com/canonical")
@@ -472,7 +472,7 @@ mod tests {
                     {
                         "@context": "https://schema.org",
                         "@type": "Article",
-                        "headline": "PageClaw Launch"
+                        "headline": "TkLess Launch"
                     }
                     </script>
                 </head>
@@ -484,7 +484,7 @@ mod tests {
         let json_lds = extract_json_ld(&doc);
 
         assert_eq!(json_lds.len(), 1);
-        assert_eq!(json_lds[0]["headline"], "PageClaw Launch");
+        assert_eq!(json_lds[0]["headline"], "TkLess Launch");
         assert_eq!(json_lds[0]["@type"], "Article");
     }
 
@@ -600,12 +600,12 @@ mod tests {
     fn test_detect_text_language() {
         assert_eq!(
             detect_text_language(
-                "PageClaw is an ultra-fast web content extraction engine built with Rust."
+                "TkLess is an ultra-fast web content extraction engine built with Rust."
             ),
             Some("en")
         );
         assert_eq!(
-            detect_text_language("PageClaw 是专为大语言模型和智能体设计的超轻量网页内容提取引擎。"),
+            detect_text_language("TkLess 是专为大语言模型和智能体设计的超轻量网页内容提取引擎。"),
             Some("zh-CN")
         );
         assert_eq!(

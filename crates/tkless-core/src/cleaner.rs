@@ -1,4 +1,4 @@
-use crate::error::PageclawError;
+use crate::error::TklessError;
 use crate::model::ExtractionMode;
 use scraper::{Html, Selector};
 use std::io::Cursor;
@@ -46,7 +46,7 @@ pub fn clean_html(
     raw_html: &str,
     base_url_str: Option<&str>,
     mode: ExtractionMode,
-) -> Result<CleanedContent, PageclawError> {
+) -> Result<CleanedContent, TklessError> {
     match mode {
         ExtractionMode::Raw => Ok(CleanedContent {
             title: extract_title_simple(raw_html),
@@ -114,7 +114,7 @@ pub fn resolve_effective_base_url(doc: &Html, fallback_base_url: Option<&str>) -
 fn clean_full_page(
     raw_html: &str,
     base_url_str: Option<&str>,
-) -> Result<CleanedContent, PageclawError> {
+) -> Result<CleanedContent, TklessError> {
     let document = Html::parse_document(raw_html);
     let title = extract_title_from_doc(&document);
 
@@ -161,12 +161,12 @@ pub fn extract_selector(
     raw_html: &str,
     selector_str: &str,
     base_url_str: Option<&str>,
-) -> Result<CleanedContent, PageclawError> {
+) -> Result<CleanedContent, TklessError> {
     let document = Html::parse_document(raw_html);
     let title = extract_title_from_doc(&document);
 
     let selector = Selector::parse(selector_str).map_err(|e| {
-        PageclawError::CleaningError(format!("Invalid CSS selector '{selector_str}': {e:?}"))
+        TklessError::CleaningError(format!("Invalid CSS selector '{selector_str}': {e:?}"))
     })?;
 
     // Resolve effective base URL (auto-discovering <base href="..."> if present)
@@ -300,12 +300,9 @@ fn render_cleaned_node(
 }
 
 /// Prunes and excludes DOM subtrees matching a specified CSS selector from raw HTML.
-pub fn prune_unwanted_selectors(
-    raw_html: &str,
-    selector_str: &str,
-) -> Result<String, PageclawError> {
+pub fn prune_unwanted_selectors(raw_html: &str, selector_str: &str) -> Result<String, TklessError> {
     let selector = Selector::parse(selector_str).map_err(|e| {
-        PageclawError::CleaningError(format!(
+        TklessError::CleaningError(format!(
             "Invalid remove CSS selector '{selector_str}': {e:?}"
         ))
     })?;

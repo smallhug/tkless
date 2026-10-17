@@ -235,9 +235,9 @@ mod tests {
 
             Artificial Intelligence is rapidly transforming modern software engineering and agentic workflows.
             Deep neural networks enable automated pattern discovery across massive unstructured web datasets.
-            PageClaw provides an ultra-fast token-efficient extraction pipeline designed specifically for LLMs.
+            TkLess provides an ultra-fast token-efficient extraction pipeline designed specifically for LLMs.
             Traditional scrapers fail due to heavy JavaScript execution and aggressive anti-bot protections.
-            By utilizing native platform adapters, PageClaw extracts articles with sub-second latency and zero API keys.
+            By utilizing native platform adapters, TkLess extracts articles with sub-second latency and zero API keys.
         "#;
 
         let takeaways = extract_key_takeaways(text, 3);
@@ -245,7 +245,7 @@ mod tests {
         assert!(takeaways.len() <= 3);
         assert!(takeaways
             .iter()
-            .any(|s| s.contains("PageClaw") || s.contains("Artificial Intelligence")));
+            .any(|s| s.contains("TkLess") || s.contains("Artificial Intelligence")));
     }
 
     #[test]
@@ -253,7 +253,7 @@ mod tests {
         let text = r#"
             Rust 是一门专注于安全、并发与性能的高性能系统级编程语言。
             Rust 的所有权系统在编译期排除了所有空指针异常和数据竞争隐患。
-            PageClaw 完全采用 Rust 构建，具备毫秒级冷启动与极低内存占用。
+            TkLess 完全采用 Rust 构建，具备毫秒级冷启动与极低内存占用。
         "#;
 
         let summarized = summarize_markdown(text, 2);

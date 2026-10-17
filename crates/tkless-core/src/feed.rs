@@ -3,7 +3,7 @@
 //! Enables zero-overhead parsing of RSS/Atom syndication feeds from blogs, newsletters,
 //! and release streams into structured JSON or clean Markdown reading lists.
 
-use crate::error::PageclawError;
+use crate::error::TklessError;
 use scraper::{Html, Selector};
 use serde::{Deserialize, Serialize};
 use std::sync::LazyLock;
@@ -54,7 +54,7 @@ pub fn is_feed_xml(content: &str) -> bool {
 }
 
 /// Parses an RSS 2.0 or Atom 1.0 XML string into a structured FeedChannel.
-pub fn parse_feed(xml: &str) -> Result<FeedChannel, PageclawError> {
+pub fn parse_feed(xml: &str) -> Result<FeedChannel, TklessError> {
     let doc = Html::parse_document(xml);
 
     // 1. Try Atom Feed
@@ -205,7 +205,7 @@ pub fn parse_feed(xml: &str) -> Result<FeedChannel, PageclawError> {
         });
     }
 
-    Err(PageclawError::CleaningError(
+    Err(TklessError::CleaningError(
         "Invalid or unsupported XML feed format (expected RSS 2.0 or Atom 1.0)".to_string(),
     ))
 }

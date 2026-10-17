@@ -1,6 +1,6 @@
-use crate::error::PageclawError;
+use crate::error::TklessError;
 use crate::model::{ExtractionOptions, SearchEngineKind};
-use crate::PageclawEngine;
+use crate::TklessEngine;
 use scraper::{Html, Selector};
 use serde::{Deserialize, Serialize};
 use std::sync::LazyLock;
@@ -50,17 +50,17 @@ pub struct SearchFetchItem {
 
 /// Executes an all-in-one search & fetch pipeline:
 /// 1. Searches Bing / Google / Auto for the query to get top URLs
-/// 2. Concurrently fetches and extracts clean Markdown content for each page via PageclawEngine
+/// 2. Concurrently fetches and extracts clean Markdown content for each page via TklessEngine
 /// 3. Enforces per-page token budgets to prevent LLM context explosion
 pub async fn web_search_and_fetch(
-    engine: &PageclawEngine,
+    engine: &TklessEngine,
     query: &str,
     limit: usize,
     search_engine: SearchEngineKind,
     base_options: &ExtractionOptions,
     max_tokens_per_page: Option<usize>,
     dedup: bool,
-) -> Result<Vec<SearchFetchItem>, PageclawError> {
+) -> Result<Vec<SearchFetchItem>, TklessError> {
     let clean_query = query.trim();
     if clean_query.is_empty() {
         return Ok(Vec::new());
@@ -169,7 +169,7 @@ pub async fn web_search_with_engine(
     query: &str,
     limit: usize,
     engine: SearchEngineKind,
-) -> Result<Vec<SearchResultItem>, PageclawError> {
+) -> Result<Vec<SearchResultItem>, TklessError> {
     let clean_query = query.trim();
     if clean_query.is_empty() {
         return Ok(Vec::new());
@@ -202,7 +202,7 @@ pub async fn web_search(
     client: &reqwest::Client,
     query: &str,
     limit: usize,
-) -> Result<Vec<SearchResultItem>, PageclawError> {
+) -> Result<Vec<SearchResultItem>, TklessError> {
     web_search_with_engine(client, query, limit, SearchEngineKind::default()).await
 }
 
@@ -211,7 +211,7 @@ pub async fn search_bing(
     client: &reqwest::Client,
     query: &str,
     limit: usize,
-) -> Result<Vec<SearchResultItem>, PageclawError> {
+) -> Result<Vec<SearchResultItem>, TklessError> {
     let encoded_q: String = url::form_urlencoded::byte_serialize(query.as_bytes()).collect();
     let search_url = format!("https://www.bing.com/search?q={encoded_q}&setlang=zh-hans");
 
@@ -234,7 +234,7 @@ pub async fn search_bing(
 }
 
 /// Parses Bing search results HTML into structured items.
-pub fn parse_bing_html(html: &str, limit: usize) -> Result<Vec<SearchResultItem>, PageclawError> {
+pub fn parse_bing_html(html: &str, limit: usize) -> Result<Vec<SearchResultItem>, TklessError> {
     let doc = Html::parse_document(html);
     let mut results = Vec::new();
     let mut seen_urls = std::collections::HashSet::new();
@@ -293,7 +293,7 @@ pub async fn search_google(
     client: &reqwest::Client,
     query: &str,
     limit: usize,
-) -> Result<Vec<SearchResultItem>, PageclawError> {
+) -> Result<Vec<SearchResultItem>, TklessError> {
     let encoded_q: String = url::form_urlencoded::byte_serialize(query.as_bytes()).collect();
     let search_url = format!("https://www.google.com/search?q={encoded_q}&hl=zh-CN&gl=cn");
 
@@ -316,7 +316,7 @@ pub async fn search_google(
 }
 
 /// Parses Google search results HTML into structured items.
-pub fn parse_google_html(html: &str, limit: usize) -> Result<Vec<SearchResultItem>, PageclawError> {
+pub fn parse_google_html(html: &str, limit: usize) -> Result<Vec<SearchResultItem>, TklessError> {
     let doc = Html::parse_document(html);
     let mut results = Vec::new();
     let mut seen_urls = std::collections::HashSet::new();
@@ -629,16 +629,19 @@ mod tests {
     #[test]
     fn test_search_simhash_deduplication() {
         let text_orig = r#"
-            PageClaw is a high-performance, token-efficient web content extraction engine designed specifically
+            TkLess is a high-performance, token-efficient web content extraction engine designed specifically
             for Large Language Models and AI Agents. It removes navigation bars, scripts, advertisements, and
             boilerplate using heuristic algorithms, converting the core content into LLM-optimized Markdown.
             Native adapters for Bilibili, WeChat, Zhihu, and GitHub are supported out of the box with zero overhead.
+            By eliminating aggressive noise, TkLess delivers significant token savings across production AI pipelines.
         "#;
         let text_mirror = r#"
-            PageClaw is a high-performance, token-efficient web content extraction engine designed specifically
+            TkLess is a high-performance, token-efficient web content extraction engine designed specifically
             for Large Language Models and AI Agents. It removes navigation bars, scripts, advertisements, and
             boilerplate using heuristic algorithms, converting the core content into LLM-optimized Markdown.
-            Native adapters for Bilibili, WeChat, Zhihu, and GitHub are supported out of the box with low memory.
+            Native adapters for Bilibili, WeChat, Zhihu, and GitHub are supported out of the box with zero overhead.
+            By eliminating aggressive noise, TkLess delivers significant token savings across production AI pipelines.
+            Reposted with permission.
         "#;
         let text_diff = "Tokio is an asynchronous runtime for the Rust programming language, providing event-driven non-blocking I/O.";
 

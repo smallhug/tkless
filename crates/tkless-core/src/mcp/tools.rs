@@ -1,6 +1,6 @@
 use super::types::McpTool;
 
-/// Returns the complete registry of MCP tools exposed by PageClaw.
+/// Returns the complete registry of MCP tools exposed by TkLess.
 pub fn get_available_tools() -> Vec<McpTool> {
     vec![
         McpTool {

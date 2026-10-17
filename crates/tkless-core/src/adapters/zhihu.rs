@@ -1,5 +1,5 @@
 use crate::adapters::{BoxFuture, PlatformAdapter};
-use crate::error::PageclawError;
+use crate::error::TklessError;
 use crate::markdown::MarkdownConverter;
 use crate::model::{ExtractionOptions, OutputFormat, PageDocument, PageMetadata};
 use crate::token::count_tokens;
@@ -108,8 +108,8 @@ impl ZhihuAdapter {
         fetcher: &crate::fetcher::Fetcher,
         url: &Url,
         options: &ExtractionOptions,
-    ) -> Result<PageDocument, PageclawError> {
-        let route = Self::parse_route(url).ok_or_else(|| PageclawError::AdapterError {
+    ) -> Result<PageDocument, TklessError> {
+        let route = Self::parse_route(url).ok_or_else(|| TklessError::AdapterError {
             platform: "zhihu",
             message: format!("Unsupported Zhihu URL: {url}"),
         })?;
@@ -142,7 +142,7 @@ impl ZhihuAdapter {
         article_id: &str,
         url: &Url,
         options: &ExtractionOptions,
-    ) -> Result<PageDocument, PageclawError> {
+    ) -> Result<PageDocument, TklessError> {
         let target_url = format!("https://zhuanlan.zhihu.com/p/{article_id}");
         let html = fetch_zhihu_html(fetcher, &target_url).await?;
 
@@ -209,7 +209,7 @@ impl ZhihuAdapter {
             .unwrap_or_default();
 
         if raw_content.trim().is_empty() && (title == "知乎专栏" || author.is_empty()) {
-            return Err(PageclawError::AdapterError {
+            return Err(TklessError::AdapterError {
                 platform: "zhihu",
                 message: "Failed to extract Zhihu article content (知乎正文提取为空，可能触发风控拦截需携带 Cookie 凭据)".to_string(),
             });
@@ -227,7 +227,7 @@ impl ZhihuAdapter {
         answer_id: &str,
         url: &Url,
         options: &ExtractionOptions,
-    ) -> Result<PageDocument, PageclawError> {
+    ) -> Result<PageDocument, TklessError> {
         let api_url = format!(
             "https://www.zhihu.com/api/v4/answers/{answer_id}?include=content%2Cvoteup_count%2Cauthor%2Cquestion"
         );
@@ -312,7 +312,7 @@ impl ZhihuAdapter {
             }
         }
 
-        Err(PageclawError::AdapterError {
+        Err(TklessError::AdapterError {
             platform: "zhihu",
             message: "Failed to extract Zhihu answer content".to_string(),
         })
@@ -325,7 +325,7 @@ impl ZhihuAdapter {
         question_id: &str,
         url: &Url,
         options: &ExtractionOptions,
-    ) -> Result<PageDocument, PageclawError> {
+    ) -> Result<PageDocument, TklessError> {
         let limit = 5;
         let api_url = format!(
             "https://www.zhihu.com/api/v4/questions/{question_id}/answers?include=content%2Cvoteup_count%2Cauthor&offset=0&limit={limit}&sort_by=default"
@@ -396,7 +396,7 @@ impl ZhihuAdapter {
             }
         }
 
-        Err(PageclawError::AdapterError {
+        Err(TklessError::AdapterError {
             platform: "zhihu",
             message: "Failed to extract Zhihu question answers".to_string(),
         })
@@ -412,7 +412,7 @@ impl ZhihuAdapter {
         pub_date: Option<String>,
         url: &Url,
         options: &ExtractionOptions,
-    ) -> Result<PageDocument, PageclawError> {
+    ) -> Result<PageDocument, TklessError> {
         let content = match options.format {
             OutputFormat::Html => cleaned_html.to_string(),
             OutputFormat::Raw => cleaned_html.to_string(),
@@ -494,7 +494,7 @@ impl ZhihuAdapter {
         voteup: u64,
         url: &Url,
         options: &ExtractionOptions,
-    ) -> Result<PageDocument, PageclawError> {
+    ) -> Result<PageDocument, TklessError> {
         let content = match options.format {
             OutputFormat::Html => cleaned_html.to_string(),
             OutputFormat::Raw => cleaned_html.to_string(),
@@ -554,7 +554,7 @@ impl ZhihuAdapter {
         answers: Vec<ZhihuAnswerItem>,
         url: &Url,
         options: &ExtractionOptions,
-    ) -> Result<PageDocument, PageclawError> {
+    ) -> Result<PageDocument, TklessError> {
         let content = match options.format {
             OutputFormat::Html | OutputFormat::Raw => {
                 let mut out = String::new();
@@ -660,7 +660,7 @@ impl PlatformAdapter for ZhihuAdapter {
         fetcher: &'a crate::fetcher::Fetcher,
         url: &'a Url,
         options: &'a ExtractionOptions,
-    ) -> BoxFuture<'a, Result<PageDocument, PageclawError>> {
+    ) -> BoxFuture<'a, Result<PageDocument, TklessError>> {
         Box::pin(self.do_extract(fetcher, url, options))
     }
 }
@@ -698,7 +698,7 @@ pub fn preprocess_zhihu_html(raw_html: &str) -> String {
 async fn fetch_zhihu_html(
     fetcher: &crate::fetcher::Fetcher,
     target_url: &str,
-) -> Result<String, PageclawError> {
+) -> Result<String, TklessError> {
     let resp = fetcher
         .get_str(target_url)
         .header(
@@ -719,9 +719,9 @@ async fn fetch_zhihu_html(
         || html.contains("code\":40362")
         || html.contains("当前环境异常")
     {
-        return Err(PageclawError::AdapterError {
+        return Err(TklessError::AdapterError {
             platform: "zhihu",
-            message: "Zhihu anti-scraping verification challenge triggered (知乎反爬安全验证拦截 / 需携带 Cookie 凭据，可通过 --cookie 或 --cookie-file 传入，或运行 pageclaw login zhihu 登录)".to_string(),
+            message: "Zhihu anti-scraping verification challenge triggered (知乎反爬安全验证拦截 / 需携带 Cookie 凭据，可通过 --cookie 或 --cookie-file 传入，或运行 tkless login zhihu 登录)".to_string(),
         });
     }
 

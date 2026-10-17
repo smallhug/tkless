@@ -296,16 +296,16 @@ Details about setting up the project and configuration.
 
 ### Subsection 1.1: Installation
 
-Run `cargo install pageclaw` to install the tool.
+Run `cargo install tkless` to install the tool.
 
 ```bash
 cargo build --release
-pageclaw --version
+tkless --version
 ```
 
 ## Section 2: Usage
 
-Here is how you use PageClaw for extraction.
+Here is how you use TkLess for extraction.
 
 | Command | Description |
 |---|---|
@@ -326,7 +326,7 @@ Here is how you use PageClaw for extraction.
         // Verify code block is not split
         let has_code = chunks.iter().any(|c| {
             c.content
-                .contains("```bash\ncargo build --release\npageclaw --version\n```")
+                .contains("```bash\ncargo build --release\ntkless --version\n```")
         });
         assert!(has_code, "Code block must remain intact within a chunk");
 

@@ -2,12 +2,12 @@ use super::tools::get_available_tools;
 use super::types::*;
 use crate::adapters::BilibiliAdapter;
 use crate::cache::DocumentCache;
-use crate::error::PageclawError;
+use crate::error::TklessError;
 use crate::model::{
     ExtractionMode, ExtractionOptions, FetchOptions, OnTooLarge, OutputFormat, SearchEngineKind,
     TableExportFormat, TokenizerKind, VideoQuality,
 };
-use crate::PageclawEngine;
+use crate::TklessEngine;
 use serde_json::Value;
 use std::path::Path;
 use std::sync::Arc;
@@ -18,15 +18,15 @@ use url::Url;
 /// Type alias for an unbounded JSON notification sender used for MCP progress streaming and logging.
 pub type NotificationSender = tokio::sync::mpsc::UnboundedSender<Value>;
 
-/// In-memory and stdio Model Context Protocol (MCP) server for PageClaw.
+/// In-memory and stdio Model Context Protocol (MCP) server for TkLess.
 pub struct McpServer {
-    engine: Arc<PageclawEngine>,
+    engine: Arc<TklessEngine>,
     cache: Arc<DocumentCache>,
 }
 
 impl McpServer {
     /// Creates a new MCP server wrapping the provided extraction engine and document cache.
-    pub fn new(engine: PageclawEngine, cache: DocumentCache) -> Self {
+    pub fn new(engine: TklessEngine, cache: DocumentCache) -> Self {
         Self {
             engine: Arc::new(engine),
             cache: Arc::new(cache),
@@ -97,7 +97,7 @@ impl McpServer {
                 let raw_tool_name = params.get("name").and_then(|v| v.as_str()).unwrap_or("");
                 let tool_name = raw_tool_name
                     .strip_prefix("tkless_")
-                    .or_else(|| raw_tool_name.strip_prefix("pageclaw_"))
+                    .or_else(|| raw_tool_name.strip_prefix("tkless_"))
                     .unwrap_or(raw_tool_name);
                 let arguments = params
                     .get("arguments")
@@ -168,8 +168,8 @@ impl McpServer {
     }
 
     /// Asynchronous stdio loop reading requests from stdin and streaming responses/notifications to stdout.
-    pub async fn run_stdio(&self) -> Result<(), PageclawError> {
-        info!("Starting PageClaw MCP Server (transport: stdio, protocol: 2024-11-05)");
+    pub async fn run_stdio(&self) -> Result<(), TklessError> {
+        info!("Starting TkLess MCP Server (transport: stdio, protocol: 2024-11-05)");
 
         let (stdout_tx, mut stdout_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
 
@@ -199,7 +199,7 @@ impl McpServer {
         let reader = BufReader::new(stdin);
         let mut lines = reader.lines();
 
-        while let Some(line) = lines.next_line().await.map_err(PageclawError::Io)? {
+        while let Some(line) = lines.next_line().await.map_err(TklessError::Io)? {
             if let Some(response) = self
                 .handle_message_with_notifier(&line, Some(&notify_tx))
                 .await
@@ -221,7 +221,7 @@ impl McpServer {
         let _ = forwarder_handle.await;
         let _ = writer_handle.await;
 
-        info!("PageClaw MCP Server connection closed");
+        info!("TkLess MCP Server connection closed");
         Ok(())
     }
 
@@ -475,7 +475,7 @@ impl McpServer {
             mobile,
         };
 
-        let engine = match PageclawEngine::with_options(fetch_options) {
+        let engine = match TklessEngine::with_options(fetch_options) {
             Ok(eng) => eng,
             Err(e) => return McpToolCallResult::error(format!("Failed to initialize engine: {e}")),
         };
@@ -877,7 +877,7 @@ impl McpServer {
             if mobile {
                 fetch_opts.mobile = true;
             }
-            match PageclawEngine::with_options(fetch_opts) {
+            match TklessEngine::with_options(fetch_opts) {
                 Ok(eng) => {
                     custom_engine = eng;
                     &custom_engine
@@ -1056,7 +1056,7 @@ impl McpServer {
             if mobile {
                 fetch_opts.mobile = true;
             }
-            match PageclawEngine::with_options(fetch_opts) {
+            match TklessEngine::with_options(fetch_opts) {
                 Ok(eng) => {
                     custom_engine = eng;
                     &custom_engine
@@ -1213,7 +1213,7 @@ impl McpServer {
             if mobile {
                 fetch_opts.mobile = true;
             }
-            match PageclawEngine::with_options(fetch_opts) {
+            match TklessEngine::with_options(fetch_opts) {
                 Ok(eng) => {
                     custom_engine = eng;
                     std::sync::Arc::new(custom_engine)
@@ -1460,7 +1460,7 @@ impl McpServer {
             }
             "zhihu" => {
                 let msg = format!(
-                    "知乎登录说明：\n1. 请在本地浏览器访问授权登录页：https://www.zhihu.com/signin\n2. 登录成功后，从浏览器开发者工具 (F12 -> Application -> Cookies) 复制 Cookie 字符串\n3. 将凭据以 'zhihu: ...' 前缀格式追加到 `{output_file}`：\n```\nzhihu: d_c0=\"...\"; z_c0=\"...\"\n```\n4. 保存后 PageClaw 将自动识别知乎会话凭据进行鉴权访问。"
+                    "知乎登录说明：\n1. 请在本地浏览器访问授权登录页：https://www.zhihu.com/signin\n2. 登录成功后，从浏览器开发者工具 (F12 -> Application -> Cookies) 复制 Cookie 字符串\n3. 将凭据以 'zhihu: ...' 前缀格式追加到 `{output_file}`：\n```\nzhihu: d_c0=\"...\"; z_c0=\"...\"\n```\n4. 保存后 TkLess 将自动识别知乎会话凭据进行鉴权访问。"
                 );
                 McpToolCallResult::success(msg)
             }
@@ -1554,7 +1554,7 @@ impl McpServer {
             .unwrap_or("stats");
         match action {
             "clear" => match self.cache.clear() {
-                Ok(_) => McpToolCallResult::success("✅ PageClaw 本地响应缓存已成功清空。"),
+                Ok(_) => McpToolCallResult::success("✅ TkLess 本地响应缓存已成功清空。"),
                 Err(e) => McpToolCallResult::error(format!("Failed to clear cache: {e}")),
             },
             "prune_expired" => {
@@ -1667,7 +1667,7 @@ impl McpServer {
             let ssrf_res = if let Ok(ref p_url) = parsed_res {
                 fetcher.validate_ssrf(p_url).await
             } else {
-                Err(PageclawError::InvalidArgument(format!(
+                Err(TklessError::InvalidArgument(format!(
                     "Invalid URL: {target_url}"
                 )))
             };
@@ -1839,7 +1839,7 @@ impl McpServer {
                     "# ⚠️ [{}] 未检测到有效登录凭据 (No Credentials Found)\n\n\
                     - 凭据文件: `{cookie_file}`\n\
                     - 说明: 未在此文件中找到带 `{platform}:` 前缀的凭据记录。\n\
-                    - 建议操作: 执行登录提取指令以生成凭据，例如在 CLI 运行 `pageclaw login {platform}`，或手动将凭据按 `{platform}: key=val; ...` 写入 `{cookie_file}`。",
+                    - 建议操作: 执行登录提取指令以生成凭据，例如在 CLI 运行 `tkless login {platform}`，或手动将凭据按 `{platform}: key=val; ...` 写入 `{cookie_file}`。",
                     platform.to_uppercase()
                 ));
             }
@@ -1880,7 +1880,7 @@ impl McpServer {
                                 McpToolCallResult::success(
                                     "# ⚠️ [BILIBILI] 凭据已失效或已过期 (Cookie Expired)\n\n\
                                     - Bilibili 鉴权接口返回 `isLogin: false`。\n\
-                                    - 建议操作: 运行 `pageclaw login bilibili` 重新扫码更新凭据。"
+                                    - 建议操作: 运行 `tkless login bilibili` 重新扫码更新凭据。"
                                         .to_string(),
                                 )
                             }
