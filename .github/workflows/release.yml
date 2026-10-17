@@ -17,25 +17,30 @@ jobs:
         include:
           - target: x86_64-pc-windows-msvc
             os: windows-latest
-            artifact_name: tkless-windows-amd64.zip
+            artifact_name: tkless-windows-amd64.exe
             binary_name: tkless.exe
+            pkg_type: exe
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
-            artifact_name: tkless-linux-amd64.tar.gz
+            artifact_name: tkless-linux-amd64
             binary_name: tkless
+            pkg_type: binary
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-latest
-            artifact_name: tkless-linux-arm64.tar.gz
+            artifact_name: tkless-linux-arm64
             binary_name: tkless
+            pkg_type: binary
             use_cross: true
           - target: x86_64-apple-darwin
             os: macos-13
-            artifact_name: tkless-darwin-amd64.tar.gz
+            artifact_name: tkless-macos-amd64.dmg
             binary_name: tkless
+            pkg_type: dmg
           - target: aarch64-apple-darwin
             os: macos-latest
-            artifact_name: tkless-darwin-arm64.tar.gz
+            artifact_name: tkless-macos-arm64.dmg
             binary_name: tkless
+            pkg_type: dmg
 
     steps:
       - name: Checkout repository
@@ -62,16 +67,19 @@ jobs:
           fi
         shell: bash
 
-      - name: Package Artifact (Windows)
-        if: runner.os == 'Windows'
+      - name: Package Release Artifact
         run: |
-          7z a ${{ matrix.artifact_name }} ./target/${{ matrix.target }}/release/${{ matrix.binary_name }} README.md
-        shell: bash
-
-      - name: Package Artifact (Unix)
-        if: runner.os != 'Windows'
-        run: |
-          tar -czvf ${{ matrix.artifact_name }} -C ./target/${{ matrix.target }}/release ${{ matrix.binary_name }}
+          if [ "${{ matrix.pkg_type }}" = "exe" ]; then
+            cp ./target/${{ matrix.target }}/release/${{ matrix.binary_name }} ./${{ matrix.artifact_name }}
+          elif [ "${{ matrix.pkg_type }}" = "dmg" ]; then
+            mkdir -p dmg_root
+            cp ./target/${{ matrix.target }}/release/${{ matrix.binary_name }} dmg_root/
+            cp README.md dmg_root/
+            hdiutil create -volname "TkLess" -srcfolder dmg_root -ov -format UDZO ./${{ matrix.artifact_name }}
+          else
+            cp ./target/${{ matrix.target }}/release/${{ matrix.binary_name }} ./${{ matrix.artifact_name }}
+            chmod +x ./${{ matrix.artifact_name }}
+          fi
         shell: bash
 
       - name: Publish GitHub Release Asset
