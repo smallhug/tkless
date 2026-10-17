@@ -216,6 +216,8 @@ pub struct ExtractionOptions {
     pub stats: bool,
     /// Whether to automatically detect anti-scraping challenges (Cloudflare, captcha) and fallback to CDP headless rendering.
     pub auto_cdp: bool,
+    /// Whether to compute and prepend local heuristic key takeaways / summary bullets.
+    pub summarize: bool,
 }
 
 impl Default for ExtractionOptions {
@@ -255,6 +257,7 @@ impl Default for ExtractionOptions {
             table_format: TableExportFormat::default(),
             stats: false,
             auto_cdp: false,
+            summarize: false,
         }
     }
 }

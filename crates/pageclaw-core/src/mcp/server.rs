@@ -396,6 +396,10 @@ impl McpServer {
             .get("auto_cdp")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
+        let summarize = args
+            .get("summarize")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
 
         let options = ExtractionOptions {
             mode,
@@ -432,6 +436,7 @@ impl McpServer {
             stats,
             remove_selector,
             auto_cdp,
+            summarize,
         };
 
         let initial_target_host = Url::parse(url.as_str())
@@ -785,6 +790,22 @@ impl McpServer {
                     clean.to_string()
                 } else {
                     format!("site:huggingface.co {clean}")
+                }
+            }
+            "wikipedia" | "wiki" => {
+                let clean = query.trim();
+                if clean.starts_with("site:") {
+                    clean.to_string()
+                } else {
+                    format!("site:wikipedia.org {clean}")
+                }
+            }
+            "reddit" => {
+                let clean = query.trim();
+                if clean.starts_with("site:") {
+                    clean.to_string()
+                } else {
+                    format!("site:reddit.com {clean}")
                 }
             }
             _ => query.to_string(),
@@ -1319,6 +1340,10 @@ impl McpServer {
             _ => TableExportFormat::Markdown,
         };
         let stats = args.get("stats").and_then(|v| v.as_bool()).unwrap_or(false);
+        let summarize = args
+            .get("summarize")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
 
         let options = ExtractionOptions {
             mode,
@@ -1336,6 +1361,7 @@ impl McpServer {
             table_format,
             stats,
             remove_selector,
+            summarize,
             ..Default::default()
         };
 

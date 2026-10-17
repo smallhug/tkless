@@ -328,6 +328,10 @@ pub struct CliArgs {
     #[arg(long = "stream", help_heading = "通用提取选项 (General Options)")]
     pub stream: bool,
 
+    /// 启用本地启发式提取式摘要 (生成 3-5 条核心观点速览，无需外部大模型 API Key)
+    #[arg(long = "summarize", help_heading = "通用提取选项 (General Options)")]
+    pub summarize: bool,
+
     // =========================================================================
     // 哔哩哔哩专属选项 (Bilibili Options)
     // =========================================================================
@@ -832,6 +836,13 @@ pub struct SearchSubArgs {
         help = "Scope search to Wikipedia encyclopedic articles (wikipedia.org)"
     )]
     pub wiki: bool,
+
+    /// Scope search to Reddit community discussions and comments (reddit.com)
+    #[arg(
+        long = "reddit",
+        help = "Scope search to Reddit community discussions and comments (reddit.com)"
+    )]
+    pub reddit: bool,
 
     /// Search engine provider: bing (default), google, auto (failover)
     #[arg(

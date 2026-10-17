@@ -280,6 +280,7 @@ async fn run(args: CliArgs) -> Result<()> {
         stats: args.stats,
         remove_selector: args.remove_selector.clone(),
         auto_cdp: args.auto_cdp,
+        summarize: args.summarize,
     };
 
     // -------------------------------------------------------------------------
@@ -429,6 +430,13 @@ async fn run(args: CliArgs) -> Result<()> {
             } else {
                 format!("site:wikipedia.org {clean}")
             }
+        } else if search_args.reddit {
+            let clean = search_args.query.trim();
+            if clean.starts_with("site:") {
+                clean.to_string()
+            } else {
+                format!("site:reddit.com {clean}")
+            }
         } else {
             search_args.query.clone()
         };
@@ -566,6 +574,7 @@ async fn run(args: CliArgs) -> Result<()> {
             stats: false,
             remove_selector: args.remove_selector.clone(),
             auto_cdp: args.auto_cdp,
+            summarize: args.summarize,
         });
 
         let semaphore =

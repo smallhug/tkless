@@ -20,6 +20,7 @@ pub mod mcp;
 pub mod model;
 pub mod schema;
 pub mod search;
+pub mod summarizer;
 pub mod token;
 
 pub use adapters::{
@@ -58,6 +59,7 @@ pub use search::{
     format_search_fetch_markdown, format_search_results_markdown, search_bing, search_google,
     web_search, web_search_and_fetch, web_search_with_engine, SearchFetchItem, SearchResultItem,
 };
+pub use summarizer::{extract_key_takeaways, summarize_markdown};
 
 use cleaner::{clean_html, extract_selector};
 use extractor::{extract_images, extract_json_ld, extract_links, extract_metadata, extract_tables};
@@ -626,6 +628,14 @@ impl PageclawEngine {
                 content.push_str(&serde_json::to_string_pretty(ent).unwrap_or_default());
                 content.push_str("\n```\n");
             }
+        }
+
+        // 4.5 Prepend heuristic extractive summary if requested
+        if options.summarize
+            && (options.format == OutputFormat::Markdown || options.format == OutputFormat::Json)
+            && !content.is_empty()
+        {
+            content = summarizer::summarize_markdown(&content, 3);
         }
 
         // 5. Token counting and truncation
