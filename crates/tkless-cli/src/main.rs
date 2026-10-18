@@ -1165,18 +1165,38 @@ async fn run(args: CliArgs) -> Result<()> {
     }
 
     // -------------------------------------------------------------------------
-    // Standard Document Extraction / Fetch Pipeline
+    // Standard Document Extraction / Fetch Pipeline (HTML & Native PDF)
     // -------------------------------------------------------------------------
     let doc = if target == "-" {
-        // Read HTML from stdin
-        let mut raw_html = String::new();
+        let mut stdin_bytes = Vec::new();
         io::stdin()
-            .read_to_string(&mut raw_html)
-            .context("Failed to read HTML content from standard input")?;
+            .read_to_end(&mut stdin_bytes)
+            .context("Failed to read content from standard input")?;
 
-        engine
-            .process_html(&raw_html, args.base_url.as_deref(), &extraction_options)
-            .context("Failed to process HTML content")?
+        if tkless_core::pdf::is_pdf_content(&stdin_bytes) {
+            tkless_core::pdf::extract_pdf_to_document(&stdin_bytes, None, &extraction_options)?
+        } else {
+            let raw_html = String::from_utf8_lossy(&stdin_bytes).to_string();
+            engine
+                .process_html(&raw_html, args.base_url.as_deref(), &extraction_options)
+                .context("Failed to process HTML content")?
+        }
+    } else if std::path::Path::new(&target).is_file() {
+        let file_bytes = std::fs::read(&target)
+            .with_context(|| format!("Failed to read local file: {target}"))?;
+
+        if tkless_core::pdf::is_pdf_content(&file_bytes) || tkless_core::pdf::is_pdf_path(&target) {
+            tkless_core::pdf::extract_pdf_to_document(
+                &file_bytes,
+                Some(&target),
+                &extraction_options,
+            )?
+        } else {
+            let raw_html = String::from_utf8_lossy(&file_bytes).to_string();
+            engine
+                .process_html(&raw_html, args.base_url.as_deref(), &extraction_options)
+                .context("Failed to process local file content")?
+        }
     } else {
         // Fetch and process remote URL (with HTTP 304 conditional revalidation when caching is enabled)
         if let Some(ref c) = cache {

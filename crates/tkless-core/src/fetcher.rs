@@ -20,6 +20,7 @@ pub struct FetchedResponse {
     pub etag: Option<String>,
     pub last_modified: Option<String>,
     pub not_modified: bool,
+    pub raw_bytes: Option<Vec<u8>>,
 }
 
 #[derive(Clone)]
@@ -310,6 +311,7 @@ impl Fetcher {
                     etag: new_etag,
                     last_modified: new_lm,
                     not_modified: true,
+                    raw_bytes: None,
                 });
             }
 
@@ -405,8 +407,21 @@ impl Fetcher {
             raw_bytes.extend_from_slice(&chunk);
         }
 
+        // Check if response is a PDF document
+        let is_pdf = crate::pdf::is_pdf_content(&raw_bytes)
+            || content_type
+                .as_deref()
+                .map(|c| c.contains("pdf"))
+                .unwrap_or(false);
+
         // Decode character encoding (UTF-8, GBK, Shift-JIS, etc.)
-        let html = decode_html(&raw_bytes, content_type.as_deref());
+        let html = if is_pdf {
+            String::new()
+        } else {
+            decode_html(&raw_bytes, content_type.as_deref())
+        };
+
+        let raw_bytes_opt = if is_pdf { Some(raw_bytes) } else { None };
 
         Ok(FetchedResponse {
             requested_url: target_url.to_string(),
@@ -417,6 +432,7 @@ impl Fetcher {
             etag: etag_header,
             last_modified: lm_header,
             not_modified: false,
+            raw_bytes: raw_bytes_opt,
         })
     }
 

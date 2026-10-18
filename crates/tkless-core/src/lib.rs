@@ -19,6 +19,7 @@ pub mod fetcher;
 pub mod markdown;
 pub mod mcp;
 pub mod model;
+pub mod pdf;
 pub mod research;
 pub mod schema;
 pub mod search;
@@ -57,6 +58,10 @@ pub use model::{
     FetchOptions, OnTooLarge, OutputFormat, PageDocument, PageMetadata, SearchEngineKind,
     SubtitleLine, TableExportFormat, TokenizerKind, VideoConclusion, VideoQuality,
 };
+pub use pdf::{
+    extract_pdf_metadata, extract_pdf_to_document, extract_raw_text_from_pdf, is_pdf_content,
+    is_pdf_path, is_pdf_url, structure_pdf_text_to_markdown,
+};
 pub use research::{
     deep_research, format_deep_research_markdown, DeepResearchReport, ResearchCitation,
     ResearchDimension, ResearchOptions, ResearchTelemetry,
@@ -82,6 +87,7 @@ use fetcher::Fetcher;
 use markdown::MarkdownConverter;
 use scraper::Html;
 use std::collections::HashSet;
+use std::time::Instant;
 use token::{count_tokens, truncate_to_tokens};
 use tracing::{debug, warn};
 use url::Url;
@@ -403,6 +409,23 @@ impl TklessEngine {
             }
         };
 
+        // Native PDF extraction fast-path when server returns PDF bytes
+        if let Some(ref bytes) = response.raw_bytes {
+            if pdf::is_pdf_content(bytes) {
+                debug!(
+                    url = url,
+                    "Directing response to native PDF extraction pipeline"
+                );
+                let mut doc =
+                    pdf::extract_pdf_to_document(bytes, Some(&response.final_url), options)?;
+                doc.url = response.requested_url;
+                doc.final_url = response.final_url;
+                doc.status = response.status;
+                doc.truncated = doc.truncated || response.truncated;
+                return Ok(doc);
+            }
+        }
+
         let mut doc = self.process_html(&response.html, Some(&response.final_url), options)?;
         doc.url = response.requested_url;
         doc.final_url = response.final_url;
@@ -553,7 +576,12 @@ impl TklessEngine {
         base_url: Option<&str>,
         options: &ExtractionOptions,
     ) -> Result<PageDocument, TklessError> {
-        let clean_start = std::time::Instant::now();
+        // Check if raw content is a PDF document
+        if pdf::is_pdf_content(raw_html.as_bytes()) {
+            debug!("Directing raw input to native PDF extraction pipeline");
+            return pdf::extract_pdf_to_document(raw_html.as_bytes(), base_url, options);
+        }
+        let clean_start = Instant::now();
 
         // 0. Optional negative DOM pruning via remove_selector
         let pruned_html_holder;
