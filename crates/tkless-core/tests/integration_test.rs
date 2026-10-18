@@ -381,6 +381,7 @@ async fn test_integration_cdp_connection_failure_actionable_error() {
         timeout_ms: Some(5000),
         user_agent: None,
         cookie: None,
+        ..Default::default()
     };
 
     let res = tkless_core::cdp::fetch_html_via_cdp("https://example.com", &cdp_options).await;

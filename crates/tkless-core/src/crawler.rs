@@ -208,6 +208,7 @@ where
                 timeout_ms: None,
                 user_agent: eng.fetcher().options().user_agent.clone(),
                 cookie: eng.fetcher().resolve_cookie_for_url(&parsed),
+                ..Default::default()
             };
             crate::cdp::fetch_html_via_cdp(&url_str, &cdp_opts).await
         } else {

@@ -601,6 +601,20 @@ pub struct CliArgs {
     #[arg(long = "auto-cdp", help_heading = "网络与身份认证 (Network & Auth)")]
     pub auto_cdp: bool,
 
+    /// 启用 CDP 页面平滑自动下滚以触发延迟渲染和无限滚动列表加载 (默认: 关闭)
+    #[arg(
+        long = "cdp-auto-scroll",
+        help_heading = "网络与身份认证 (Network & Auth)"
+    )]
+    pub cdp_auto_scroll: bool,
+
+    /// 禁用 CDP 静态重资产拦截 (默认开启拦截以提速 3-5x；开启此开关将恢复加载图片、字体与媒体)
+    #[arg(
+        long = "cdp-no-block-resources",
+        help_heading = "网络与身份认证 (Network & Auth)"
+    )]
+    pub cdp_no_block_resources: bool,
+
     /// 通过 CDP 无头浏览器截取渲染后的页面高清快照并保存为 PNG/JPEG 图像 (供多模态模型分析)
     #[arg(
         long = "screenshot",
@@ -799,6 +813,14 @@ pub enum SubCommand {
         about = "检查并自动升级 TkLess 二进制至 GitHub 最新版本 (类似 bun upgrade)"
     )]
     Upgrade(UpgradeArgs),
+
+    /// 多跳自主深度网络调研流水线 (自动拆解维度、跨引擎并发检索、跟踪权威引链、汇编综述报告)
+    #[command(
+        name = "research",
+        alias = "deep-research",
+        about = "多跳自主深度网络调研流水线 (自动拆解维度、跨引擎并发检索、跟踪权威引链、汇编综述报告)"
+    )]
+    Research(ResearchSubArgs),
 }
 
 #[derive(clap::Args, Debug, Clone, Default)]
@@ -821,6 +843,69 @@ pub struct AdaptersArgs {
     /// Output presentation format [default: markdown]
     #[arg(short = 'f', long = "format", value_enum, default_value_t = CliFormat::Markdown)]
     pub format: CliFormat,
+}
+
+/// Command-line arguments for autonomous multi-hop deep research.
+#[derive(clap::Args, Clone, Debug)]
+pub struct ResearchSubArgs {
+    /// Research question, thesis, or technical topic
+    #[arg(value_name = "TOPIC")]
+    pub topic: String,
+
+    /// Research hop depth (1: single-hop broad search, 2: two-hop citation tracking) [default: 2]
+    #[arg(short = 'd', long = "depth", default_value_t = 2, value_name = "HOPS")]
+    pub depth: usize,
+
+    /// Number of research dimensions/sub-queries to explore (2-5) [default: 3]
+    #[arg(short = 'b', long = "breadth", default_value_t = 3, value_name = "N")]
+    pub breadth: usize,
+
+    /// Maximum number of total pages to analyze (3-20) [default: 8]
+    #[arg(short = 'm', long = "max-pages", default_value_t = 8, value_name = "N")]
+    pub max_pages: usize,
+
+    /// Maximum tokens extracted per webpage [default: 1500]
+    #[arg(
+        long = "max-tokens-per-page",
+        default_value_t = 1500,
+        value_name = "TOKENS"
+    )]
+    pub max_tokens_per_page: usize,
+
+    /// Overall token budget for the compiled research report [default: 8000]
+    #[arg(
+        short = 't',
+        long = "max-tokens",
+        default_value_t = 8000,
+        value_name = "TOKENS"
+    )]
+    pub max_tokens: usize,
+
+    /// Search engine provider: all (concurrent Bing + DuckDuckGo, default), bing, duckduckgo (ddg)
+    #[arg(
+        short = 'e',
+        long = "engine",
+        value_enum,
+        default_value_t = CliSearchEngine::All,
+        help = "Search engine provider: all (default), bing, duckduckgo"
+    )]
+    pub engine: CliSearchEngine,
+
+    /// Output presentation format [default: markdown]
+    #[arg(short = 'f', long = "format", value_enum, default_value_t = CliFormat::Markdown)]
+    pub format: CliFormat,
+
+    /// Write compiled research report to file instead of stdout
+    #[arg(short = 'o', long = "output", value_name = "FILE")]
+    pub output: Option<PathBuf>,
+
+    /// Disable SimHash deduplication
+    #[arg(long = "no-dedup")]
+    pub no_dedup: bool,
+
+    /// HTTP/HTTPS 代理服务器地址 (例如 http://127.0.0.1:7890)
+    #[arg(short = 'p', long = "proxy", value_name = "PROXY_URL")]
+    pub proxy: Option<String>,
 }
 
 #[derive(clap::Args, Debug, Clone)]

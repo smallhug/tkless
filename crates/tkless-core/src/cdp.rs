@@ -224,6 +224,12 @@ pub struct CdpOptions {
     pub user_agent: Option<String>,
     /// Cookie header string or platform cookies to inject into the browser target.
     pub cookie: Option<String>,
+    /// Whether to block heavy resources (images, media, fonts, tracker scripts) to boost speed by 3-5x. Default: true for HTML extraction.
+    pub block_resources: Option<bool>,
+    /// Whether to automatically scroll down the page to trigger lazy loading and dynamic DOM hydration. Default: false.
+    pub auto_scroll: Option<bool>,
+    /// Maximum scroll increments for auto-scroll. Default: 5.
+    pub scroll_count: Option<u32>,
 }
 
 impl Default for CdpOptions {
@@ -234,6 +240,9 @@ impl Default for CdpOptions {
             timeout_ms: Some(30_000),
             user_agent: None,
             cookie: None,
+            block_resources: Some(true),
+            auto_scroll: Some(false),
+            scroll_count: Some(5),
         }
     }
 }
@@ -345,12 +354,37 @@ async fn connect_and_extract_html(
 
     let mut message_id = 1u64;
 
-    // 1. Enable Page and Runtime domains
+    // 1. Enable Page, Runtime, and Network domains
     send_cdp_cmd(&mut ws_stream, message_id, "Page.enable", json!({})).await?;
     message_id += 1;
 
     send_cdp_cmd(&mut ws_stream, message_id, "Runtime.enable", json!({})).await?;
     message_id += 1;
+
+    send_cdp_cmd(&mut ws_stream, message_id, "Network.enable", json!({})).await?;
+    message_id += 1;
+
+    // Block heavy static assets (images, fonts, media, analytics) if enabled (default true for HTML)
+    if options.block_resources.unwrap_or(true) {
+        debug!("CDP 启用网络层静态重资产与跟踪器拦截 (提速 3-5x)");
+        send_cdp_cmd(
+            &mut ws_stream,
+            message_id,
+            "Network.setBlockedURLs",
+            json!({
+                "urls": [
+                    "*.png", "*.jpg", "*.jpeg", "*.gif", "*.webp", "*.svg", "*.ico",
+                    "*.woff", "*.woff2", "*.ttf", "*.eot", "*.otf",
+                    "*.mp4", "*.mp3", "*.avi", "*.webm", "*.flv", "*.mov", "*.m3u8",
+                    "*google-analytics.com*", "*googletagmanager.com*", "*doubleclick.net*",
+                    "*hm.baidu.com*", "*cnzz.com*", "*clarity.ms*", "*facebook.net*",
+                    "*beacon*", "*telemetry*"
+                ]
+            }),
+        )
+        .await?;
+        message_id += 1;
+    }
 
     // 2. Set custom User-Agent if provided
     if let Some(ref ua) = options.user_agent {
@@ -429,6 +463,67 @@ async fn connect_and_extract_html(
         if wait_ms > 0 {
             tokio::time::sleep(Duration::from_millis(wait_ms)).await;
         }
+    }
+
+    // 6.5 Auto-scroll for lazy-loading / infinite scroll pages
+    if options.auto_scroll.unwrap_or(false) {
+        let max_scrolls = options.scroll_count.unwrap_or(5);
+        debug!(
+            max_scrolls = max_scrolls,
+            "CDP 执行平滑自动下滚以触发延迟渲染"
+        );
+        let scroll_js = format!(
+            r#"
+            (function() {{
+                return new Promise((resolve) => {{
+                    let totalHeight = 0;
+                    let distance = 400;
+                    let count = 0;
+                    let maxCount = {};
+                    let timer = setInterval(() => {{
+                        window.scrollBy(0, distance);
+                        totalHeight += distance;
+                        count++;
+                        if (count >= maxCount || (window.innerHeight + window.scrollY) >= (document.body ? document.body.scrollHeight : 0)) {{
+                            clearInterval(timer);
+                            window.scrollTo(0, 0);
+                            resolve(true);
+                        }}
+                    }}, 120);
+                }});
+            }})()
+            "#,
+            max_scrolls
+        );
+
+        let scroll_cmd_id = message_id;
+        message_id += 1;
+        send_cdp_cmd(
+            &mut ws_stream,
+            scroll_cmd_id,
+            "Runtime.evaluate",
+            json!({
+                "expression": scroll_js,
+                "awaitPromise": true,
+                "returnByValue": true,
+            }),
+        )
+        .await?;
+
+        let scroll_timeout = Duration::from_millis(max_scrolls as u64 * 180 + 1500);
+        let _ = timeout(scroll_timeout, async {
+            while let Some(msg_result) = ws_stream.next().await {
+                if let Ok(Message::Text(text)) = msg_result {
+                    if let Ok(v) = serde_json::from_str::<Value>(&text) {
+                        if v.get("id").and_then(|id| id.as_u64()) == Some(scroll_cmd_id) {
+                            debug!("CDP 自动滚动完成");
+                            break;
+                        }
+                    }
+                }
+            }
+        })
+        .await;
     }
 
     // 7. Extract document.documentElement.outerHTML
@@ -628,6 +723,67 @@ async fn connect_and_capture_screenshot(
         if wait_ms > 0 {
             tokio::time::sleep(Duration::from_millis(wait_ms)).await;
         }
+    }
+
+    // Auto-scroll for lazy-loading before capturing screenshot
+    if options.auto_scroll.unwrap_or(false) {
+        let max_scrolls = options.scroll_count.unwrap_or(5);
+        debug!(
+            max_scrolls = max_scrolls,
+            "CDP 截图前执行自动下滚以触发延迟渲染"
+        );
+        let scroll_js = format!(
+            r#"
+            (function() {{
+                return new Promise((resolve) => {{
+                    let totalHeight = 0;
+                    let distance = 400;
+                    let count = 0;
+                    let maxCount = {};
+                    let timer = setInterval(() => {{
+                        window.scrollBy(0, distance);
+                        totalHeight += distance;
+                        count++;
+                        if (count >= maxCount || (window.innerHeight + window.scrollY) >= (document.body ? document.body.scrollHeight : 0)) {{
+                            clearInterval(timer);
+                            window.scrollTo(0, 0);
+                            resolve(true);
+                        }}
+                    }}, 120);
+                }});
+            }})()
+            "#,
+            max_scrolls
+        );
+
+        let scroll_cmd_id = message_id;
+        message_id += 1;
+        send_cdp_cmd(
+            &mut ws_stream,
+            scroll_cmd_id,
+            "Runtime.evaluate",
+            json!({
+                "expression": scroll_js,
+                "awaitPromise": true,
+                "returnByValue": true,
+            }),
+        )
+        .await?;
+
+        let scroll_timeout = Duration::from_millis(max_scrolls as u64 * 180 + 1500);
+        let _ = timeout(scroll_timeout, async {
+            while let Some(msg_result) = ws_stream.next().await {
+                if let Ok(Message::Text(text)) = msg_result {
+                    if let Ok(v) = serde_json::from_str::<Value>(&text) {
+                        if v.get("id").and_then(|id| id.as_u64()) == Some(scroll_cmd_id) {
+                            debug!("CDP 截图前自动滚动已完成");
+                            break;
+                        }
+                    }
+                }
+            }
+        })
+        .await;
     }
 
     let img_format = match format {
@@ -896,5 +1052,23 @@ mod tests {
         if let Some(ref path) = browser {
             assert!(path.is_file(), "Located browser binary must be a file");
         }
+    }
+
+    #[test]
+    fn test_cdp_options_defaults_and_builder() {
+        let default_opts = CdpOptions::default();
+        assert_eq!(default_opts.block_resources, Some(true));
+        assert_eq!(default_opts.auto_scroll, Some(false));
+        assert_eq!(default_opts.scroll_count, Some(5));
+
+        let custom_opts = CdpOptions {
+            auto_scroll: Some(true),
+            scroll_count: Some(10),
+            block_resources: Some(false),
+            ..Default::default()
+        };
+        assert_eq!(custom_opts.block_resources, Some(false));
+        assert_eq!(custom_opts.auto_scroll, Some(true));
+        assert_eq!(custom_opts.scroll_count, Some(10));
     }
 }

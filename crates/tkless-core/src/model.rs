@@ -216,6 +216,10 @@ pub struct ExtractionOptions {
     pub stats: bool,
     /// Whether to automatically detect anti-scraping challenges (Cloudflare, captcha) and fallback to CDP headless rendering.
     pub auto_cdp: bool,
+    /// Whether to block heavy static resources (images, fonts, media, analytics) in CDP rendering to accelerate page loads by 3-5x. Default: true.
+    pub cdp_block_resources: bool,
+    /// Whether to automatically scroll down dynamic / infinite scroll pages in CDP to trigger lazy loading. Default: false.
+    pub cdp_auto_scroll: bool,
     /// Whether to compute and prepend local heuristic key takeaways / summary bullets.
     pub summarize: bool,
 }
@@ -257,6 +261,8 @@ impl Default for ExtractionOptions {
             table_format: TableExportFormat::default(),
             stats: false,
             auto_cdp: false,
+            cdp_block_resources: true,
+            cdp_auto_scroll: false,
             summarize: false,
         }
     }

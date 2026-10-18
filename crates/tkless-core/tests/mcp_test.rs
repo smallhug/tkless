@@ -42,7 +42,7 @@ async fn test_mcp_protocol_lifecycle() {
     let tools_array = tools_val["tools"]
         .as_array()
         .expect("Tools should be an array");
-    assert_eq!(tools_array.len(), 22);
+    assert_eq!(tools_array.len(), 23);
 
     let tool_names: Vec<&str> = tools_array
         .iter()
@@ -53,6 +53,7 @@ async fn test_mcp_protocol_lifecycle() {
     assert!(tool_names.contains(&"search_bilibili"));
     assert!(tool_names.contains(&"download_media"));
     assert!(tool_names.contains(&"web_search"));
+    assert!(tool_names.contains(&"deep_research"));
     assert!(tool_names.contains(&"crawl_site"));
     assert!(tool_names.contains(&"batch_fetch_webpages"));
     assert!(tool_names.contains(&"clean_html"));

@@ -317,6 +317,7 @@ impl McpServer {
             "split_document" => self.call_split_document(arguments).await,
             "chunk_markdown" => self.call_chunk_markdown(arguments).await,
             "diff_documents" | "diff_content" => self.call_diff_content(arguments).await,
+            "deep_research" | "research" => self.call_deep_research(arguments).await,
             "take_screenshot" | "capture_screenshot" => {
                 self.call_capture_screenshot(arguments).await
             }
@@ -601,6 +602,14 @@ impl McpServer {
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
         let cdp_wait_ms = args.get("cdp_wait_ms").and_then(|v| v.as_u64());
+        let cdp_block_resources = args
+            .get("cdp_block_resources")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
+        let cdp_auto_scroll = args
+            .get("cdp_auto_scroll")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
         let schema = args.get("schema").map(|v| {
             if let Some(s) = v.as_str() {
                 s.to_string()
@@ -670,6 +679,8 @@ impl McpServer {
             conclusion,
             cdp_endpoint,
             cdp_wait_ms,
+            cdp_block_resources,
+            cdp_auto_scroll,
             schema,
             chunk,
             chunk_size,
@@ -1213,6 +1224,75 @@ impl McpServer {
         }
     }
 
+    async fn call_deep_research(&self, args: &Value) -> McpToolCallResult {
+        let topic = match args.get("topic").and_then(|v| v.as_str()) {
+            Some(t) if !t.trim().is_empty() => t.trim(),
+            _ => return McpToolCallResult::error("Missing required parameter 'topic'"),
+        };
+
+        let depth = args
+            .get("depth")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(2)
+            .clamp(1, 3) as usize;
+        let breadth = args
+            .get("breadth")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(3)
+            .clamp(2, 5) as usize;
+        let max_pages = args
+            .get("max_pages")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(8)
+            .clamp(3, 20) as usize;
+        let max_tokens_per_page = args
+            .get("max_tokens_per_page")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(1500) as usize;
+        let max_tokens = args
+            .get("max_tokens")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as usize)
+            .or(Some(8000));
+        let engine = match args.get("engine").and_then(|v| v.as_str()) {
+            Some("bing") => SearchEngineKind::Bing,
+            Some("duckduckgo") | Some("ddg") => SearchEngineKind::DuckDuckGo,
+            _ => SearchEngineKind::All,
+        };
+        let dedup = args.get("dedup").and_then(|v| v.as_bool()).unwrap_or(true);
+        let format = match args.get("format").and_then(|v| v.as_str()) {
+            Some("json") => OutputFormat::Json,
+            _ => OutputFormat::Markdown,
+        };
+
+        let options = crate::research::ResearchOptions {
+            depth,
+            breadth,
+            max_pages,
+            max_tokens_per_page,
+            max_tokens,
+            engine,
+            dedup,
+            format,
+        };
+
+        match crate::research::deep_research(&self.engine, topic, &options).await {
+            Ok(report) => match format {
+                OutputFormat::Json => match serde_json::to_string_pretty(&report) {
+                    Ok(json_str) => McpToolCallResult::success(json_str),
+                    Err(e) => {
+                        McpToolCallResult::error(format!("Failed to serialize report to JSON: {e}"))
+                    }
+                },
+                _ => {
+                    let md = crate::research::format_deep_research_markdown(&report);
+                    McpToolCallResult::success(md)
+                }
+            },
+            Err(e) => McpToolCallResult::error(format!("Deep research failed: {e}")),
+        }
+    }
+
     async fn call_crawl_site(
         &self,
         args: &Value,
@@ -1739,6 +1819,7 @@ impl McpServer {
                     timeout_ms: None,
                     user_agent: self.engine.fetcher().options().user_agent.clone(),
                     cookie: self.engine.fetcher().resolve_cookie_for_url(&parsed_url),
+                    ..Default::default()
                 };
                 match crate::cdp::fetch_html_via_cdp(url, &cdp_opts).await {
                     Ok(h) => h,
@@ -2424,6 +2505,8 @@ impl McpServer {
             timeout_ms: None,
             user_agent: self.engine.fetcher().options().user_agent.clone(),
             cookie: self.engine.fetcher().resolve_cookie_for_url(&parsed_url),
+            block_resources: Some(false),
+            ..Default::default()
         };
 
         match crate::cdp::capture_screenshot_via_cdp(raw_url, &cdp_opts, Some(format)).await {
