@@ -41,6 +41,10 @@ impl DownloadProgressReporter for ConsoleProgressReporter {
         if self.quiet {
             return;
         }
+        use std::io::IsTerminal;
+        if !io::stderr().is_terminal() {
+            return;
+        }
         let total_str = match total_bytes {
             Some(t) => format!(" (total: {})", format_bytes(t)),
             None => String::new(),
@@ -50,6 +54,10 @@ impl DownloadProgressReporter for ConsoleProgressReporter {
 
     fn on_progress(&self, downloaded_bytes: u64, total_bytes: Option<u64>) {
         if self.quiet {
+            return;
+        }
+        use std::io::IsTerminal;
+        if !io::stderr().is_terminal() {
             return;
         }
 
@@ -88,6 +96,10 @@ impl DownloadProgressReporter for ConsoleProgressReporter {
 
     fn on_finish(&self, total_bytes: u64) {
         if self.quiet {
+            return;
+        }
+        use std::io::IsTerminal;
+        if !io::stderr().is_terminal() {
             return;
         }
         let elapsed = self.start_time.elapsed();
@@ -396,11 +408,18 @@ async fn run(args: CliArgs) -> Result<()> {
     // -------------------------------------------------------------------------
     if let Some(SubCommand::Adapters(ref adapters_args)) = args.command {
         let list = tkless_core::adapters::AdapterRegistry::list_adapter_metadata();
-        if matches!(adapters_args.format, CliFormat::Json | CliFormat::Jsonl) {
-            println!("{}", serde_json::to_string_pretty(&list)?);
+        let payload = if matches!(adapters_args.format, CliFormat::Json | CliFormat::Jsonl) {
+            serde_json::to_string_pretty(&list)?
         } else {
-            println!("{}", tkless_core::adapters::format_adapters_markdown(&list));
-        }
+            tkless_core::adapters::format_adapters_markdown(&list)
+        };
+        output::write_payload(
+            &payload,
+            adapters_args
+                .output
+                .as_deref()
+                .or(args.output_file.as_deref()),
+        )?;
         return Ok(());
     }
 
@@ -417,10 +436,9 @@ async fn run(args: CliArgs) -> Result<()> {
     // Execution Branch 1.29: Environment Diagnostics & System Doctor
     // -------------------------------------------------------------------------
     if let Some(SubCommand::Doctor(ref doc_args)) = args.command {
-        return run_doctor(doc_args, &fetch_options).await;
+        return run_doctor(doc_args, &fetch_options, args.output_file.as_deref()).await;
     }
 
-    // -------------------------------------------------------------------------
     // Execution Branch 1.3: Document Version Diff Analysis
     // -------------------------------------------------------------------------
     if let Some(SubCommand::Diff(ref diff_args)) = args.command {
@@ -430,19 +448,22 @@ async fn run(args: CliArgs) -> Result<()> {
         let new_text = load_target_text(&diff_args.new_target, &engine).await?;
         let report = tkless_core::diff::compute_diff(&old_text, &new_text);
 
-        if matches!(diff_args.format, CliFormat::Json | CliFormat::Jsonl) {
-            println!("{}", serde_json::to_string_pretty(&report)?);
+        let payload = if matches!(diff_args.format, CliFormat::Json | CliFormat::Jsonl) {
+            serde_json::to_string_pretty(&report)?
         } else {
-            println!("# 🔄 文档版本差异与变更分析 (Content Diff Report)\n");
-            println!(
-                "> 新增行数: `+{}` | 删除行数: `-{}` | 未变行数: `{}` | 变更比例: `{:.1}%`\n",
+            format!(
+                "# 🔄 文档版本差异与变更分析 (Content Diff Report)\n\n> 新增行数: `+{}` | 删除行数: `-{}` | 未变行数: `{}` | 变更比例: `{:.1}%`\n\n```diff\n{}\n```",
                 report.added_lines,
                 report.removed_lines,
                 report.unchanged_lines,
-                report.change_ratio
-            );
-            println!("```diff\n{}\n```", report.unified_diff);
-        }
+                report.change_ratio,
+                report.unified_diff
+            )
+        };
+        output::write_payload(
+            &payload,
+            diff_args.output.as_deref().or(args.output_file.as_deref()),
+        )?;
         return Ok(());
     }
 
@@ -473,8 +494,8 @@ async fn run(args: CliArgs) -> Result<()> {
         }
 
         let table_format: tkless_core::model::TableExportFormat = tables_args.format.into();
-        if table_format == tkless_core::model::TableExportFormat::Sql {
-            let ddl = tables
+        let payload = if table_format == tkless_core::model::TableExportFormat::Sql {
+            tables
                 .iter()
                 .enumerate()
                 .map(|(idx, t)| {
@@ -486,13 +507,18 @@ async fn run(args: CliArgs) -> Result<()> {
                     t.to_sql(&name)
                 })
                 .collect::<Vec<_>>()
-                .join("\n\n");
-            println!("{ddl}");
+                .join("\n\n")
         } else {
-            let formatted =
-                tkless_core::model::ExtractedTable::format_tables(&tables, table_format);
-            println!("{formatted}");
-        }
+            tkless_core::model::ExtractedTable::format_tables(&tables, table_format)
+        };
+
+        output::write_payload(
+            &payload,
+            tables_args
+                .output
+                .as_deref()
+                .or(args.output_file.as_deref()),
+        )?;
         return Ok(());
     }
 
@@ -1779,62 +1805,72 @@ async fn run_shell(engine: &TklessEngine, base_options: &ExtractionOptions) -> R
 }
 
 /// Diagnoses runtime environment: CDP browser readiness, cache permissions, and network endpoints.
-async fn run_doctor(doc_args: &cli::DoctorArgs, fetch_options: &FetchOptions) -> Result<()> {
-    println!("╔════════════════════════════════════════════════════════════════╗");
-    println!("║   TkLess Doctor - 环境诊断与核心服务连通性自检报告 (Doctor)   ║");
-    println!("╚════════════════════════════════════════════════════════════════╝\n");
+async fn run_doctor(
+    doc_args: &cli::DoctorArgs,
+    fetch_options: &FetchOptions,
+    output_file: Option<&Path>,
+) -> Result<()> {
+    let mut out = String::new();
+    out.push_str("╔════════════════════════════════════════════════════════════════╗\n");
+    out.push_str("║   TkLess Doctor - 环境诊断与核心服务连通性自检报告 (Doctor)   ║\n");
+    out.push_str("╚════════════════════════════════════════════════════════════════╝\n\n");
 
     // 1. System & Architecture
-    println!("[1/4] 🖥️ 系统环境与架构 (System & Runtime):");
-    println!(
-        "  - 产品版本 : tkless v{} (build 2026-10-18)",
+    out.push_str("[1/4] 🖥️ 系统环境与架构 (System & Runtime):\n");
+    out.push_str(&format!(
+        "  - 产品版本 : tkless v{} (build 2026-10-18)\n",
         env!("CARGO_PKG_VERSION")
-    );
-    println!(
-        "  - 操作系统 : {} ({})",
+    ));
+    out.push_str(&format!(
+        "  - 操作系统 : {} ({})\n",
         std::env::consts::OS,
         std::env::consts::ARCH
-    );
-    println!("  - 进程位宽 : {}-bit", std::mem::size_of::<usize>() * 8);
+    ));
+    out.push_str(&format!(
+        "  - 进程位宽 : {}-bit\n",
+        std::mem::size_of::<usize>() * 8
+    ));
 
     // 2. CDP Headless Browser Detection
-    println!("\n[2/4] 🌐 无头浏览器 (CDP Headless Browser):");
+    out.push_str("\n[2/4] 🌐 无头浏览器 (CDP Headless Browser):\n");
     let browser = tkless_core::cdp::locate_system_browser();
     match browser {
         Some(ref path) => {
-            println!("  - 状态     : ✅ 已检测到本地可用浏览器");
-            println!("  - 执行路径 : {}", path.display());
-            println!("  - 能力提示 : 支持通过 --cdp-auto-scroll、--auto-cdp 及无头守护进程快速渲染动态页面与绕过反爬");
+            out.push_str("  - 状态     : ✅ 已检测到本地可用浏览器\n");
+            out.push_str(&format!("  - 执行路径 : {}\n", path.display()));
+            out.push_str("  - 能力提示 : 支持通过 --cdp-auto-scroll、--auto-cdp 及无头守护进程快速渲染动态页面与绕过反爬\n");
         }
         None => {
-            println!("  - 状态     : ⚠️ 未在系统标准路径检测到 Chrome、Edge 或 Chromium 安装");
-            println!("  - 建议操作 : 安装 Chrome 或 Edge 浏览器后，即可自动启用无感知 --auto-cdp 渲染加速");
+            out.push_str(
+                "  - 状态     : ⚠️ 未在系统标准路径检测到 Chrome、Edge 或 Chromium 安装\n",
+            );
+            out.push_str("  - 建议操作 : 安装 Chrome 或 Edge 浏览器后，即可自动启用无感知 --auto-cdp 渲染加速\n");
         }
     }
 
     // 3. Local Storage & Response Cache
-    println!("\n[3/4] 📦 本地响应缓存 (Response Cache):");
+    out.push_str("\n[3/4] 📦 本地响应缓存 (Response Cache):\n");
     let cache = DocumentCache::new(None, 900);
     let stats = cache.stats();
     let cache_dir_disp = stats
         .cache_dir
         .unwrap_or_else(|| "系统标准缓存目录".to_string());
-    println!("  - 读写状态 : ✅ 缓存存储读写正常");
-    println!("  - 缓存目录 : {}", cache_dir_disp);
-    println!(
-        "  - 活跃容量 : {} 项内存条目, {} 项磁盘条目 (总占用: {})",
+    out.push_str("  - 读写状态 : ✅ 缓存存储读写正常\n");
+    out.push_str(&format!("  - 缓存目录 : {}\n", cache_dir_disp));
+    out.push_str(&format!(
+        "  - 活跃容量 : {} 项内存条目, {} 项磁盘条目 (总占用: {})\n",
         stats.memory_entries,
         stats.disk_entries,
         tkless_core::downloader::format_bytes(stats.disk_bytes)
-    );
+    ));
 
     // 4. Network Connectivity Probes
-    println!("\n[4/4] 🌍 核心网络服务连通性探测 (Network Probes):");
+    out.push_str("\n[4/4] 🌍 核心网络服务连通性探测 (Network Probes):\n");
     let effective_proxy = doc_args.proxy.as_ref().or(fetch_options.proxy.as_ref());
     if let Some(p) = effective_proxy {
-        println!("  - 配置代理 : {}", p);
+        out.push_str(&format!("  - 配置代理 : {}\n", p));
     } else {
-        println!("  - 直连模式 : (未配置外部 HTTP 代理，可通过 -p / --proxy 指定)");
+        out.push_str("  - 直连模式 : (未配置外部 HTTP 代理，可通过 -p / --proxy 指定)\n");
     }
 
     let mut probe_client_builder = reqwest::Client::builder()
@@ -1851,21 +1887,21 @@ async fn run_doctor(doc_args: &cli::DoctorArgs, fetch_options: &FetchOptions) ->
     let t_bing = Instant::now();
     match probe_client.get("https://www.bing.com").send().await {
         Ok(resp) if resp.status().is_success() => {
-            println!(
-                "  - Microsoft Bing 搜索  : ✅ 可达 ({} ms, Status: {})",
+            out.push_str(&format!(
+                "  - Microsoft Bing 搜索  : ✅ 可达 ({} ms, Status: {})\n",
                 t_bing.elapsed().as_millis(),
                 resp.status()
-            );
+            ));
         }
         Ok(resp) => {
-            println!(
-                "  - Microsoft Bing 搜索  : ⚠️ 响应非 200 ({} ms, Status: {})",
+            out.push_str(&format!(
+                "  - Microsoft Bing 搜索  : ⚠️ 响应非 200 ({} ms, Status: {})\n",
                 t_bing.elapsed().as_millis(),
                 resp.status()
-            );
+            ));
         }
         Err(e) => {
-            println!("  - Microsoft Bing 搜索  : ❌ 连接失败 ({})", e);
+            out.push_str(&format!("  - Microsoft Bing 搜索  : ❌ 连接失败 ({})\n", e));
         }
     }
 
@@ -1873,27 +1909,27 @@ async fn run_doctor(doc_args: &cli::DoctorArgs, fetch_options: &FetchOptions) ->
     let t_ddg = Instant::now();
     match probe_client.get("https://html.duckduckgo.com").send().await {
         Ok(resp) if resp.status().is_success() => {
-            println!(
-                "  - DuckDuckGo 搜索      : ✅ 可达 ({} ms, Status: {})",
+            out.push_str(&format!(
+                "  - DuckDuckGo 搜索      : ✅ 可达 ({} ms, Status: {})\n",
                 t_ddg.elapsed().as_millis(),
                 resp.status()
-            );
+            ));
         }
         Ok(resp) if resp.status() == reqwest::StatusCode::ACCEPTED => {
-            println!("  - DuckDuckGo 搜索      : ⚠️ 遭遇 SRE 202 反爬校验 (建议配置 -p http://127.0.0.1:7897 代理节点)");
+            out.push_str("  - DuckDuckGo 搜索      : ⚠️ 遭遇 SRE 202 反爬校验 (建议配置 -p http://127.0.0.1:7897 代理节点)\n");
         }
         Ok(resp) => {
-            println!(
-                "  - DuckDuckGo 搜索      : ⚠️ 响应非 200 ({} ms, Status: {})",
+            out.push_str(&format!(
+                "  - DuckDuckGo 搜索      : ⚠️ 响应非 200 ({} ms, Status: {})\n",
                 t_ddg.elapsed().as_millis(),
                 resp.status()
-            );
+            ));
         }
         Err(e) => {
-            println!(
-                "  - DuckDuckGo 搜索      : ⚠️ 直连受限 ({}) (建议配置 -p 代理)",
+            out.push_str(&format!(
+                "  - DuckDuckGo 搜索      : ⚠️ 直连受限 ({}) (建议配置 -p 代理)\n",
                 e
-            );
+            ));
         }
     }
 
@@ -1905,25 +1941,28 @@ async fn run_doctor(doc_args: &cli::DoctorArgs, fetch_options: &FetchOptions) ->
         .await
     {
         Ok(resp) if resp.status().is_success() => {
-            println!(
-                "  - Bilibili 开放接口     : ✅ 可达 ({} ms, Status: {})",
+            out.push_str(&format!(
+                "  - Bilibili 开放接口     : ✅ 可达 ({} ms, Status: {})\n",
                 t_bili.elapsed().as_millis(),
                 resp.status()
-            );
+            ));
         }
         Ok(resp) => {
-            println!(
-                "  - Bilibili 开放接口     : ⚠️ 响应非 200 (Status: {})",
+            out.push_str(&format!(
+                "  - Bilibili 开放接口     : ⚠️ 响应非 200 (Status: {})\n",
                 resp.status()
-            );
+            ));
         }
         Err(e) => {
-            println!("  - Bilibili 开放接口     : ❌ 连接失败 ({})", e);
+            out.push_str(&format!(
+                "  - Bilibili 开放接口     : ❌ 连接失败 ({})\n",
+                e
+            ));
         }
     }
 
-    println!("\n诊断完成！所有核心子系统均已完成自检。\n");
-    Ok(())
+    out.push_str("\n诊断完成！所有核心子系统均已完成自检。\n");
+    output::write_payload(&out, doc_args.output.as_deref().or(output_file))
 }
 
 #[cfg(test)]

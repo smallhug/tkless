@@ -253,9 +253,9 @@ impl TklessEngine {
                                 doc.links = Some(extracted.clone());
                                 if (options.format == OutputFormat::Markdown
                                     || options.format == OutputFormat::Text)
-                                    && !doc.content.contains("### 页面链接清单 (Links)")
+                                    && !doc.content.contains("## Links")
                                 {
-                                    doc.content.push_str("\n\n### 页面链接清单 (Links)\n\n");
+                                    doc.content.push_str("\n\n## Links\n\n");
                                     for link in extracted {
                                         let text = if link.text.is_empty() {
                                             "链接"
@@ -306,9 +306,9 @@ impl TklessEngine {
                                 doc.images = Some(extracted_imgs.clone());
                                 if (options.format == OutputFormat::Markdown
                                     || options.format == OutputFormat::Text)
-                                    && !doc.content.contains("### 页面图片资产 (Images)")
+                                    && !doc.content.contains("## Images")
                                 {
-                                    doc.content.push_str("\n\n### 页面图片资产 (Images)\n\n");
+                                    doc.content.push_str("\n\n## Images\n\n");
                                     for img in extracted_imgs {
                                         let alt = if img.alt.is_empty() {
                                             "图片"
@@ -736,8 +736,9 @@ impl TklessEngine {
                 if !link_list.is_empty()
                     && (options.format == OutputFormat::Markdown
                         || options.format == OutputFormat::Text)
+                    && !content.contains("## Links")
                 {
-                    content.push_str("\n\n### 页面链接清单 (Links)\n\n");
+                    content.push_str("\n\n## Links\n\n");
                     for link in link_list {
                         let text = if link.text.is_empty() {
                             "链接"
@@ -759,8 +760,9 @@ impl TklessEngine {
                 if !image_list.is_empty()
                     && (options.format == OutputFormat::Markdown
                         || options.format == OutputFormat::Text)
+                    && !content.contains("## Images")
                 {
-                    content.push_str("\n\n### 页面图片资产 (Images)\n\n");
+                    content.push_str("\n\n## Images\n\n");
                     for image in image_list {
                         let alt = if image.alt.is_empty() {
                             "图片"

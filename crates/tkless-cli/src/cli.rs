@@ -856,6 +856,10 @@ pub struct DoctorArgs {
     /// HTTP/HTTPS 代理服务器地址 (例如 http://127.0.0.1:7890)
     #[arg(short = 'p', long = "proxy", value_name = "PROXY_URL")]
     pub proxy: Option<String>,
+
+    /// Write output payload to file instead of stdout
+    #[arg(short = 'o', long = "output", value_name = "FILE")]
+    pub output: Option<std::path::PathBuf>,
 }
 
 #[derive(clap::Args, Debug, Clone, Default)]
@@ -863,6 +867,10 @@ pub struct AdaptersArgs {
     /// Output presentation format [default: markdown]
     #[arg(short = 'f', long = "format", value_enum, default_value_t = CliFormat::Markdown)]
     pub format: CliFormat,
+
+    /// Write output payload to file instead of stdout
+    #[arg(short = 'o', long = "output", value_name = "FILE")]
+    pub output: Option<std::path::PathBuf>,
 }
 
 /// Command-line arguments for autonomous multi-hop deep research.
@@ -951,6 +959,10 @@ pub struct DiffArgs {
     /// Output presentation format [default: markdown]
     #[arg(short = 'f', long = "format", value_enum, default_value_t = CliFormat::Markdown)]
     pub format: CliFormat,
+
+    /// Write output payload to file instead of stdout
+    #[arg(short = 'o', long = "output", value_name = "FILE")]
+    pub output: Option<std::path::PathBuf>,
 }
 
 #[derive(clap::Args, Debug, Clone)]
@@ -976,6 +988,10 @@ pub struct TablesArgs {
     /// Optional 0-indexed specific table to extract
     #[arg(long = "index")]
     pub table_index: Option<usize>,
+
+    /// Write output payload to file instead of stdout
+    #[arg(short = 'o', long = "output", value_name = "FILE")]
+    pub output: Option<std::path::PathBuf>,
 }
 
 #[derive(clap::Args, Debug, Clone)]
