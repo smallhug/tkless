@@ -124,7 +124,7 @@ impl ExtractionSchema {
 
         if let Some(f_map) = explicit_fields_obj {
             for (k, v) in f_map {
-                let def = parse_field_def_from_value(v)?;
+                let def = parse_field_def_from_value(k, v)?;
                 fields.insert(k.clone(), def);
             }
         } else {
@@ -138,7 +138,7 @@ impl ExtractionSchema {
                 {
                     continue;
                 }
-                let def = parse_field_def_from_value(v)?;
+                let def = parse_field_def_from_value(k, v)?;
                 fields.insert(k.clone(), def);
             }
         }
@@ -157,15 +157,89 @@ impl ExtractionSchema {
     }
 }
 
-/// Parses a FieldDef from a JSON Value (string or object).
-fn parse_field_def_from_value(v: &Value) -> Result<FieldDef, TklessError> {
+/// Derives a best-effort heuristic CSS selector for a given field name when explicit selector is omitted.
+pub fn heuristic_selector_for_field(field_name: &str) -> String {
+    let lower = field_name.to_ascii_lowercase();
+    match lower.as_str() {
+        "title" | "headline" | "header" => {
+            "h1, h2, h3, [class*='title'], [class*='heading'], header a, title".to_string()
+        }
+        "url" | "link" | "href" => "a[href] @href".to_string(),
+        "author" | "byline" | "creator" | "user" => {
+            "[class*='author'], [rel='author'], [itemprop='author'], .byline, [class*='user']"
+                .to_string()
+        }
+        "date" | "time" | "published" | "published_time" | "datetime" => {
+            "time, [class*='date'], [class*='time'], [itemprop*='date']".to_string()
+        }
+        "description" | "summary" | "desc" | "abstract" => {
+            "meta[name='description'] @content, [class*='desc'], [class*='summary'], [class*='abstract'], p".to_string()
+        }
+        "price" | "amount" | "cost" => {
+            "[class*='price'], [class*='amount'], [class*='cost'], .money | number".to_string()
+        }
+        "image" | "img" | "cover" | "thumb" | "thumbnail" | "avatar" => {
+            "img[src] @src, [class*='cover'] img @src".to_string()
+        }
+        "content" | "body" | "article" => {
+            "article, main, .content, .post-content, .article-body, #content".to_string()
+        }
+        other => format!("[class*='{other}'], [id*='{other}'], [name='{other}']"),
+    }
+}
+
+/// Parses a FieldDef from a JSON Value (string or object), supporting type-only declarations and JSON Schema properties.
+fn parse_field_def_from_value(field_name: &str, v: &Value) -> Result<FieldDef, TklessError> {
     match v {
-        Value::String(s) => Ok(FieldDef::Simple(s.clone())),
-        Value::Object(_) => {
-            // Try deserializing directly to FieldDetail
-            serde_json::from_value::<FieldDetail>(v.clone())
-                .map(FieldDef::Detail)
-                .map_err(|e| TklessError::SchemaError(format!("无效的字段配置对象: {e}")))
+        Value::String(s) => {
+            let trimmed = s.trim();
+            let lower = trimmed.to_ascii_lowercase();
+            if lower == "string"
+                || lower == "number"
+                || lower == "float"
+                || lower == "int"
+                || lower == "integer"
+                || lower == "bool"
+                || lower == "boolean"
+                || lower == "json"
+            {
+                let heuristic_sel = heuristic_selector_for_field(field_name);
+                Ok(FieldDef::Detail(FieldDetail {
+                    selector: heuristic_sel,
+                    extract: "text".to_string(),
+                    attribute: None,
+                    regex: None,
+                    multiple: false,
+                    fields: None,
+                    default: None,
+                    field_type: Some(lower),
+                }))
+            } else {
+                Ok(FieldDef::Simple(s.clone()))
+            }
+        }
+        Value::Object(map) => {
+            if map.contains_key("selector") {
+                serde_json::from_value::<FieldDetail>(v.clone())
+                    .map(FieldDef::Detail)
+                    .map_err(|e| TklessError::SchemaError(format!("无效的字段配置对象: {e}")))
+            } else {
+                let field_type = map
+                    .get("type")
+                    .and_then(|t| t.as_str())
+                    .map(|s| s.to_ascii_lowercase());
+                let heuristic_sel = heuristic_selector_for_field(field_name);
+                Ok(FieldDef::Detail(FieldDetail {
+                    selector: heuristic_sel,
+                    extract: "text".to_string(),
+                    attribute: None,
+                    regex: None,
+                    multiple: field_type.as_deref() == Some("array"),
+                    fields: None,
+                    default: None,
+                    field_type,
+                }))
+            }
         }
         _ => Err(TklessError::SchemaError(format!(
             "字段定义必须是字符串选择器或配置对象，当前类型为: {:?}",

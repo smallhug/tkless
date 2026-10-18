@@ -1,5 +1,5 @@
 use crate::model::{ExtractedImage, ExtractedLink, ExtractedTable, PageMetadata};
-use scraper::{Html, Selector};
+use scraper::{ElementRef, Html, Selector};
 use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
 use tracing::debug;
@@ -292,6 +292,45 @@ pub fn extract_images(doc: &Html, base_url_str: Option<&str>) -> Vec<ExtractedIm
     results
 }
 
+/// Extracts cleaned text from a table cell (<td>/<th>), ignoring any embedded <style>, <script>, or <noscript> content.
+pub fn extract_clean_cell_text(cell: &ElementRef) -> String {
+    let mut parts = Vec::new();
+    for node in cell.descendants() {
+        if let Some(el) = node.value().as_element() {
+            let n = el.name();
+            if n == "style" || n == "script" || n == "noscript" {
+                continue;
+            }
+        }
+        let mut parent = node.parent();
+        let mut in_noise = false;
+        while let Some(p) = parent {
+            if let Some(el) = p.value().as_element() {
+                let n = el.name();
+                if n == "style" || n == "script" || n == "noscript" {
+                    in_noise = true;
+                    break;
+                }
+                if n == "td" || n == "th" {
+                    break;
+                }
+            }
+            parent = p.parent();
+        }
+        if in_noise {
+            continue;
+        }
+
+        if let Some(text_node) = node.value().as_text() {
+            let t = text_node.trim();
+            if !t.is_empty() {
+                parts.push(t);
+            }
+        }
+    }
+    parts.join(" ")
+}
+
 /// Extracts all <table> elements into structured 2D arrays and row dictionary records.
 pub fn extract_tables(doc: &Html) -> Vec<ExtractedTable> {
     let mut tables = Vec::new();
@@ -305,8 +344,7 @@ pub fn extract_tables(doc: &Html) -> Vec<ExtractedTable> {
             if let Some(thead_el) = table_el.select(&THEAD_SELECTOR).next() {
                 if let Some(first_tr) = thead_el.select(&TR_SELECTOR).next() {
                     for cell in first_tr.select(&TD_SELECTOR) {
-                        let text = cell.text().collect::<Vec<_>>().join(" ").trim().to_string();
-                        headers.push(text);
+                        headers.push(extract_clean_cell_text(&cell));
                     }
                 }
             }
@@ -335,7 +373,7 @@ pub fn extract_tables(doc: &Html) -> Vec<ExtractedTable> {
 
                 let row: Vec<String> = tr
                     .select(&TD_SELECTOR)
-                    .map(|cell| cell.text().collect::<Vec<_>>().join(" ").trim().to_string())
+                    .map(|cell| extract_clean_cell_text(&cell))
                     .collect();
                 if !row.is_empty() {
                     rows.push(row);
@@ -348,15 +386,13 @@ pub fn extract_tables(doc: &Html) -> Vec<ExtractedTable> {
                 if has_th || all_trs.len() > 1 {
                     headers = first_tr
                         .select(&TD_SELECTOR)
-                        .map(|cell| cell.text().collect::<Vec<_>>().join(" ").trim().to_string())
+                        .map(|cell| extract_clean_cell_text(&cell))
                         .collect();
 
                     for tr in all_trs.iter().skip(1) {
                         let row: Vec<String> = tr
                             .select(&TD_SELECTOR)
-                            .map(|cell| {
-                                cell.text().collect::<Vec<_>>().join(" ").trim().to_string()
-                            })
+                            .map(|cell| extract_clean_cell_text(&cell))
                             .collect();
                         if !row.is_empty() {
                             rows.push(row);
@@ -365,7 +401,7 @@ pub fn extract_tables(doc: &Html) -> Vec<ExtractedTable> {
                 } else {
                     let row: Vec<String> = first_tr
                         .select(&TD_SELECTOR)
-                        .map(|cell| cell.text().collect::<Vec<_>>().join(" ").trim().to_string())
+                        .map(|cell| extract_clean_cell_text(&cell))
                         .collect();
                     for i in 0..row.len() {
                         headers.push(format!("col_{}", i + 1));

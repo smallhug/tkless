@@ -709,19 +709,24 @@ pub struct CliArgs {
     pub output_file: Option<std::path::PathBuf>,
 
     /// Verbose diagnostic output on stderr (-v for debug, -vv for trace)
-    #[arg(short = 'v', long = "verbose", action = clap::ArgAction::Count, help_heading = "缓存与运行诊断 (Cache & Diagnostics)")]
+    #[arg(short = 'v', long = "verbose", action = clap::ArgAction::Count, global = true, help_heading = "缓存与运行诊断 (Cache & Diagnostics)")]
     pub verbose: u8,
 
     /// Silence all diagnostic logs and progress messages on stderr
     #[arg(
         short = 'q',
         long = "quiet",
+        global = true,
         help_heading = "缓存与运行诊断 (Cache & Diagnostics)"
     )]
     pub quiet: bool,
 
     /// 输出详细的 Token 经济性与管道耗时基准遥测报告 (显示 Token 节省比例与降噪率)
-    #[arg(long = "stats", help_heading = "缓存与运行诊断 (Cache & Diagnostics)")]
+    #[arg(
+        long = "stats",
+        global = true,
+        help_heading = "缓存与运行诊断 (Cache & Diagnostics)"
+    )]
     pub stats: bool,
 }
 

@@ -81,6 +81,7 @@ use extractor::{extract_images, extract_json_ld, extract_links, extract_metadata
 use fetcher::Fetcher;
 use markdown::MarkdownConverter;
 use scraper::Html;
+use std::collections::HashSet;
 use token::{count_tokens, truncate_to_tokens};
 use tracing::{debug, warn};
 use url::Url;
@@ -220,16 +221,42 @@ impl TklessEngine {
 
                         // Ensure extract_links is honored on adapter pages
                         if options.extract_links {
+                            let mut extracted = Vec::new();
                             let parsed_doc = Html::parse_document(&doc.content);
-                            let l = extract_links(&parsed_doc, Some(url));
-                            if !l.is_empty() {
-                                doc.links = Some(l.clone());
+                            for l in extract_links(&parsed_doc, Some(url)) {
+                                extracted.push(l);
+                            }
+                            // Also parse Markdown links: [text](url)
+                            let md_link_re =
+                                regex::Regex::new(r"\[([^\]]+)\]\(((?:https?://|/)[^\)]+)\)")
+                                    .unwrap();
+                            let mut seen_urls: HashSet<String> =
+                                extracted.iter().map(|l| l.url.clone()).collect();
+                            for cap in md_link_re.captures_iter(&doc.content) {
+                                if let (Some(text), Some(u)) = (cap.get(1), cap.get(2)) {
+                                    let resolved = if let Ok(base) = Url::parse(url) {
+                                        base.join(u.as_str())
+                                            .map(|j| j.to_string())
+                                            .unwrap_or_else(|_| u.as_str().to_string())
+                                    } else {
+                                        u.as_str().to_string()
+                                    };
+                                    if seen_urls.insert(resolved.clone()) {
+                                        extracted.push(ExtractedLink {
+                                            text: text.as_str().trim().to_string(),
+                                            url: resolved,
+                                        });
+                                    }
+                                }
+                            }
+                            if !extracted.is_empty() {
+                                doc.links = Some(extracted.clone());
                                 if (options.format == OutputFormat::Markdown
                                     || options.format == OutputFormat::Text)
                                     && !doc.content.contains("### 页面链接清单 (Links)")
                                 {
                                     doc.content.push_str("\n\n### 页面链接清单 (Links)\n\n");
-                                    for link in l {
+                                    for link in extracted {
                                         let text = if link.text.is_empty() {
                                             "链接"
                                         } else {
@@ -247,16 +274,42 @@ impl TklessEngine {
 
                         // Ensure extract_images is honored on adapter pages
                         if options.extract_images {
+                            let mut extracted_imgs = Vec::new();
                             let parsed_doc = Html::parse_document(&doc.content);
-                            let imgs = extract_images(&parsed_doc, Some(url));
-                            if !imgs.is_empty() {
-                                doc.images = Some(imgs.clone());
+                            for img in extract_images(&parsed_doc, Some(url)) {
+                                extracted_imgs.push(img);
+                            }
+                            // Also parse Markdown images: ![alt](src)
+                            let md_img_re =
+                                regex::Regex::new(r"!\[([^\]]*)\]\(((?:https?://|/)[^\)]+)\)")
+                                    .unwrap();
+                            let mut seen_srcs: HashSet<String> =
+                                extracted_imgs.iter().map(|i| i.src.clone()).collect();
+                            for cap in md_img_re.captures_iter(&doc.content) {
+                                if let (Some(alt), Some(src)) = (cap.get(1), cap.get(2)) {
+                                    let resolved = if let Ok(base) = Url::parse(url) {
+                                        base.join(src.as_str())
+                                            .map(|j| j.to_string())
+                                            .unwrap_or_else(|_| src.as_str().to_string())
+                                    } else {
+                                        src.as_str().to_string()
+                                    };
+                                    if seen_srcs.insert(resolved.clone()) {
+                                        extracted_imgs.push(ExtractedImage {
+                                            alt: alt.as_str().trim().to_string(),
+                                            src: resolved,
+                                        });
+                                    }
+                                }
+                            }
+                            if !extracted_imgs.is_empty() {
+                                doc.images = Some(extracted_imgs.clone());
                                 if (options.format == OutputFormat::Markdown
                                     || options.format == OutputFormat::Text)
                                     && !doc.content.contains("### 页面图片资产 (Images)")
                                 {
                                     doc.content.push_str("\n\n### 页面图片资产 (Images)\n\n");
-                                    for img in imgs {
+                                    for img in extracted_imgs {
                                         let alt = if img.alt.is_empty() {
                                             "图片"
                                         } else {
@@ -596,13 +649,26 @@ impl TklessEngine {
             None
         };
 
-        // 2b. Extract structured entities if schema is provided (errors are strictly propagated)
-        let entity = if let Some(ref schema_input) = options.schema {
-            let schema = schema::ExtractionSchema::parse(schema_input)?;
-            let val = schema::extract_entities(effective_html, &schema, base_url)?;
-            Some(val)
+        // 2b. Extract structured entities if schema is provided (with graceful fallback on selector mismatch)
+        let (entity, schema_warning) = if let Some(ref schema_input) = options.schema {
+            match schema::ExtractionSchema::parse(schema_input) {
+                Ok(schema) => match schema::extract_entities(effective_html, &schema, base_url) {
+                    Ok(val) => (Some(val), None),
+                    Err(err) => {
+                        warn!(
+                            error = %err,
+                            "Schema 实体提取未匹配到有效字段，自动回退至全文正文提取"
+                        );
+                        (None, Some(err.to_string()))
+                    }
+                },
+                Err(err) => {
+                    warn!(error = %err, "解析 Schema 定义失败，自动回退至全文正文提取");
+                    (None, Some(err.to_string()))
+                }
+            }
         } else {
-            None
+            (None, None)
         };
 
         // 3. Clean and isolate target content (targeted CSS selector or heuristic cleaning)
@@ -639,7 +705,7 @@ impl TklessEngine {
                 _ => serde_json::to_string(ent).unwrap_or_default(),
             }
         } else {
-            match options.format {
+            let mut formatted = match options.format {
                 OutputFormat::Markdown | OutputFormat::Json => {
                     let md = self.markdown_converter.convert(
                         &cleaned.html,
@@ -654,7 +720,14 @@ impl TklessEngine {
                 }
                 OutputFormat::Text => html_to_plain_text(&cleaned.html),
                 OutputFormat::Raw | OutputFormat::Html => cleaned.html,
+            };
+
+            if let Some(ref warn_msg) = schema_warning {
+                if options.format == OutputFormat::Markdown {
+                    formatted.push_str(&format!("\n\n> ⚠️ **Schema 提取提示**: {}\n", warn_msg));
+                }
             }
+            formatted
         };
 
         // Append structured link and image assets to Markdown/Text output if requested
@@ -704,9 +777,9 @@ impl TklessEngine {
             }
         }
 
-        // Append structured entity JSON to Markdown if extracted
+        // Append structured entity JSON to Markdown if extracted (avoid duplicate if already present)
         if let Some(ref ent) = entity {
-            if options.format == OutputFormat::Markdown && !content.starts_with("# 结构化实体提取")
+            if options.format == OutputFormat::Markdown && !content.contains("结构化实体提取")
             {
                 content.push_str("\n\n### 结构化实体提取 (Extracted Entity)\n\n```json\n");
                 content.push_str(&serde_json::to_string_pretty(ent).unwrap_or_default());
