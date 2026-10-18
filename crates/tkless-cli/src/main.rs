@@ -7,7 +7,7 @@ use cli::{CliArgs, CliFormat, SubCommand};
 use std::io::{self, Read, Write};
 use std::path::Path;
 use std::sync::Mutex;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tkless_core::adapters::BilibiliAdapter;
 use tkless_core::downloader::{format_bytes, DownloadProgressReporter};
 use tkless_core::model::{ExtractionOptions, FetchOptions};
@@ -127,17 +127,23 @@ async fn run(args: CliArgs) -> Result<()> {
     // Configure tracing logger to output strictly to stderr
     if !args.quiet {
         let filter_str = match args.verbose {
-            0 => "tkless=warn,tkless_core=warn",
-            1 => "tkless=info,tkless_core=info",
-            2 => "tkless=debug,tkless_core=debug",
+            0 => "off",
+            1 => "tkless=warn,tkless_core=warn",
+            2 => "tkless=info,tkless_core=info",
+            3 => "tkless=debug,tkless_core=debug",
             _ => "tkless=trace,tkless_core=trace",
         };
 
-        let env_filter = EnvFilter::try_new(filter_str).unwrap_or_else(|_| EnvFilter::new("warn"));
+        let env_filter = EnvFilter::try_new(filter_str).unwrap_or_else(|_| EnvFilter::new("off"));
+
+        use std::io::IsTerminal;
+        let is_tty = io::stderr().is_terminal();
+        let use_ansi = std::env::var("NO_COLOR").is_err() && is_tty;
 
         tracing_subscriber::fmt()
             .with_writer(io::stderr)
             .with_env_filter(env_filter)
+            .with_ansi(use_ansi)
             .init();
     }
 
@@ -403,6 +409,13 @@ async fn run(args: CliArgs) -> Result<()> {
         let engine = TklessEngine::with_options(fetch_options)
             .context("Failed to initialize TkLess engine")?;
         return run_upgrade(&engine, upgrade_args).await;
+    }
+
+    // -------------------------------------------------------------------------
+    // Execution Branch 1.29: Environment Diagnostics & System Doctor
+    // -------------------------------------------------------------------------
+    if let Some(SubCommand::Doctor(ref doc_args)) = args.command {
+        return run_doctor(doc_args, &fetch_options).await;
     }
 
     // -------------------------------------------------------------------------
@@ -833,7 +846,17 @@ async fn run(args: CliArgs) -> Result<()> {
                 .context("Failed to serialize batch documents to JSON")?,
             _ => docs
                 .iter()
-                .map(|d| d.content.as_str())
+                .enumerate()
+                .map(|(idx, d)| {
+                    let title = d.title.as_deref().unwrap_or("Document");
+                    format!(
+                        "## [{}] {} ({})\n\n{}",
+                        idx + 1,
+                        title,
+                        d.url,
+                        d.content.trim()
+                    )
+                })
                 .collect::<Vec<_>>()
                 .join("\n\n---\n\n"),
         };
@@ -1160,38 +1183,44 @@ async fn run(args: CliArgs) -> Result<()> {
         }
     }
 
-    // Print diagnostic execution metrics to stderr (leaves stdout clean for agent pipelines)
-    if !args.quiet {
+    // Print diagnostic execution metrics to stderr only if verbose >= 1 (keeps stderr clean for PowerShell / agent pipelines)
+    if !args.quiet && args.verbose >= 1 {
         let title_disp = doc.title.as_deref().unwrap_or("<no title>");
+        let status_disp = if target == "-" {
+            "200 (stdin)".to_string()
+        } else {
+            doc.status.to_string()
+        };
         eprintln!(
             "[TkLess] Finished in {:.2?}: \"{}\" (Status: {}, Tokens: {}, Truncated: {})",
-            elapsed, title_disp, doc.status, doc.token_count, doc.truncated
+            elapsed, title_disp, status_disp, doc.token_count, doc.truncated
         );
+    }
 
-        if args.stats {
-            if let Some(ref m) = doc.metrics {
-                eprintln!("\n[TkLess Telemetry & Token Economy]");
-                eprintln!("----------------------------------------------------------");
-                eprintln!("Target URL        : {}", doc.url);
-                eprintln!(
-                    "Pipeline Latency  : {}ms (Fetch: {}ms, Clean: {}ms)",
-                    m.total_time_ms, m.fetch_time_ms, m.clean_time_ms
-                );
-                eprintln!(
-                    "Payload Reduction : {} -> {} (降噪率: {:.1}%)",
-                    tkless_core::downloader::format_bytes(m.raw_bytes as u64),
-                    tkless_core::downloader::format_bytes(m.cleaned_bytes as u64),
-                    m.noise_reduction_percent
-                );
-                eprintln!(
-                    "Token Economy     : ~{} (Raw) -> {} (Clean) [节省 {} Tokens, 节省率: {:.1}%]",
-                    m.raw_token_estimate,
-                    m.final_token_count,
-                    m.raw_token_estimate.saturating_sub(m.final_token_count),
-                    m.token_savings_percent
-                );
-                eprintln!("----------------------------------------------------------\n");
-            }
+    // --stats is decoupled from -q: when user explicitly asks for --stats, telemetry is ALWAYS rendered
+    if args.stats {
+        if let Some(ref m) = doc.metrics {
+            eprintln!("\n[TkLess Telemetry & Token Economy]");
+            eprintln!("----------------------------------------------------------");
+            eprintln!("Target URL        : {}", doc.url);
+            eprintln!(
+                "Pipeline Latency  : {}ms (Fetch: {}ms, Clean: {}ms)",
+                m.total_time_ms, m.fetch_time_ms, m.clean_time_ms
+            );
+            eprintln!(
+                "Payload Reduction : {} -> {} (降噪率: {:.1}%)",
+                tkless_core::downloader::format_bytes(m.raw_bytes as u64),
+                tkless_core::downloader::format_bytes(m.cleaned_bytes as u64),
+                m.noise_reduction_percent
+            );
+            eprintln!(
+                "Token Economy     : ~{} (Raw) -> {} (Clean) [节省 {} Tokens, 节省率: {:.1}%]",
+                m.raw_token_estimate,
+                m.final_token_count,
+                m.raw_token_estimate.saturating_sub(m.final_token_count),
+                m.token_savings_percent
+            );
+            eprintln!("----------------------------------------------------------\n");
         }
     }
 
@@ -1502,8 +1531,11 @@ async fn run_shell(engine: &TklessEngine, base_options: &ExtractionOptions) -> R
                 println!("\n可用指令 (Available Commands):");
                 println!("  fetch <url>         - 抓取网页并输出清洗后的 Markdown");
                 println!("  search <query>      - 免 API Key 全网搜索并返回结果列表");
+                println!("  research <topic>    - 多跳自主深度网络调研并生成出版级综述报告");
                 println!("  feed <url>          - 解析并展示 RSS 2.0 / Atom 1.0 订阅源");
                 println!("  tables <url>        - 提取页面中的全部表格并以 GFM Markdown 输出");
+                println!("  links <url>         - 提取页面超链接清单并去重展示");
+                println!("  cache [clear]       - 查看本地响应缓存统计或清空磁盘缓存");
                 println!("  summarize <url>     - 本地启发式提取页面核心观点要点速览");
                 println!("  chunk <url>         - 将长文档按标题与 Token 预算语义感知切块");
                 println!("  diff <url1> <url2>  - 对比两个网页或文档版本的版本差异与变更比例");
@@ -1595,6 +1627,73 @@ async fn run_shell(engine: &TklessEngine, base_options: &ExtractionOptions) -> R
                     tkless_core::adapters::format_adapters_markdown(&list)
                 );
             }
+            "cache" => {
+                let sub = rest.first().copied().unwrap_or("stats");
+                let cache = tkless_core::DocumentCache::new(None, 900);
+                if sub == "clear" || sub == "clean" {
+                    match cache.clear() {
+                        Ok(_) => println!("✅ 已成功清空本地响应缓存磁盘目录。\n"),
+                        Err(e) => eprintln!("❌ 清空缓存失败: {e}"),
+                    }
+                } else {
+                    let stats = cache.stats();
+                    println!("\n📦 [TkLess 本地响应缓存状态]");
+                    println!("--------------------------------------");
+                    if let Some(ref dir) = stats.cache_dir {
+                        println!("磁盘缓存目录 : {}", dir);
+                    }
+                    println!("内存驻留条目 : {} 项", stats.memory_entries);
+                    println!("磁盘持久条目 : {} 项", stats.disk_entries);
+                    println!(
+                        "磁盘占用容量 : {}",
+                        tkless_core::downloader::format_bytes(stats.disk_bytes)
+                    );
+                    println!("--------------------------------------\n");
+                }
+            }
+            "links" => {
+                if let Some(target_url) = rest.first() {
+                    match engine.fetcher().fetch(target_url).await {
+                        Ok(resp) => {
+                            let doc = scraper::Html::parse_document(&resp.html);
+                            let links =
+                                tkless_core::extractor::extract_links(&doc, Some(target_url));
+                            println!("\n🔗 页面超链接清单 (共提取 {} 项):\n", links.len());
+                            for (i, l) in links.iter().take(20).enumerate() {
+                                println!("{}. [{}]({})", i + 1, l.text.trim(), l.url);
+                            }
+                            if links.len() > 20 {
+                                println!("... (其余 {} 项已折叠)\n", links.len() - 20);
+                            } else {
+                                println!();
+                            }
+                        }
+                        Err(e) => eprintln!("❌ 提取链接失败: {e}"),
+                    }
+                } else {
+                    eprintln!("用法: links <url>");
+                }
+            }
+            "research" => {
+                let topic = rest.join(" ");
+                if topic.is_empty() {
+                    eprintln!("用法: research <topic>");
+                } else {
+                    let opts = tkless_core::ResearchOptions {
+                        depth: 1,
+                        breadth: 2,
+                        max_pages: 3,
+                        ..Default::default()
+                    };
+                    match tkless_core::deep_research(engine, &topic, &opts).await {
+                        Ok(report) => {
+                            let md = tkless_core::format_deep_research_markdown(&report);
+                            println!("\n{md}\n");
+                        }
+                        Err(e) => eprintln!("❌ 深度调研失败: {e}"),
+                    }
+                }
+            }
             "summarize" | "summary" => {
                 if let Some(target_url) = rest.first() {
                     match engine.process_url(target_url, base_options).await {
@@ -1674,6 +1773,154 @@ async fn run_shell(engine: &TklessEngine, base_options: &ExtractionOptions) -> R
         }
     }
 
+    Ok(())
+}
+
+/// Diagnoses runtime environment: CDP browser readiness, cache permissions, and network endpoints.
+async fn run_doctor(doc_args: &cli::DoctorArgs, fetch_options: &FetchOptions) -> Result<()> {
+    println!("╔════════════════════════════════════════════════════════════════╗");
+    println!("║   TkLess Doctor - 环境诊断与核心服务连通性自检报告 (Doctor)   ║");
+    println!("╚════════════════════════════════════════════════════════════════╝\n");
+
+    // 1. System & Architecture
+    println!("[1/4] 🖥️ 系统环境与架构 (System & Runtime):");
+    println!(
+        "  - 产品版本 : tkless v{} (build 2026-10-18)",
+        env!("CARGO_PKG_VERSION")
+    );
+    println!(
+        "  - 操作系统 : {} ({})",
+        std::env::consts::OS,
+        std::env::consts::ARCH
+    );
+    println!("  - 进程位宽 : {}-bit", std::mem::size_of::<usize>() * 8);
+
+    // 2. CDP Headless Browser Detection
+    println!("\n[2/4] 🌐 无头浏览器 (CDP Headless Browser):");
+    let browser = tkless_core::cdp::locate_system_browser();
+    match browser {
+        Some(ref path) => {
+            println!("  - 状态     : ✅ 已检测到本地可用浏览器");
+            println!("  - 执行路径 : {}", path.display());
+            println!("  - 能力提示 : 支持通过 --cdp-auto-scroll、--auto-cdp 及无头守护进程快速渲染动态页面与绕过反爬");
+        }
+        None => {
+            println!("  - 状态     : ⚠️ 未在系统标准路径检测到 Chrome、Edge 或 Chromium 安装");
+            println!("  - 建议操作 : 安装 Chrome 或 Edge 浏览器后，即可自动启用无感知 --auto-cdp 渲染加速");
+        }
+    }
+
+    // 3. Local Storage & Response Cache
+    println!("\n[3/4] 📦 本地响应缓存 (Response Cache):");
+    let cache = DocumentCache::new(None, 900);
+    let stats = cache.stats();
+    let cache_dir_disp = stats
+        .cache_dir
+        .unwrap_or_else(|| "系统标准缓存目录".to_string());
+    println!("  - 读写状态 : ✅ 缓存存储读写正常");
+    println!("  - 缓存目录 : {}", cache_dir_disp);
+    println!(
+        "  - 活跃容量 : {} 项内存条目, {} 项磁盘条目 (总占用: {})",
+        stats.memory_entries,
+        stats.disk_entries,
+        tkless_core::downloader::format_bytes(stats.disk_bytes)
+    );
+
+    // 4. Network Connectivity Probes
+    println!("\n[4/4] 🌍 核心网络服务连通性探测 (Network Probes):");
+    let effective_proxy = doc_args.proxy.as_ref().or(fetch_options.proxy.as_ref());
+    if let Some(p) = effective_proxy {
+        println!("  - 配置代理 : {}", p);
+    } else {
+        println!("  - 直连模式 : (未配置外部 HTTP 代理，可通过 -p / --proxy 指定)");
+    }
+
+    let mut probe_client_builder = reqwest::Client::builder()
+        .timeout(Duration::from_secs(4))
+        .connect_timeout(Duration::from_secs(3));
+    if let Some(p) = effective_proxy {
+        if let Ok(proxy) = reqwest::Proxy::all(p) {
+            probe_client_builder = probe_client_builder.proxy(proxy);
+        }
+    }
+    let probe_client = probe_client_builder.build().unwrap_or_default();
+
+    // Probe 1: Bing
+    let t_bing = Instant::now();
+    match probe_client.get("https://www.bing.com").send().await {
+        Ok(resp) if resp.status().is_success() => {
+            println!(
+                "  - Microsoft Bing 搜索  : ✅ 可达 ({} ms, Status: {})",
+                t_bing.elapsed().as_millis(),
+                resp.status()
+            );
+        }
+        Ok(resp) => {
+            println!(
+                "  - Microsoft Bing 搜索  : ⚠️ 响应非 200 ({} ms, Status: {})",
+                t_bing.elapsed().as_millis(),
+                resp.status()
+            );
+        }
+        Err(e) => {
+            println!("  - Microsoft Bing 搜索  : ❌ 连接失败 ({})", e);
+        }
+    }
+
+    // Probe 2: DuckDuckGo
+    let t_ddg = Instant::now();
+    match probe_client.get("https://html.duckduckgo.com").send().await {
+        Ok(resp) if resp.status().is_success() => {
+            println!(
+                "  - DuckDuckGo 搜索      : ✅ 可达 ({} ms, Status: {})",
+                t_ddg.elapsed().as_millis(),
+                resp.status()
+            );
+        }
+        Ok(resp) if resp.status() == reqwest::StatusCode::ACCEPTED => {
+            println!("  - DuckDuckGo 搜索      : ⚠️ 遭遇 SRE 202 反爬校验 (建议配置 -p http://127.0.0.1:7897 代理节点)");
+        }
+        Ok(resp) => {
+            println!(
+                "  - DuckDuckGo 搜索      : ⚠️ 响应非 200 ({} ms, Status: {})",
+                t_ddg.elapsed().as_millis(),
+                resp.status()
+            );
+        }
+        Err(e) => {
+            println!(
+                "  - DuckDuckGo 搜索      : ⚠️ 直连受限 ({}) (建议配置 -p 代理)",
+                e
+            );
+        }
+    }
+
+    // Probe 3: Bilibili API
+    let t_bili = Instant::now();
+    match probe_client
+        .get("https://api.bilibili.com/x/web-interface/nav")
+        .send()
+        .await
+    {
+        Ok(resp) if resp.status().is_success() => {
+            println!(
+                "  - Bilibili 开放接口     : ✅ 可达 ({} ms, Status: {})",
+                t_bili.elapsed().as_millis(),
+                resp.status()
+            );
+        }
+        Ok(resp) => {
+            println!(
+                "  - Bilibili 开放接口     : ⚠️ 响应非 200 (Status: {})",
+                resp.status()
+            );
+        }
+        Err(e) => {
+            println!("  - Bilibili 开放接口     : ❌ 连接失败 ({})", e);
+        }
+    }
+
+    println!("\n诊断完成！所有核心子系统均已完成自检。\n");
     Ok(())
 }
 

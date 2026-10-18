@@ -64,21 +64,113 @@ pub struct ExtractionSchema {
 }
 
 impl ExtractionSchema {
-    /// Parses a schema from either a JSON string or a file path.
+    /// Parses a schema from either a JSON string or a file path, supporting multiple dialects:
+    /// 1. Scaffold / Standard: `{"name": ..., "items_selector": "...", "fields": {...}}`
+    /// 2. Properties alias: `{"items_selector": "...", "properties": {...}}`
+    /// 3. Flat object mapping: `{"title": "h1", "price": ".price | number"}`
+    /// 4. Flat mapping with container: `{"items_selector": "tr.athing", "title": "span.titleline a", "url": "a@href"}`
+    /// 5. JSON-Schema style: `{"type": "object", "properties": {...}}` or `{"type": "array", "items": {"properties": {...}}}`
     pub fn parse(input: &str) -> Result<Self, TklessError> {
         let trimmed = input.trim();
-        // If it starts with '{', parse directly as inline JSON
-        if trimmed.starts_with('{') {
+        let value: Value = if trimmed.starts_with('{') || trimmed.starts_with('[') {
             serde_json::from_str(trimmed)
-                .map_err(|e| TklessError::SchemaError(format!("解析 JSON 提取 Schema 失败: {e}")))
+                .map_err(|e| TklessError::SchemaError(format!("解析 JSON 提取 Schema 失败: {e}")))?
         } else {
-            // Otherwise treat as a file path
             let content = std::fs::read_to_string(trimmed).map_err(|e| {
                 TklessError::SchemaError(format!("读取 Schema 文件 '{trimmed}' 失败: {e}"))
             })?;
-            serde_json::from_str(&content)
-                .map_err(|e| TklessError::SchemaError(format!("解析 Schema 文件内容失败: {e}")))
+            serde_json::from_str(content.trim())
+                .map_err(|e| TklessError::SchemaError(format!("解析 Schema 文件内容失败: {e}")))?
+        };
+
+        Self::from_json_value(value)
+    }
+
+    /// Converts an arbitrary JSON Value representation into a normalized `ExtractionSchema`.
+    pub fn from_json_value(value: Value) -> Result<Self, TklessError> {
+        let obj = value.as_object().ok_or_else(|| {
+            TklessError::SchemaError("Schema 根节点必须是一个 JSON 对象 (Object)".to_string())
+        })?;
+
+        let name = obj
+            .get("name")
+            .or_else(|| obj.get("title"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+
+        let items_selector = obj
+            .get("items_selector")
+            .or_else(|| obj.get("item_selector"))
+            .or_else(|| obj.get("container"))
+            .or_else(|| {
+                // If it's JSON Schema with type == array
+                obj.get("items")
+                    .and_then(|i| i.get("selector").or_else(|| i.get("items_selector")))
+            })
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+
+        let mut fields = HashMap::new();
+
+        // 1. Check for explicit "fields" or "properties" container
+        let explicit_fields_obj = obj
+            .get("fields")
+            .or_else(|| obj.get("properties"))
+            .or_else(|| {
+                obj.get("items")
+                    .and_then(|i| i.get("properties").or_else(|| i.get("fields")))
+            })
+            .and_then(|v| v.as_object());
+
+        if let Some(f_map) = explicit_fields_obj {
+            for (k, v) in f_map {
+                let def = parse_field_def_from_value(v)?;
+                fields.insert(k.clone(), def);
+            }
+        } else {
+            // 2. Flat dialect: keys that aren't container selectors or schema meta-keywords are treated as field definitions
+            for (k, v) in obj {
+                let k_lower = k.to_ascii_lowercase();
+                if k_lower == "items_selector"
+                    || k_lower == "item_selector"
+                    || k_lower == "container"
+                    || k_lower == "$schema"
+                {
+                    continue;
+                }
+                let def = parse_field_def_from_value(v)?;
+                fields.insert(k.clone(), def);
+            }
         }
+
+        if fields.is_empty() {
+            return Err(TklessError::SchemaError(
+                "Schema 中未定义任何有效字段规则 (fields/properties 为空)。请指定至少一个字段映射规则，例如 `{\"title\": \"h1\", \"url\": \"a@href\"}`。".to_string(),
+            ));
+        }
+
+        Ok(ExtractionSchema {
+            name,
+            fields,
+            items_selector,
+        })
+    }
+}
+
+/// Parses a FieldDef from a JSON Value (string or object).
+fn parse_field_def_from_value(v: &Value) -> Result<FieldDef, TklessError> {
+    match v {
+        Value::String(s) => Ok(FieldDef::Simple(s.clone())),
+        Value::Object(_) => {
+            // Try deserializing directly to FieldDetail
+            serde_json::from_value::<FieldDetail>(v.clone())
+                .map(FieldDef::Detail)
+                .map_err(|e| TklessError::SchemaError(format!("无效的字段配置对象: {e}")))
+        }
+        _ => Err(TklessError::SchemaError(format!(
+            "字段定义必须是字符串选择器或配置对象，当前类型为: {:?}",
+            v
+        ))),
     }
 }
 
@@ -103,12 +195,28 @@ pub fn extract_entities(
                 extract_fields_from_element(&element, &schema.fields, parsed_base.as_ref())?;
             items.push(item_obj);
         }
+
+        if items.is_empty() {
+            return Err(TklessError::SchemaError(format!(
+                "未匹配到任何列表条目 (items_selector: '{items_sel}' 未在页面中命中任何 DOM 元素)。请运行 `tkless <URL> --scaffold` 重新探测页面骨架。"
+            )));
+        }
+
         return Ok(Value::Array(items));
     }
 
     // 2. Object root mode
     let root_element = doc.root_element();
-    extract_fields_from_element(&root_element, &schema.fields, parsed_base.as_ref())
+    let res = extract_fields_from_element(&root_element, &schema.fields, parsed_base.as_ref())?;
+    if let Value::Object(ref map) = res {
+        let all_null = map.values().all(|v| v.is_null());
+        if all_null && !map.is_empty() {
+            return Err(TklessError::SchemaError(
+                "Schema 中所有字段的选择器均未在页面中命中内容。请检查 CSS 选择器是否正确，或运行 `tkless <URL> --scaffold` 自动生成建议 Schema。".to_string(),
+            ));
+        }
+    }
+    Ok(res)
 }
 
 /// Extracts fields from a DOM element container according to field definitions.
@@ -223,8 +331,16 @@ fn extract_single_field(
     multiple: bool,
     base_url: Option<&Url>,
 ) -> Result<Value, TklessError> {
-    if detail.selector.is_empty() {
-        return Ok(detail.default.clone().unwrap_or(Value::Null));
+    if detail.selector.is_empty() || detail.selector == "." || detail.selector == "self" {
+        if let Some(val) = extract_leaf_value(container, detail, base_url) {
+            if val.trim().is_empty() && detail.default.is_some() {
+                return Ok(detail.default.clone().unwrap());
+            } else {
+                return Ok(cast_value_type(val, detail.field_type.as_deref()));
+            }
+        } else {
+            return Ok(detail.default.clone().unwrap_or(Value::Null));
+        }
     }
 
     let selector = Selector::parse(&detail.selector).map_err(|e| {
@@ -406,26 +522,29 @@ pub fn scaffold_dom_skeleton(html: &str) -> ScaffoldReport {
         }
     }
 
-    // Score candidates based on count and child diversity
+    // Score candidates based on count and descendant diversity
+    let a_sel = Selector::parse("a").unwrap();
+    let heading_sel = Selector::parse("h1, h2, h3, h4, h5, h6").unwrap();
+    let img_sel = Selector::parse("img").unwrap();
+    let p_sel = Selector::parse("p").unwrap();
+
     for (sel_str, count) in &candidate_counts {
         if *count >= 2 && *count <= 500 {
             if let Ok(sel) = Selector::parse(sel_str) {
                 let mut score = *count as i32;
-                if let Some(first) = doc.select(&sel).next() {
-                    // Check meaningful children
-                    for child in first.children() {
-                        if let Some(child_elem) = ElementRef::wrap(child) {
-                            let name = child_elem.value().name();
-                            if name.starts_with('h') {
-                                score += 30;
-                            } else if name == "a" {
-                                score += 20;
-                            } else if name == "img" {
-                                score += 15;
-                            } else if name == "p" {
-                                score += 10;
-                            }
-                        }
+                // Examine up to 3 elements to measure structural richness
+                for elem in doc.select(&sel).take(3) {
+                    if elem.select(&heading_sel).next().is_some() {
+                        score += 35;
+                    }
+                    if elem.select(&a_sel).next().is_some() {
+                        score += 25;
+                    }
+                    if elem.select(&img_sel).next().is_some() {
+                        score += 15;
+                    }
+                    if elem.select(&p_sel).next().is_some() {
+                        score += 10;
                     }
                 }
                 candidate_scores.insert(sel_str.clone(), score);
@@ -448,77 +567,84 @@ pub fn scaffold_dom_skeleton(html: &str) -> ScaffoldReport {
             items_count = doc.select(&sel).count();
             suggested_items_selector = Some(repeating_sel.clone());
 
-            // Inspect the first matching item to discover internal fields
-            if let Some(item_elem) = doc.select(&sel).next() {
-                // Discover title
-                if let Some(title_sel) = find_child_matching(
-                    &item_elem,
-                    &[
-                        "h1",
-                        "h2",
-                        "h3",
-                        "h4",
-                        "[class*='title']",
-                        "[class*='name']",
-                        "a",
-                    ],
-                ) {
-                    suggested_fields.insert("title".to_string(), FieldDef::Simple(title_sel));
+            // Inspect the first up to 5 matching items to discover internal fields
+            for item_elem in doc.select(&sel).take(5) {
+                if !suggested_fields.contains_key("title") {
+                    if let Some(title_sel) = find_child_matching(
+                        &item_elem,
+                        &[
+                            "h1",
+                            "h2",
+                            "h3",
+                            "h4",
+                            "[class*='title']",
+                            "[class*='name']",
+                            "a",
+                        ],
+                    ) {
+                        suggested_fields.insert("title".to_string(), FieldDef::Simple(title_sel));
+                    }
                 }
-                // Discover link
-                if let Some(link_sel) = find_child_matching(
-                    &item_elem,
-                    &["a[href]", "[class*='link']", "[class*='url']"],
-                ) {
-                    suggested_fields.insert(
-                        "url".to_string(),
-                        FieldDef::Simple(format!("{link_sel} @href")),
-                    );
+                if !suggested_fields.contains_key("url") {
+                    if let Some(link_sel) = find_child_matching(
+                        &item_elem,
+                        &["a[href]", "[class*='link']", "[class*='url']"],
+                    ) {
+                        suggested_fields.insert(
+                            "url".to_string(),
+                            FieldDef::Simple(format!("{link_sel} @href")),
+                        );
+                    }
                 }
-                // Discover price
-                if let Some(price_sel) = find_child_matching(
-                    &item_elem,
-                    &[
-                        "[class*='price']",
-                        "[class*='amount']",
-                        "[class*='cost']",
-                        ".money",
-                    ],
-                ) {
-                    suggested_fields.insert("price".to_string(), FieldDef::Simple(price_sel));
+                if !suggested_fields.contains_key("price") {
+                    if let Some(price_sel) = find_child_matching(
+                        &item_elem,
+                        &[
+                            "[class*='price']",
+                            "[class*='amount']",
+                            "[class*='cost']",
+                            ".money",
+                        ],
+                    ) {
+                        suggested_fields.insert("price".to_string(), FieldDef::Simple(price_sel));
+                    }
                 }
-                // Discover image
-                if let Some(img_sel) = find_child_matching(
-                    &item_elem,
-                    &[
-                        "img[src]",
-                        "img[data-src]",
-                        "[class*='cover'] img",
-                        "[class*='thumb'] img",
-                    ],
-                ) {
-                    suggested_fields.insert(
-                        "image".to_string(),
-                        FieldDef::Simple(format!("{img_sel} @src")),
-                    );
+                if !suggested_fields.contains_key("image") {
+                    if let Some(img_sel) = find_child_matching(
+                        &item_elem,
+                        &[
+                            "img[src]",
+                            "img[data-src]",
+                            "[class*='cover'] img",
+                            "[class*='thumb'] img",
+                        ],
+                    ) {
+                        suggested_fields.insert(
+                            "image".to_string(),
+                            FieldDef::Simple(format!("{img_sel} @src")),
+                        );
+                    }
                 }
-                // Discover date
-                if let Some(date_sel) =
-                    find_child_matching(&item_elem, &["time", "[class*='date']", "[class*='time']"])
-                {
-                    suggested_fields.insert("date".to_string(), FieldDef::Simple(date_sel));
+                if !suggested_fields.contains_key("date") {
+                    if let Some(date_sel) = find_child_matching(
+                        &item_elem,
+                        &["time", "[class*='date']", "[class*='time']"],
+                    ) {
+                        suggested_fields.insert("date".to_string(), FieldDef::Simple(date_sel));
+                    }
                 }
-                // Discover description
-                if let Some(desc_sel) = find_child_matching(
-                    &item_elem,
-                    &[
-                        "p",
-                        "[class*='desc']",
-                        "[class*='summary']",
-                        "[class*='abstract']",
-                    ],
-                ) {
-                    suggested_fields.insert("summary".to_string(), FieldDef::Simple(desc_sel));
+                if !suggested_fields.contains_key("summary") {
+                    if let Some(desc_sel) = find_child_matching(
+                        &item_elem,
+                        &[
+                            "p",
+                            "[class*='desc']",
+                            "[class*='summary']",
+                            "[class*='abstract']",
+                        ],
+                    ) {
+                        suggested_fields.insert("summary".to_string(), FieldDef::Simple(desc_sel));
+                    }
                 }
             }
         }
@@ -843,5 +969,115 @@ mod tests {
         assert_eq!(entity["role"], "Guest");
         assert_eq!(entity["missing_score"], 100);
         assert_eq!(entity["is_verified"], false);
+    }
+
+    #[test]
+    fn test_schema_flat_dialect_with_title_and_author() {
+        let html = r#"
+        <article>
+            <h1 class="headline">Rust Concurrency Guide</h1>
+            <span class="author">Ferris</span>
+            <span class="views">9500</span>
+        </article>
+        "#;
+
+        // Flat dialect: no "fields" wrapper, "title" is a field to extract!
+        let schema_json = r#"
+        {
+            "title": "h1.headline",
+            "author": ".author",
+            "views": ".views | int"
+        }
+        "#;
+
+        let schema = ExtractionSchema::parse(schema_json).unwrap();
+        let entity = extract_entities(html, &schema, None).unwrap();
+
+        assert_eq!(entity["title"], "Rust Concurrency Guide");
+        assert_eq!(entity["author"], "Ferris");
+        assert_eq!(entity["views"], 9500);
+    }
+
+    #[test]
+    fn test_schema_flat_dialect_with_items_selector() {
+        let html = r#"
+        <div class="stories">
+            <div class="story">
+                <a class="storylink" href="https://example.com/item1">Story One</a>
+            </div>
+            <div class="story">
+                <a class="storylink" href="https://example.com/item2">Story Two</a>
+            </div>
+        </div>
+        "#;
+
+        // Flat dialect with items_selector at root
+        let schema_json = r#"
+        {
+            "items_selector": ".story",
+            "title": "a.storylink",
+            "url": "a.storylink @href"
+        }
+        "#;
+
+        let schema = ExtractionSchema::parse(schema_json).unwrap();
+        let entity = extract_entities(html, &schema, None).unwrap();
+        let list = entity.as_array().unwrap();
+        assert_eq!(list.len(), 2);
+        assert_eq!(list[0]["title"], "Story One");
+        assert_eq!(list[0]["url"], "https://example.com/item1");
+        assert_eq!(list[1]["title"], "Story Two");
+        assert_eq!(list[1]["url"], "https://example.com/item2");
+    }
+
+    #[test]
+    fn test_schema_container_self_attribute_extraction() {
+        let html = r#"
+        <div class="links">
+            <a class="item" href="/item/1">Item 1</a>
+            <a class="item" href="/item/2">Item 2</a>
+        </div>
+        "#;
+
+        let schema_json = r#"
+        {
+            "items_selector": "a.item",
+            "name": ".",
+            "url": "@href"
+        }
+        "#;
+
+        let schema = ExtractionSchema::parse(schema_json).unwrap();
+        let entity = extract_entities(html, &schema, Some("https://example.com")).unwrap();
+        let list = entity.as_array().unwrap();
+        assert_eq!(list.len(), 2);
+        assert_eq!(list[0]["name"], "Item 1");
+        assert_eq!(list[0]["url"], "https://example.com/item/1");
+    }
+
+    #[test]
+    fn test_schema_properties_dialect() {
+        let html = r#"<div><h1>Title</h1><p>Desc</p></div>"#;
+        let schema_json = r#"{"properties": {"title": "h1", "desc": "p"}}"#;
+
+        let schema = ExtractionSchema::parse(schema_json).unwrap();
+        let entity = extract_entities(html, &schema, None).unwrap();
+        assert_eq!(entity["title"], "Title");
+        assert_eq!(entity["desc"], "Desc");
+    }
+
+    #[test]
+    fn test_schema_diagnostics_no_match() {
+        let html = r#"<div><p>Empty</p></div>"#;
+        let schema_json = r#"{"items_selector": ".nonexistent-class", "title": "h1"}"#;
+
+        let schema = ExtractionSchema::parse(schema_json).unwrap();
+        let res = extract_entities(html, &schema, None);
+        assert!(
+            res.is_err(),
+            "Non-matching items_selector must return an error"
+        );
+        let err = res.unwrap_err().to_string();
+        assert!(err.contains("未匹配到任何列表条目"));
     }
 }

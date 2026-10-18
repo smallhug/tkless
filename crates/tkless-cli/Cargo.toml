@@ -12,6 +12,7 @@ path = "src/main.rs"
 
 [dependencies]
 tkless-core.workspace = true
+reqwest.workspace = true
 scraper.workspace = true
 clap.workspace = true
 clap_complete.workspace = true
