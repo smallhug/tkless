@@ -23,6 +23,9 @@ static WIKI_CONTENT_SELECTOR: LazyLock<Selector> = LazyLock::new(|| {
 });
 
 static WIKI_NOISE_SELECTORS: &[&str] = &[
+    "style",
+    "script",
+    "noscript",
     ".vector-toc",
     "#vector-toc",
     ".vector-column-start",
@@ -46,7 +49,20 @@ static WIKI_NOISE_SELECTORS: &[&str] = &[
     ".mw-jump-link",
     "#siteNotice",
     "#mw-navigation",
+    ".mw-empty-elt",
 ];
+
+static STYLE_TAG_RE: LazyLock<regex::Regex> =
+    LazyLock::new(|| regex::Regex::new(r#"(?is)<style\b[^>]*>.*?</style>"#).unwrap());
+
+static SCRIPT_TAG_RE: LazyLock<regex::Regex> =
+    LazyLock::new(|| regex::Regex::new(r#"(?is)<script\b[^>]*>.*?</script>"#).unwrap());
+
+static CSS_BLOCK_RE: LazyLock<regex::Regex> =
+    LazyLock::new(|| regex::Regex::new(r#"(?is)@media[^{]+\{.*?\}\s*\}"#).unwrap());
+
+static MW_PARSER_CSS_RE: LazyLock<regex::Regex> =
+    LazyLock::new(|| regex::Regex::new(r#"(?is)\.mw-parser-output[^{]+\{[^}]*\}"#).unwrap());
 
 static WIKI_NOISE_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
     regex::Regex::new(r#"(?is)<(?:span|div|table|aside|sup|nav|ul)[^>]*?(?:class="[^"]*(?:mw-editsection|reference|navbox|vertical-navbox|sidebar|catlinks|hatnote|ambox|noprint|metadata|vector-toc|vector-column-start|vector-page-toolbar|mw-portlet-lang)[^"]*"|id="(?:toc|vector-toc|p-lang|p-lang-btn|siteNotice|mw-navigation)")[^>]*>.*?</(?:span|div|table|aside|sup|nav|ul)>"#).unwrap()
@@ -206,16 +222,27 @@ impl PlatformAdapter for WikipediaAdapter {
     }
 }
 
-/// Preprocesses Wikipedia HTML: strips edit buttons, reference citations, navboxes, and TOC.
+/// Preprocesses Wikipedia HTML: strips edit buttons, reference citations, navboxes, TOC, and all inline <style>/<script> noise.
 pub fn preprocess_wikipedia_html(raw_html: &str) -> String {
+    // 1. Remove all inline <style> and <script> blocks
+    let no_style = STYLE_TAG_RE.replace_all(raw_html, "");
+    let no_script = SCRIPT_TAG_RE.replace_all(&no_style, "");
+
+    // 2. Remove DOM-based noise elements
     let noise_joined = WIKI_NOISE_SELECTORS.join(", ");
-    let cleaned = match crate::cleaner::prune_unwanted_selectors(raw_html, &noise_joined) {
+    let cleaned = match crate::cleaner::prune_unwanted_selectors(&no_script, &noise_joined) {
         Ok(h) => h,
-        Err(_) => raw_html.to_string(),
+        Err(_) => no_script.to_string(),
     };
+
+    // 3. Extra passes for footnote references and edit section markers
     let s1 = WIKI_SUP_REF_RE.replace_all(&cleaned, "");
     let s2 = WIKI_EDIT_SECTION_RE.replace_all(&s1, "");
-    WIKI_NOISE_RE.replace_all(&s2, "").to_string()
+    let s3 = WIKI_NOISE_RE.replace_all(&s2, "");
+
+    // 4. Scrub any orphaned CSS blocks (@media and .mw-parser-output selectors)
+    let s4 = CSS_BLOCK_RE.replace_all(&s3, "");
+    MW_PARSER_CSS_RE.replace_all(&s4, "").to_string()
 }
 
 fn wiki_html_to_plain_text(html: &str) -> String {

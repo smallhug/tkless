@@ -234,9 +234,11 @@ async fn run(args: CliArgs) -> Result<()> {
                     if let Some(platform) =
                         target_url_ref.and_then(tkless_core::fetcher::detect_platform_from_url)
                     {
-                        eprintln!(
-                            "[TkLess] Automatically loaded [{platform}] credentials from {cf}"
-                        );
+                        if !args.quiet && args.verbose >= 1 {
+                            eprintln!(
+                                "[TkLess] Automatically loaded [{platform}] credentials from {cf}"
+                            );
+                        }
                     }
                 }
             }
@@ -1073,7 +1075,7 @@ async fn run(args: CliArgs) -> Result<()> {
 
     if let (Some(c), Some(k)) = (cache.as_ref(), cache_key.as_ref()) {
         if let Some(cached_doc) = c.get(k) {
-            if !args.quiet {
+            if !args.quiet && args.verbose >= 1 {
                 let title_disp = cached_doc.title.as_deref().unwrap_or("<no title>");
                 eprintln!(
                     "[TkLess] Cache hit: \"{}\" (Tokens: {})",
@@ -1197,30 +1199,30 @@ async fn run(args: CliArgs) -> Result<()> {
         );
     }
 
-    // --stats is decoupled from -q: when user explicitly asks for --stats, telemetry is ALWAYS rendered
+    // --stats is decoupled from -q: when user explicitly asks for --stats, telemetry is rendered to stdout
     if args.stats {
         if let Some(ref m) = doc.metrics {
-            eprintln!("\n[TkLess Telemetry & Token Economy]");
-            eprintln!("----------------------------------------------------------");
-            eprintln!("Target URL        : {}", doc.url);
-            eprintln!(
+            println!("\n[TkLess Telemetry & Token Economy]");
+            println!("----------------------------------------------------------");
+            println!("Target URL        : {}", doc.url);
+            println!(
                 "Pipeline Latency  : {}ms (Fetch: {}ms, Clean: {}ms)",
                 m.total_time_ms, m.fetch_time_ms, m.clean_time_ms
             );
-            eprintln!(
+            println!(
                 "Payload Reduction : {} -> {} (降噪率: {:.1}%)",
                 tkless_core::downloader::format_bytes(m.raw_bytes as u64),
                 tkless_core::downloader::format_bytes(m.cleaned_bytes as u64),
                 m.noise_reduction_percent
             );
-            eprintln!(
+            println!(
                 "Token Economy     : ~{} (Raw) -> {} (Clean) [节省 {} Tokens, 节省率: {:.1}%]",
                 m.raw_token_estimate,
                 m.final_token_count,
                 m.raw_token_estimate.saturating_sub(m.final_token_count),
                 m.token_savings_percent
             );
-            eprintln!("----------------------------------------------------------\n");
+            println!("----------------------------------------------------------\n");
         }
     }
 
