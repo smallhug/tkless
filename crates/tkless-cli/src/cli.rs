@@ -598,12 +598,17 @@ pub struct CliArgs {
     pub cdp_wait_ms: Option<u64>,
 
     /// 自动探测 Cloudflare / 验证码等反爬挑战，受阻时自动降级到 CDP 无头浏览器渲染
-    #[arg(long = "auto-cdp", help_heading = "网络与身份认证 (Network & Auth)")]
+    #[arg(
+        long = "auto-cdp",
+        global = true,
+        help_heading = "网络与身份认证 (Network & Auth)"
+    )]
     pub auto_cdp: bool,
 
     /// 启用 CDP 页面平滑自动下滚以触发延迟渲染和无限滚动列表加载 (默认: 关闭)
     #[arg(
         long = "cdp-auto-scroll",
+        global = true,
         help_heading = "网络与身份认证 (Network & Auth)"
     )]
     pub cdp_auto_scroll: bool,
@@ -611,6 +616,7 @@ pub struct CliArgs {
     /// 禁用 CDP 静态重资产拦截 (默认开启拦截以提速 3-5x；开启此开关将恢复加载图片、字体与媒体)
     #[arg(
         long = "cdp-no-block-resources",
+        global = true,
         help_heading = "网络与身份认证 (Network & Auth)"
     )]
     pub cdp_no_block_resources: bool,
