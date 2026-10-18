@@ -22,11 +22,53 @@ pub fn render_output(
                 serde_json::to_string_pretty(doc).context("Failed to serialize document to JSON")?
             }
             OutputFormat::Markdown => {
-                if let Some(ref chunks) = doc.chunks {
+                let mut text = if let Some(ref chunks) = doc.chunks {
                     format_chunks_markdown(doc, chunks)
                 } else {
                     doc.content.clone()
+                };
+
+                if !text.contains("## Links") {
+                    if let Some(ref link_list) = doc.links {
+                        if !link_list.is_empty() {
+                            text.push_str("\n\n## Links\n\n");
+                            for link in link_list {
+                                let label = if link.text.is_empty() {
+                                    "链接"
+                                } else {
+                                    &link.text
+                                };
+                                text.push_str(&format!(
+                                    "- [{}]({})\n",
+                                    label.replace(['\r', '\n'], " ").trim(),
+                                    link.url
+                                ));
+                            }
+                        }
+                    }
                 }
+
+                if !text.contains("## Images") {
+                    if let Some(ref img_list) = doc.images {
+                        if !img_list.is_empty() {
+                            text.push_str("\n\n## Images\n\n");
+                            for img in img_list {
+                                let alt = if img.alt.is_empty() {
+                                    "图片"
+                                } else {
+                                    &img.alt
+                                };
+                                text.push_str(&format!(
+                                    "- ![{}]({})\n",
+                                    alt.replace(['\r', '\n'], " ").trim(),
+                                    img.src
+                                ));
+                            }
+                        }
+                    }
+                }
+
+                text
             }
             OutputFormat::Text | OutputFormat::Raw | OutputFormat::Html => doc.content.clone(),
         }

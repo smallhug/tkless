@@ -294,11 +294,11 @@ fn test_integration_extract_assets_markdown() {
 
     let doc = engine.process_html(page_html, None, &options).unwrap();
 
-    assert!(doc.content.contains("### 页面链接清单 (Links)"));
+    assert!(doc.content.contains("## Links"));
     assert!(doc
         .content
         .contains("- [Documentation](https://example.com/docs)"));
-    assert!(doc.content.contains("### 页面图片资产 (Images)"));
+    assert!(doc.content.contains("## Images"));
     assert!(doc
         .content
         .contains("- ![Sample Picture](https://example.com/pic.png)"));

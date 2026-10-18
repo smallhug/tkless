@@ -176,7 +176,7 @@ pub fn heuristic_selector_for_field(field_name: &str) -> String {
             "meta[name='description'] @content, [class*='desc'], [class*='summary'], [class*='abstract'], p".to_string()
         }
         "price" | "amount" | "cost" => {
-            "[class*='price'], [class*='amount'], [class*='cost'], .money | number".to_string()
+            "[class*='price'], [class*='amount'], [class*='cost'], .money".to_string()
         }
         "image" | "img" | "cover" | "thumb" | "thumbnail" | "avatar" => {
             "img[src] @src, [class*='cover'] img @src".to_string()
@@ -285,9 +285,11 @@ pub fn extract_entities(
     if let Value::Object(ref map) = res {
         let all_null = map.values().all(|v| v.is_null());
         if all_null && !map.is_empty() {
-            return Err(TklessError::SchemaError(
-                "Schema 中所有字段的选择器均未在页面中命中内容。请检查 CSS 选择器是否正确，或运行 `tkless <URL> --scaffold` 自动生成建议 Schema。".to_string(),
-            ));
+            let field_names: Vec<&str> = map.keys().map(|k| k.as_str()).collect();
+            return Err(TklessError::SchemaError(format!(
+                "已识别字段定义 [{}]，但未能从页面中命中对应元素。请检查 CSS 选择器或运行 `tkless <URL> --scaffold` 重新探测页面骨架。",
+                field_names.join(", ")
+            )));
         }
     }
     Ok(res)
@@ -405,7 +407,15 @@ fn extract_single_field(
     multiple: bool,
     base_url: Option<&Url>,
 ) -> Result<Value, TklessError> {
-    if detail.selector.is_empty() || detail.selector == "." || detail.selector == "self" {
+    // Strip accidental pipe syntax from selector if present (e.g. ".price | number" -> ".price")
+    let raw_sel = detail.selector.trim();
+    let clean_sel = if let Some((css, _)) = raw_sel.split_once('|') {
+        css.trim()
+    } else {
+        raw_sel
+    };
+
+    if clean_sel.is_empty() || clean_sel == "." || clean_sel == "self" {
         if let Some(val) = extract_leaf_value(container, detail, base_url) {
             if val.trim().is_empty() && detail.default.is_some() {
                 return Ok(detail.default.clone().unwrap());
@@ -417,8 +427,8 @@ fn extract_single_field(
         }
     }
 
-    let selector = Selector::parse(&detail.selector).map_err(|e| {
-        TklessError::SchemaError(format!("无效的 CSS 选择器 '{}': {e:?}", detail.selector))
+    let selector = Selector::parse(clean_sel).map_err(|e| {
+        TklessError::SchemaError(format!("无效的 CSS 选择器 '{}': {e:?}", clean_sel))
     })?;
 
     // Nested object schema
