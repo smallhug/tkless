@@ -30,41 +30,13 @@ pub fn render_output(
 
                 if !text.contains("## Links") {
                     if let Some(ref link_list) = doc.links {
-                        if !link_list.is_empty() {
-                            text.push_str("\n\n## Links\n\n");
-                            for link in link_list {
-                                let label = if link.text.is_empty() {
-                                    "链接"
-                                } else {
-                                    &link.text
-                                };
-                                text.push_str(&format!(
-                                    "- [{}]({})\n",
-                                    label.replace(['\r', '\n'], " ").trim(),
-                                    link.url
-                                ));
-                            }
-                        }
+                        text.push_str(&tkless_core::format_links_markdown(link_list));
                     }
                 }
 
                 if !text.contains("## Images") {
                     if let Some(ref img_list) = doc.images {
-                        if !img_list.is_empty() {
-                            text.push_str("\n\n## Images\n\n");
-                            for img in img_list {
-                                let alt = if img.alt.is_empty() {
-                                    "图片"
-                                } else {
-                                    &img.alt
-                                };
-                                text.push_str(&format!(
-                                    "- ![{}]({})\n",
-                                    alt.replace(['\r', '\n'], " ").trim(),
-                                    img.src
-                                ));
-                            }
-                        }
+                        text.push_str(&tkless_core::format_images_markdown(img_list));
                     }
                 }
 

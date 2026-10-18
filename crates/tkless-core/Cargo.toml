@@ -29,9 +29,6 @@ futures-util = { version = "0.3.34", features = ["sink"] }
 pdf-extract = "0.8"
 lopdf = "0.34"
 
-[target.'cfg(target_os = "linux")'.dependencies]
-openssl = { workspace = true }
-
 [features]
 default = ["tiktoken"]
 tiktoken = ["dep:tiktoken-rs"]
