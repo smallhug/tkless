@@ -94,39 +94,87 @@ pub struct DeepResearchReport {
     pub telemetry: ResearchTelemetry,
 }
 
+/// Cleans a research topic by removing parenthetical metadata and generic temporal/filler prefixes.
+pub fn clean_core_entity(topic: &str) -> String {
+    let mut clean = topic.trim();
+
+    // 1. Strip parenthetical notes like (含其派生的 2 个深度探针) or (含...) or (...)
+    if let Some(pos) = clean.find('(').or_else(|| clean.find('（')) {
+        let prefix = clean[..pos].trim();
+        if !prefix.is_empty() {
+            clean = prefix;
+        }
+    }
+
+    // 2. Strip common fluff / temporal leading modifiers
+    let filler_prefixes = [
+        "近期发布的",
+        "最新发布的",
+        "最近发布的",
+        "近期",
+        "最新",
+        "最近",
+        "关于",
+        "相关的",
+        "全面调研",
+        "深度调研",
+        "调研",
+        "深度解析",
+        "recently released",
+        "latest",
+        "recent",
+        "state of the art",
+        "overview of",
+    ];
+
+    let mut result = clean.to_string();
+    for prefix in filler_prefixes {
+        if result.to_lowercase().starts_with(prefix) {
+            result = result[prefix.len()..].trim().to_string();
+        }
+    }
+
+    if result.is_empty() {
+        topic.trim().to_string()
+    } else {
+        result
+    }
+}
+
 /// Decomposes a research topic into multiple sub-queries / angles.
 pub fn decompose_topic(topic: &str, breadth: usize) -> Vec<(String, String)> {
-    let clean = topic.trim();
+    let raw = topic.trim();
+    let core = clean_core_entity(raw);
     let b = breadth.clamp(2, 5);
 
-    let is_cjk = clean.chars().any(|c| (c as u32) >= 0x4E00);
+    let is_cjk = core.chars().any(|c| (c as u32) >= 0x4E00);
 
     if is_cjk {
         let mut angles = Vec::new();
         angles.push((
             "核心架构与原理 (Architecture & Fundamentals)".to_string(),
-            format!("{clean} 核心架构 原理机制 深度解析"),
+            format!("{core} 核心架构 原理"),
         ));
         angles.push((
             "优缺点对比与性能基准 (Tradeoffs & Benchmarks)".to_string(),
-            format!("{clean} 优缺点对比 性能基准 评测"),
+            format!("{core} 优缺点 性能基准"),
         ));
         if b >= 3 {
             angles.push((
                 "生产实践与避坑指南 (Best Practices & Pitfalls)".to_string(),
-                format!("{clean} 生产实践 最佳实践 踩坑经验"),
+                format!("{core} 生产实践 最佳实践"),
             ));
         }
         if b >= 4 {
             angles.push((
                 "生态体系与前沿演进 (Ecosystem & Future Roadmap)".to_string(),
-                format!("{clean} 生态发展 最新进展 发展趋势"),
+                format!("{core} 生态发展 最新进展"),
             ));
         }
         if b >= 5 {
             angles.push((
                 "行业落地与典型案例 (Case Studies & Applications)".to_string(),
-                format!("{clean} 行业应用 典型案例 落地经验"),
+                format!("{core} 行业应用 典型案例"),
             ));
         }
         angles
@@ -134,28 +182,28 @@ pub fn decompose_topic(topic: &str, breadth: usize) -> Vec<(String, String)> {
         let mut angles = Vec::new();
         angles.push((
             "Architecture & Fundamentals".to_string(),
-            format!("{clean} architecture internals overview"),
+            format!("{core} architecture internals"),
         ));
         angles.push((
             "Tradeoffs & Performance Benchmarks".to_string(),
-            format!("{clean} pros and cons performance benchmarks comparison"),
+            format!("{core} benchmarks comparison"),
         ));
         if b >= 3 {
             angles.push((
                 "Production Best Practices".to_string(),
-                format!("{clean} production best practices common pitfalls"),
+                format!("{core} production best practices"),
             ));
         }
         if b >= 4 {
             angles.push((
                 "Ecosystem & Future Roadmap".to_string(),
-                format!("{clean} ecosystem trends roadmap 2026"),
+                format!("{core} ecosystem trends roadmap"),
             ));
         }
         if b >= 5 {
             angles.push((
                 "Case Studies & Industry Adoption".to_string(),
-                format!("{clean} real world case studies implementation"),
+                format!("{core} real world case studies"),
             ));
         }
         angles
@@ -176,8 +224,11 @@ pub async fn deep_research(
         ));
     }
 
+    let core_entity = clean_core_entity(clean_topic);
+
     info!(
         topic = clean_topic,
+        core_entity = %core_entity,
         depth = options.depth,
         breadth = options.breadth,
         "启动多跳自主深度调研流水线"
@@ -193,6 +244,8 @@ pub async fn deep_research(
 
     for (angle_name, sub_query) in &angles {
         debug!(angle = %angle_name, query = %sub_query, "检索研究维度候选资料");
+        let mut unique_items = Vec::new();
+
         match web_search_scoped(
             engine.client(),
             sub_query,
@@ -205,24 +258,46 @@ pub async fn deep_research(
         .await
         {
             Ok(results) => {
-                let mut unique_items = Vec::new();
                 for item in results {
                     let norm = crate::search::normalize_url_for_dedup(&item.url);
                     if seen_urls.insert(norm) {
                         unique_items.push(item);
                     }
                 }
-                dimension_search_results.push((
-                    angle_name.clone(),
-                    sub_query.clone(),
-                    unique_items,
-                ));
             }
             Err(e) => {
-                debug!(query = %sub_query, error = %e, "维度检索异常，跳过此角度");
-                dimension_search_results.push((angle_name.clone(), sub_query.clone(), Vec::new()));
+                debug!(query = %sub_query, error = %e, "维度检索异常");
             }
         }
+
+        // Graceful fallback: If angle query returned 0 items (e.g. Due to search term drop), retry with clean core entity!
+        if unique_items.is_empty() {
+            debug!(
+                angle = %angle_name,
+                core_entity = %core_entity,
+                "维度检索未命中，使用核心实体保底检索"
+            );
+            if let Ok(fallback_items) = web_search_scoped(
+                engine.client(),
+                &core_entity,
+                None,
+                4,
+                options.engine,
+                None,
+                false,
+            )
+            .await
+            {
+                for item in fallback_items {
+                    let norm = crate::search::normalize_url_for_dedup(&item.url);
+                    if seen_urls.insert(norm) {
+                        unique_items.push(item);
+                    }
+                }
+            }
+        }
+
+        dimension_search_results.push((angle_name.clone(), sub_query.clone(), unique_items));
     }
 
     // Phase 3: Parallel Content Fetching & Extraction (Hop 1 Pages)
@@ -609,5 +684,27 @@ mod tests {
         assert!(md.contains("## 📋 执行摘要"));
         assert!(md.contains("Axum 官方仓库"));
         assert!(md.contains("## ⏱️ 调研遥测报告"));
+    }
+
+    #[test]
+    fn test_clean_core_entity_and_probe_simplification() {
+        let topic = "近期发布的小参数语言模型 SLM (含其派生的 2 个深度探针)";
+        let clean = clean_core_entity(topic);
+        assert_eq!(clean, "小参数语言模型 SLM");
+
+        let angles = decompose_topic(topic, 3);
+        assert_eq!(angles.len(), 3);
+        // Ensure probes are crisp and don't carry the parenthetical notes or fluff
+        for (_name, query) in &angles {
+            assert!(
+                !query.contains("近期发布的"),
+                "Probe '{query}' must strip temporal filler prefix"
+            );
+            assert!(
+                !query.contains("深度探针"),
+                "Probe '{query}' must strip parenthetical notes"
+            );
+            assert!(query.contains("小参数语言模型 SLM"));
+        }
     }
 }

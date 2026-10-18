@@ -308,6 +308,15 @@ pub async fn web_search_scoped(
                 return Ok(Vec::new());
             }
 
+            // If one engine yielded no results (e.g. DDG anti-scraping 202 or temporary network block),
+            // seamlessly return the other engine's results to fulfill user limit.
+            if ddg_items.is_empty() {
+                return Ok(bing_items);
+            }
+            if bing_items.is_empty() {
+                return Ok(ddg_items);
+            }
+
             Ok(merge_and_dedup_search_results(bing_items, ddg_items, limit))
         }
         SearchEngineKind::Bing => {
@@ -523,8 +532,8 @@ pub async fn web_search(
     web_search_with_engine(client, query, limit, SearchEngineKind::default()).await
 }
 
-/// Tokenized query elements separated into core entity tokens and temporal tokens.
-#[derive(Debug, Clone)]
+/// Tokenized query elements separated into core entity tokens, temporal tokens, domain filters, and exact phrases.
+#[derive(Debug, Clone, Default)]
 pub struct QueryTokens {
     /// Non-temporal core content tokens (e.g. "特斯拉", "上海工厂", "产量")
     pub core_tokens: Vec<String>,
@@ -532,23 +541,88 @@ pub struct QueryTokens {
     pub temporal_tokens: Vec<String>,
     /// All raw tokens
     pub all_tokens: Vec<String>,
+    /// Extracted domain constraints (e.g. "zhuanlan.zhihu.com", "zhihu.com")
+    pub domain_filters: Vec<String>,
+    /// Exact phrase constraints extracted from quotes (e.g. "small language model")
+    pub phrase_filters: Vec<String>,
 }
 
-/// Tokenizes a user query into core semantic tokens and temporal modifiers.
+/// Tokenizes a user query into core semantic tokens, temporal modifiers, domain filters, and exact phrases.
 pub fn tokenize_query(query: &str) -> QueryTokens {
     let clean = query.trim().to_lowercase();
-    let raw_tokens: Vec<&str> = clean.split_whitespace().collect();
+    let mut phrase_filters = Vec::new();
+
+    // 1. Extract quoted phrases ("..." or “...”)
+    let mut in_quote = false;
+    let mut current_phrase = String::new();
+    for c in query.chars() {
+        if c == '"' || c == '“' || c == '”' {
+            if in_quote {
+                let trimmed = current_phrase.trim().to_lowercase();
+                if !trimmed.is_empty() {
+                    phrase_filters.push(trimmed);
+                }
+                current_phrase.clear();
+                in_quote = false;
+            } else {
+                in_quote = true;
+            }
+        } else if in_quote {
+            current_phrase.push(c);
+        }
+    }
 
     let mut core_tokens = Vec::new();
     let mut temporal_tokens = Vec::new();
     let mut all_tokens = Vec::new();
+    let mut domain_filters = Vec::new();
 
-    for token in raw_tokens {
-        let t = token.trim();
+    let raw_tokens: Vec<&str> = clean.split_whitespace().collect();
+
+    for raw_t in raw_tokens {
+        // Strip quotation marks and punctuation edges
+        let t = raw_t.trim_matches(|c: char| {
+            c == '"'
+                || c == '\''
+                || c == '“'
+                || c == '”'
+                || c == '‘'
+                || c == '’'
+                || c == '('
+                || c == ')'
+                || c == '['
+                || c == ']'
+                || c == ','
+                || c == ';'
+        });
         if t.is_empty() {
             continue;
         }
+
         all_tokens.push(t.to_string());
+
+        // Check if operator like site:... or domain:... or inurl:...
+        if let Some(domain) = t
+            .strip_prefix("site:")
+            .or_else(|| t.strip_prefix("site："))
+            .or_else(|| t.strip_prefix("domain:"))
+            .or_else(|| t.strip_prefix("inurl:"))
+        {
+            let clean_domain = domain
+                .trim()
+                .trim_start_matches("http://")
+                .trim_start_matches("https://");
+            if !clean_domain.is_empty() {
+                domain_filters.push(clean_domain.to_string());
+            }
+            continue; // Do not add search operator to core_tokens!
+        }
+
+        // Skip negative operators like -site:... or -domain:...
+        if t.starts_with("-site:") || t.starts_with("-domain:") {
+            continue;
+        }
+
         // Check if 4-digit year (e.g. 2024, 2025, 2026, 2027)
         if t.len() == 4 && t.chars().all(|c| c.is_ascii_digit()) {
             temporal_tokens.push(t.to_string());
@@ -561,6 +635,8 @@ pub fn tokenize_query(query: &str) -> QueryTokens {
         core_tokens,
         temporal_tokens,
         all_tokens,
+        domain_filters,
+        phrase_filters,
     }
 }
 
@@ -656,49 +732,125 @@ pub fn is_bing_ad_or_promotion(
     false
 }
 
-/// Evaluates query relevance and scores a candidate result.
-/// Returns None if the candidate is completely unrelated or a first-token-only fallback.
-pub fn calculate_relevance(title: &str, snippet: &str, query_tokens: &QueryTokens) -> Option<i32> {
-    if query_tokens.core_tokens.is_empty() {
+/// Evaluates query relevance and scores a candidate result with full URL and domain awareness.
+/// Returns None if the candidate is completely unrelated or a severe first-token-only fallback.
+pub fn calculate_relevance_full(
+    title: &str,
+    snippet: &str,
+    resolved_url: &str,
+    query_tokens: &QueryTokens,
+) -> Option<i32> {
+    if query_tokens.core_tokens.is_empty() && query_tokens.phrase_filters.is_empty() {
         return Some(10);
     }
 
     let title_lower = title.to_lowercase();
     let snippet_lower = snippet.to_lowercase();
+    let url_lower = resolved_url.to_lowercase();
 
-    let mut matched_core = Vec::new();
+    // Compact forms with spaces and separators removed for entity folding (e.g. "hugging face" == "huggingface")
+    let title_compact = title_lower.replace([' ', '-', '_', '·', '|', '—'], "");
+    let snippet_compact = snippet_lower.replace([' ', '-', '_', '·', '|', '—'], "");
+    let url_compact = url_lower.replace([' ', '-', '_', '/', '.'], "");
+
     let mut score = 0;
+    let mut domain_matched = false;
 
-    for (idx, token) in query_tokens.core_tokens.iter().enumerate() {
-        let in_title = title_lower.contains(token);
-        let in_snippet = snippet_lower.contains(token);
-
-        if in_title || in_snippet {
-            matched_core.push(idx);
-            if in_title {
-                score += 15;
-            }
-            if in_snippet {
-                score += 5;
+    // 1. Domain filter matching (e.g. site:zhuanlan.zhihu.com or site:zhihu.com)
+    if !query_tokens.domain_filters.is_empty() {
+        for df in &query_tokens.domain_filters {
+            if url_lower.contains(df) {
+                domain_matched = true;
+                score += 35;
+                break;
             }
         }
     }
 
-    // Hard Filter 1: Zero Core Tokens Matched -> Completely unrelated (e.g. 阿里云盘 for 个人所得税)
-    if matched_core.is_empty() {
+    // 2. Exact phrase matching (e.g. "small language model")
+    for phrase in &query_tokens.phrase_filters {
+        let phrase_compact = phrase.replace(' ', "");
+        if title_lower.contains(phrase) || title_compact.contains(&phrase_compact) {
+            score += 30;
+        } else if snippet_lower.contains(phrase) || snippet_compact.contains(&phrase_compact) {
+            score += 15;
+        }
+    }
+
+    // 3. Core token matching
+    let mut matched_core = Vec::new();
+    for (idx, token) in query_tokens.core_tokens.iter().enumerate() {
+        let token_compact = token.replace([' ', '-', '_'], "");
+        let in_title = title_lower.contains(token)
+            || (!token_compact.is_empty() && title_compact.contains(&token_compact));
+        let in_snippet = snippet_lower.contains(token)
+            || (!token_compact.is_empty() && snippet_compact.contains(&token_compact));
+        let in_url = !resolved_url.is_empty()
+            && (url_lower.contains(token)
+                || (!token_compact.is_empty() && url_compact.contains(&token_compact)));
+
+        if in_title || in_snippet || in_url {
+            matched_core.push(idx);
+            if in_title {
+                score += 20;
+            }
+            if in_snippet {
+                score += 8;
+            }
+            if in_url {
+                score += 10;
+            }
+        } else if token.is_ascii() && token.len() >= 5 {
+            // Partial prefix matching for technical terms (e.g. "smollm" in "smollm2" or vice versa)
+            let prefix = &token[..token.len() - 1];
+            if title_lower.contains(prefix)
+                || snippet_lower.contains(prefix)
+                || url_lower.contains(prefix)
+            {
+                matched_core.push(idx);
+                score += 8;
+            }
+        } else if token.chars().any(|c| (c as u32) >= 0x4E00) && token.chars().count() >= 4 {
+            // CJK compound word sub-gram matching (e.g. "小参数模型" -> "小模型", "模型", "参数")
+            let chars: Vec<char> = token.chars().collect();
+            let prefix_2: String = chars[..2].iter().collect();
+            let suffix_2: String = chars[chars.len() - 2..].iter().collect();
+            let in_title_sub = title_lower.contains(&prefix_2) || title_lower.contains(&suffix_2);
+            let in_snippet_sub =
+                snippet_lower.contains(&prefix_2) || snippet_lower.contains(&suffix_2);
+            if in_title_sub || in_snippet_sub {
+                matched_core.push(idx);
+                score += 10;
+            }
+        }
+    }
+
+    // Hard Filter 1: Zero Core Tokens Matched AND No Domain Matched AND No Phrase Matched
+    if matched_core.is_empty() && !domain_matched && score == 0 {
         return None;
     }
 
     // Hard Filter 2: First-Token-Only Fallback (Bing Term Drop)
     // If user asked a multi-token query (>=2 core tokens), but the result ONLY matches token 0,
     // and matches NONE of the other 1..N core tokens (e.g. "北京 小学 入学 政策" -> only matches "北京", becoming "北京市 - 百度百科"),
-    // this is a broad degradation fallback where all constraints were lost. REJECT it!
-    if query_tokens.core_tokens.len() >= 2 {
+    // check if this is an encyclopedia/homepage generic fallback without domain constraint.
+    if query_tokens.core_tokens.len() >= 2 && !domain_matched {
         if matched_core == vec![0] {
-            return None;
+            let is_generic_entry = title_lower.contains("百科")
+                || title_lower.contains("官网")
+                || title_lower.contains("商城")
+                || title_lower.contains("首页")
+                || title_lower.contains("into the unknown");
+            if is_generic_entry {
+                return None;
+            }
         }
-        // If 3 or more core tokens, require at least 2 matched core tokens
-        if query_tokens.core_tokens.len() >= 3 && matched_core.len() < 2 {
+        // If 3 or more core tokens, require at least 2 matched core tokens unless domain matched or phrase matched
+        if query_tokens.core_tokens.len() >= 3
+            && matched_core.len() < 2
+            && !domain_matched
+            && query_tokens.phrase_filters.is_empty()
+        {
             return None;
         }
     }
@@ -713,6 +865,112 @@ pub fn calculate_relevance(title: &str, snippet: &str, query_tokens: &QueryToken
     }
 
     Some(score)
+}
+
+/// Evaluates relaxed query relevance for graceful fallback when strict gatekeeping yields 0 results.
+pub fn calculate_relaxed_relevance(
+    title: &str,
+    snippet: &str,
+    resolved_url: &str,
+    query_tokens: &QueryTokens,
+) -> Option<i32> {
+    if query_tokens.core_tokens.is_empty() && query_tokens.phrase_filters.is_empty() {
+        return Some(5);
+    }
+
+    let title_lower = title.to_lowercase();
+    let snippet_lower = snippet.to_lowercase();
+    let url_lower = resolved_url.to_lowercase();
+
+    let title_compact = title_lower.replace([' ', '-', '_', '·', '|', '—'], "");
+    let snippet_compact = snippet_lower.replace([' ', '-', '_', '·', '|', '—'], "");
+    let url_compact = url_lower.replace([' ', '-', '_', '/', '.'], "");
+
+    let mut score = 0;
+
+    // Domain filter matching
+    if !query_tokens.domain_filters.is_empty() {
+        for df in &query_tokens.domain_filters {
+            if url_lower.contains(df) {
+                score += 35;
+                break;
+            }
+        }
+    }
+
+    // Exact phrase matching
+    for phrase in &query_tokens.phrase_filters {
+        let phrase_compact = phrase.replace(' ', "");
+        if title_lower.contains(phrase) || title_compact.contains(&phrase_compact) {
+            score += 25;
+        } else if snippet_lower.contains(phrase) || snippet_compact.contains(&phrase_compact) {
+            score += 10;
+        }
+    }
+
+    // Core tokens matching (at least 1 required)
+    let mut any_match = false;
+    for token in &query_tokens.core_tokens {
+        let token_compact = token.replace([' ', '-', '_'], "");
+        let in_title = title_lower.contains(token)
+            || (!token_compact.is_empty() && title_compact.contains(&token_compact));
+        let in_snippet = snippet_lower.contains(token)
+            || (!token_compact.is_empty() && snippet_compact.contains(&token_compact));
+        let in_url = !resolved_url.is_empty()
+            && (url_lower.contains(token)
+                || (!token_compact.is_empty() && url_compact.contains(&token_compact)));
+
+        if in_title || in_snippet || in_url {
+            any_match = true;
+            if in_title {
+                score += 15;
+            }
+            if in_snippet {
+                score += 6;
+            }
+            if in_url {
+                score += 8;
+            }
+        } else if token.is_ascii() && token.len() >= 5 {
+            let prefix = &token[..token.len() - 1];
+            if title_lower.contains(prefix) || snippet_lower.contains(prefix) {
+                any_match = true;
+                score += 5;
+            }
+        } else if token.chars().any(|c| (c as u32) >= 0x4E00) && token.chars().count() >= 4 {
+            let chars: Vec<char> = token.chars().collect();
+            let prefix_2: String = chars[..2].iter().collect();
+            let suffix_2: String = chars[chars.len() - 2..].iter().collect();
+            if title_lower.contains(&prefix_2)
+                || title_lower.contains(&suffix_2)
+                || snippet_lower.contains(&prefix_2)
+                || snippet_lower.contains(&suffix_2)
+            {
+                any_match = true;
+                score += 8;
+            }
+        }
+    }
+
+    if !any_match && score == 0 {
+        return None;
+    }
+
+    // Check temporal tokens
+    for year in &query_tokens.temporal_tokens {
+        if title_lower.contains(year) {
+            score += 8;
+        } else if snippet_lower.contains(year) {
+            score += 3;
+        }
+    }
+
+    Some(score)
+}
+
+/// Evaluates query relevance and scores a candidate result (backward compatible wrapper).
+pub fn calculate_relevance(title: &str, snippet: &str, query_tokens: &QueryTokens) -> Option<i32> {
+    calculate_relevance_full(title, snippet, "", query_tokens)
 }
 
 struct ScoredBingItem {
@@ -742,6 +1000,8 @@ pub async fn search_bing_with_options(
         return Ok(Vec::new());
     }
 
+    let tokens = tokenize_query(clean_query);
+
     // Stage 1: Full original query with clean Bing endpoint
     let results = fetch_and_parse_bing(
         client,
@@ -752,11 +1012,98 @@ pub async fn search_bing_with_options(
         auto_cdp,
     )
     .await?;
-    if !results.is_empty() {
+
+    // If query specified domain filters (e.g. site:zhuanlan.zhihu.com or site:zhihu.com),
+    // but results do NOT contain any matching domain, treat Stage 1 as missed and proceed to Stage 1b rewrite!
+    let domain_satisfied = if tokens.domain_filters.is_empty() {
+        !results.is_empty()
+    } else {
+        results.iter().any(|r| {
+            let u_lower = r.url.to_lowercase();
+            tokens.domain_filters.iter().any(|df| u_lower.contains(df))
+        })
+    };
+
+    if domain_satisfied {
         return Ok(results);
     }
 
-    let tokens = tokenize_query(clean_query);
+    // Stage 1b: Domain filter rewriting (e.g. site:zhuanlan.zhihu.com or site:zhihu.com)
+    // Bing's search often breaks on site: prefixes for domestic Chinese platforms.
+    // Replace site:zhuanlan.zhihu.com with "知乎专栏" or site:zhihu.com with "知乎"
+    if !tokens.domain_filters.is_empty() {
+        let mut rewritten_query = clean_query.to_string();
+        for df in &tokens.domain_filters {
+            let site_prefix = format!("site:{df}");
+            let site_prefix_cn = format!("site：{df}");
+            if df.contains("zhuanlan.zhihu.com") {
+                rewritten_query = rewritten_query
+                    .replace(&site_prefix, "知乎专栏")
+                    .replace(&site_prefix_cn, "知乎专栏");
+            } else if df.contains("zhihu.com") {
+                rewritten_query = rewritten_query
+                    .replace(&site_prefix, "知乎")
+                    .replace(&site_prefix_cn, "知乎");
+            } else if df.contains("csdn.net") {
+                rewritten_query = rewritten_query
+                    .replace(&site_prefix, "csdn")
+                    .replace(&site_prefix_cn, "csdn");
+            } else if df.contains("juejin.cn") {
+                rewritten_query = rewritten_query
+                    .replace(&site_prefix, "掘金")
+                    .replace(&site_prefix_cn, "掘金");
+            } else {
+                rewritten_query = rewritten_query
+                    .replace(&site_prefix, df)
+                    .replace(&site_prefix_cn, df);
+            }
+        }
+        let clean_rewritten = rewritten_query.trim().to_string();
+        if clean_rewritten != clean_query {
+            debug!(
+                original = clean_query,
+                rewritten = %clean_rewritten,
+                "Stage 1b: Retrying with rewritten platform keyword instead of raw site: syntax"
+            );
+            let rewritten_results = fetch_and_parse_bing(
+                client,
+                &clean_rewritten,
+                clean_query,
+                limit,
+                cdp_options,
+                auto_cdp,
+            )
+            .await?;
+            if !rewritten_results.is_empty() {
+                return Ok(rewritten_results);
+            }
+        }
+    }
+
+    // Stage 1c: Quoted phrase relaxation (strip quotes if exact quote yielded 0 results)
+    if !tokens.phrase_filters.is_empty() {
+        let unquoted = clean_query.replace(['"', '“', '”'], "");
+        let clean_unquoted = unquoted.trim().to_string();
+        if clean_unquoted != clean_query {
+            debug!(
+                original = clean_query,
+                unquoted = %clean_unquoted,
+                "Stage 1c: Quoted query returned 0 results, retrying without quotation marks"
+            );
+            let unquoted_results = fetch_and_parse_bing(
+                client,
+                &clean_unquoted,
+                clean_query,
+                limit,
+                cdp_options,
+                auto_cdp,
+            )
+            .await?;
+            if !unquoted_results.is_empty() {
+                return Ok(unquoted_results);
+            }
+        }
+    }
 
     // Stage 2: Temporal Relaxation
     // If query has future years (e.g. "2026", "2025") causing Bing to return 0 exact hits or drop terms,
@@ -858,6 +1205,18 @@ async fn fetch_and_parse_bing(
         return parse_bing_html_with_query(&html, relevance_query, limit);
     }
 
+    let is_cjk = search_query.chars().any(|c| (c as u32) >= 0x4E00);
+    let cookie_val = if is_cjk {
+        "SRCHD=AF=NOFORM; SRCHHPGUSR=SRCHLANG=zh-Hans; _EDGE_S=mkt=zh-cn; _SS=SID=1;"
+    } else {
+        "SRCHD=AF=NOFORM; SRCHHPGUSR=SRCHLANG=en; _EDGE_S=mkt=en-us; _SS=SID=1;"
+    };
+    let accept_lang = if is_cjk {
+        "zh-CN,zh;q=0.9,en;q=0.8"
+    } else {
+        "en-US,en;q=0.9,zh-CN;q=0.8"
+    };
+
     let resp = client
         .get(&search_url)
         .header(
@@ -865,9 +1224,16 @@ async fn fetch_and_parse_bing(
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36 Edg/133.0.0.0",
         )
         .header("Referer", "https://www.bing.com/")
-        .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8")
-        .header("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
-        .header("Sec-Ch-Ua", "\"Not(A:Brand\";v=\"99\", \"Microsoft Edge\";v=\"133\", \"Chromium\";v=\"133\"")
+        .header(
+            "Accept",
+            "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        )
+        .header("Accept-Language", accept_lang)
+        .header("Cookie", cookie_val)
+        .header(
+            "Sec-Ch-Ua",
+            "\"Not(A:Brand\";v=\"99\", \"Microsoft Edge\";v=\"133\", \"Chromium\";v=\"133\"",
+        )
         .header("Sec-Ch-Ua-Mobile", "?0")
         .header("Sec-Ch-Ua-Platform", "\"Windows\"")
         .header("Sec-Fetch-Dest", "document")
@@ -917,6 +1283,7 @@ pub fn parse_bing_html_with_query(
 
     let doc = Html::parse_document(html);
     let mut scored_results: Vec<ScoredBingItem> = Vec::new();
+    let mut fallback_results: Vec<ScoredBingItem> = Vec::new();
     let mut seen_urls = std::collections::HashSet::new();
 
     let query_tokens = tokenize_query(query);
@@ -960,9 +1327,26 @@ pub fn parse_bing_html_with_query(
             continue;
         }
 
-        // 2. Filter out completely unrelated items and first-token-only fallbacks
-        if let Some(score) = calculate_relevance(&raw_title, &snippet, &query_tokens) {
+        // 2. Strict evaluation (Tier 1)
+        if let Some(score) =
+            calculate_relevance_full(&raw_title, &snippet, &resolved_url, &query_tokens)
+        {
             scored_results.push(ScoredBingItem {
+                item: SearchResultItem {
+                    title: raw_title.clone(),
+                    url: resolved_url.clone(),
+                    snippet: snippet.clone(),
+                    engine: "bing".to_string(),
+                },
+                score,
+            });
+        }
+
+        // 3. Relaxed evaluation (Tier 2 Fallback)
+        if let Some(score) =
+            calculate_relaxed_relevance(&raw_title, &snippet, &resolved_url, &query_tokens)
+        {
+            fallback_results.push(ScoredBingItem {
                 item: SearchResultItem {
                     title: raw_title,
                     url: resolved_url,
@@ -974,10 +1358,16 @@ pub fn parse_bing_html_with_query(
         }
     }
 
-    // Sort by relevance score descending so the most relevant results come first
-    scored_results.sort_by_key(|a| std::cmp::Reverse(a.score));
+    let mut final_scored = if !scored_results.is_empty() {
+        scored_results
+    } else {
+        fallback_results
+    };
 
-    let results = scored_results
+    // Sort by relevance score descending so the most relevant results come first
+    final_scored.sort_by_key(|a| std::cmp::Reverse(a.score));
+
+    let results = final_scored
         .into_iter()
         .take(limit)
         .map(|sr| sr.item)
@@ -1917,5 +2307,68 @@ mod tests {
         assert_eq!(results[1].title, "The Rust Book");
         assert_eq!(results[1].url, "https://doc.rust-lang.org/book/");
         assert_eq!(results[1].engine, "duckduckgo");
+    }
+
+    #[test]
+    fn test_tokenize_query_domain_and_phrase_extraction() {
+        let tokens = tokenize_query("site:zhuanlan.zhihu.com DeepSeek 深度解析");
+        assert_eq!(tokens.domain_filters, vec!["zhuanlan.zhihu.com"]);
+        assert_eq!(tokens.core_tokens, vec!["deepseek", "深度解析"]);
+        assert!(tokens.phrase_filters.is_empty());
+
+        let tokens_quote = tokenize_query("\"small language model\" release");
+        assert_eq!(tokens_quote.phrase_filters, vec!["small language model"]);
+        assert_eq!(
+            tokens_quote.core_tokens,
+            vec!["small", "language", "model", "release"]
+        );
+        // Ensure no quotes polluted the individual core tokens
+        for t in &tokens_quote.core_tokens {
+            assert!(!t.contains('"'), "Token {t} must not contain quotes");
+        }
+    }
+
+    #[test]
+    fn test_relevance_space_insensitive_and_domain_boost() {
+        let tokens_hf = tokenize_query("huggingface trending");
+        let title_hf = "Trending Papers - Hugging Face";
+        let snip_hf = "Explore community trending models and papers.";
+        let score_hf = calculate_relevance_full(
+            title_hf,
+            snip_hf,
+            "https://huggingface.co/papers/trending",
+            &tokens_hf,
+        );
+        assert!(
+            score_hf.is_some(),
+            "Hugging Face with spaces must match huggingface token"
+        );
+        assert!(score_hf.unwrap() >= 25);
+
+        let tokens_zhihu = tokenize_query("site:zhuanlan.zhihu.com DeepSeek 深度解析");
+        let title_zhihu = "DeepSeek 核心架构与注意力机制详解";
+        let snip_zhihu = "深入分析 DeepSeek 的工程实践。";
+        let url_zhihu = "https://zhuanlan.zhihu.com/p/12345678";
+        let score_zhihu =
+            calculate_relevance_full(title_zhihu, snip_zhihu, url_zhihu, &tokens_zhihu);
+        assert!(
+            score_zhihu.is_some(),
+            "Matching domain filter must grant score boost and survive"
+        );
+        assert!(score_zhihu.unwrap() >= 40);
+    }
+
+    #[test]
+    fn test_relevance_relaxed_fallback() {
+        let tokens_llama = tokenize_query("llama 3.2 1b 3b");
+        let title_llama = "Llama · Your AI, on your computer";
+        let snip_llama = "Open source artificial intelligence models by Meta.";
+        let url_llama = "https://www.llama.com/";
+        let relaxed_score =
+            calculate_relaxed_relevance(title_llama, snip_llama, url_llama, &tokens_llama);
+        assert!(
+            relaxed_score.is_some(),
+            "Llama query must pass relaxed fallback scoring"
+        );
     }
 }
