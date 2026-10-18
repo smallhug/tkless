@@ -2510,6 +2510,7 @@ dependencies = [
  "anyhow",
  "clap",
  "clap_complete",
+ "reqwest 0.12.28",
  "scraper",
  "serde",
  "serde_json",

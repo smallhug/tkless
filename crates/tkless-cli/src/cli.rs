@@ -666,7 +666,7 @@ pub struct CliArgs {
     )]
     pub mcp_dynamic: bool,
 
-    /// Enable local response caching
+    /// 启用本地两级响应缓存加速 (默认关闭；开启后默认 900 秒 TTL，支持 HTTP 304 条件式重新验证)
     #[arg(long = "cache", help_heading = "缓存与运行诊断 (Cache & Diagnostics)")]
     pub cache: bool,
 
@@ -821,6 +821,14 @@ pub enum SubCommand {
         about = "多跳自主深度网络调研流水线 (自动拆解维度、跨引擎并发检索、跟踪权威引链、汇编综述报告)"
     )]
     Research(ResearchSubArgs),
+
+    /// 诊断并自检当前运行环境 (CDP 浏览器就绪、网络核心服务连通性、缓存读写权限)
+    #[command(
+        name = "doctor",
+        alias = "selftest",
+        about = "诊断并自检当前运行环境 (CDP 浏览器就绪、网络核心服务连通性、缓存读写权限)"
+    )]
+    Doctor(DoctorArgs),
 }
 
 #[derive(clap::Args, Debug, Clone, Default)]
@@ -836,6 +844,13 @@ pub struct UpgradeArgs {
     /// 自定义 GitHub 仓库所有者与项目 (默认: 'smallhug/tkless')
     #[arg(long = "repo", default_value = "smallhug/tkless")]
     pub repo: String,
+}
+
+#[derive(clap::Args, Debug, Clone, Default)]
+pub struct DoctorArgs {
+    /// HTTP/HTTPS 代理服务器地址 (例如 http://127.0.0.1:7890)
+    #[arg(short = 'p', long = "proxy", value_name = "PROXY_URL")]
+    pub proxy: Option<String>,
 }
 
 #[derive(clap::Args, Debug, Clone, Default)]
@@ -940,7 +955,13 @@ pub struct TablesArgs {
     pub target: String,
 
     /// Table export presentation format [default: sql]
-    #[arg(short = 'f', long = "format", value_enum, default_value_t = CliTableFormat::Sql)]
+    #[arg(
+        short = 'f',
+        long = "format",
+        alias = "table-format",
+        value_enum,
+        default_value_t = CliTableFormat::Sql
+    )]
     pub format: CliTableFormat,
 
     /// Custom SQL table name identifier when format is 'sql' [default: 'extracted_table']
@@ -1227,7 +1248,7 @@ pub struct LoginArgs {
     #[arg(value_name = "PLATFORM")]
     pub platform: String,
 
-    /// Destination file path to save extracted cookies [default: ./cookies.txt]
+    /// Destination file path to save extracted cookies
     #[arg(
         short = 'o',
         long = "output",
@@ -1240,7 +1261,7 @@ pub struct LoginArgs {
     #[arg(long = "no-browser")]
     pub no_browser: bool,
 
-    /// Maximum waiting timeout in seconds [default: 180]
+    /// Maximum waiting timeout in seconds
     #[arg(long = "timeout", default_value_t = 180, value_name = "SECS")]
     pub timeout_secs: u64,
 }

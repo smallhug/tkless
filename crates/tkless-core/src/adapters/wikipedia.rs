@@ -19,11 +19,37 @@ static WIKI_TITLE_SELECTOR: LazyLock<Selector> = LazyLock::new(|| {
 });
 
 static WIKI_CONTENT_SELECTOR: LazyLock<Selector> = LazyLock::new(|| {
-    Selector::parse("#mw-content-text .mw-parser-output, #bodyContent, #content").unwrap()
+    Selector::parse("#mw-content-text .mw-parser-output, #mw-content-text").unwrap()
 });
 
+static WIKI_NOISE_SELECTORS: &[&str] = &[
+    ".vector-toc",
+    "#vector-toc",
+    ".vector-column-start",
+    ".vector-page-toolbar",
+    ".vector-header",
+    "#p-lang",
+    ".mw-portlet-lang",
+    "#p-lang-btn",
+    ".mw-editsection",
+    "sup.reference",
+    ".navbox",
+    ".vertical-navbox",
+    ".sidebar",
+    ".catlinks",
+    ".hatnote",
+    ".ambox",
+    ".noprint",
+    ".metadata",
+    "#toc",
+    ".toc",
+    ".mw-jump-link",
+    "#siteNotice",
+    "#mw-navigation",
+];
+
 static WIKI_NOISE_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
-    regex::Regex::new(r#"(?is)<(?:span|div|table|aside|sup)[^>]*?(?:class="[^"]*(?:mw-editsection|reference|navbox|vertical-navbox|sidebar|catlinks|hatnote|ambox|noprint|metadata)[^"]*"|id="toc")[^>]*>.*?</(?:span|div|table|aside|sup)>"#).unwrap()
+    regex::Regex::new(r#"(?is)<(?:span|div|table|aside|sup|nav|ul)[^>]*?(?:class="[^"]*(?:mw-editsection|reference|navbox|vertical-navbox|sidebar|catlinks|hatnote|ambox|noprint|metadata|vector-toc|vector-column-start|vector-page-toolbar|mw-portlet-lang)[^"]*"|id="(?:toc|vector-toc|p-lang|p-lang-btn|siteNotice|mw-navigation)")[^>]*>.*?</(?:span|div|table|aside|sup|nav|ul)>"#).unwrap()
 });
 
 static WIKI_SUP_REF_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
@@ -84,12 +110,20 @@ impl WikipediaAdapter {
             .unwrap_or_else(|| "Wikipedia Article".to_string());
 
         // 2. Extract and clean Content
-        let body_html = if let Some(content_el) = doc.select(&WIKI_CONTENT_SELECTOR).next() {
-            preprocess_wikipedia_html(&content_el.html())
+        let raw_body = if let Some(content_el) = doc.select(&WIKI_CONTENT_SELECTOR).next() {
+            content_el.html()
         } else {
             let cleaned = crate::cleaner::clean_html(raw_html, Some(url.as_str()), options.mode)?;
-            preprocess_wikipedia_html(&cleaned.html)
+            cleaned.html
         };
+
+        let mut body_html = preprocess_wikipedia_html(&raw_body);
+
+        if let Some(ref rem_sel) = options.remove_selector {
+            if let Ok(pruned) = crate::cleaner::prune_unwanted_selectors(&body_html, rem_sel) {
+                body_html = pruned;
+            }
+        }
 
         // 3. Convert to requested format
         let content = match options.format {
@@ -174,7 +208,12 @@ impl PlatformAdapter for WikipediaAdapter {
 
 /// Preprocesses Wikipedia HTML: strips edit buttons, reference citations, navboxes, and TOC.
 pub fn preprocess_wikipedia_html(raw_html: &str) -> String {
-    let s1 = WIKI_SUP_REF_RE.replace_all(raw_html, "");
+    let noise_joined = WIKI_NOISE_SELECTORS.join(", ");
+    let cleaned = match crate::cleaner::prune_unwanted_selectors(raw_html, &noise_joined) {
+        Ok(h) => h,
+        Err(_) => raw_html.to_string(),
+    };
+    let s1 = WIKI_SUP_REF_RE.replace_all(&cleaned, "");
     let s2 = WIKI_EDIT_SECTION_RE.replace_all(&s1, "");
     WIKI_NOISE_RE.replace_all(&s2, "").to_string()
 }
@@ -232,6 +271,44 @@ mod tests {
         assert!(!cleaned.contains("[edit]"));
         assert!(!cleaned.contains("Navigation box junk"));
         assert!(!cleaned.contains("Table of contents"));
+    }
+
+    #[test]
+    fn test_wikipedia_vector_2022_toc_and_languages_noise_stripping() {
+        let sample = r##"
+            <div id="content" class="mw-body">
+                <h1 id="firstHeading">Rust (programming language)</h1>
+                <div class="vector-column-start">
+                    <nav class="vector-toc">
+                        <button>Toggle the table of contents</button>
+                        <ul><li>1 History</li></ul>
+                    </nav>
+                    <div id="p-lang" class="mw-portlet-lang">
+                        <button id="p-lang-btn">59 languages</button>
+                        <ul><li>Deutsch</li><li>Français</li></ul>
+                    </div>
+                </div>
+                <div id="bodyContent">
+                    <div id="mw-content-text">
+                        <div class="mw-parser-output">
+                            <p>Rust is a general-purpose programming language emphasizing performance and safety.</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        "##;
+
+        let adapter = WikipediaAdapter::new();
+        let u = Url::parse("https://en.wikipedia.org/wiki/Rust_(programming_language)").unwrap();
+        let options = ExtractionOptions::default();
+        let doc = adapter.parse_article(sample, &u, &options).unwrap();
+
+        assert!(!doc.content.contains("Toggle the table of contents"));
+        assert!(!doc.content.contains("59 languages"));
+        assert!(!doc.content.contains("Deutsch"));
+        assert!(doc
+            .content
+            .contains("Rust is a general-purpose programming language"));
     }
 
     #[test]

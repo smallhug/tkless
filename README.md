@@ -360,10 +360,10 @@ tkless research "Rust Web 框架技术选型 Axum vs Actix-web" -f markdown -o .
 tkless research "大模型上下文压缩与长文本推理优化" --max-pages 10 --max-tokens 10000 -f json
 
 # 27. 🎯 结构化实体提取 Schema (Schema-Driven Entity Extraction，极简声明式字段抽取与 Token 极致压缩)
-# 通过内联 JSON 或模式文件，直接从 DOM 抽取指定字段与属性，直出纯净结构化 JSON 或 Markdown 附录：
-tkless "https://store.example.com/item/1" --schema '{"fields":{"title":"h1","price":".price-val | number","in_stock":".stock | bool","reviews":".review-count | int","link":"a@href"}}' -f json
-# 支持 items_selector 列表循环模式，一次性抽取整页商品卡片或文章列表：
-tkless "https://news.example.com/" --schema '{"items_selector":".post-item","fields":{"title":"h2","url":"a@href","author":".author"}}' -f json
+# 通过极简平铺 JSON 直接从 DOM 抽取指定字段与属性，直出纯净结构化 JSON 或 Markdown 附录：
+tkless "https://store.example.com/item/1" --schema '{"title":"h1","price":".price-val | number","in_stock":".stock | bool","link":"a@href"}' -f json
+# 支持 items_selector 列表循环模式，一次性抽取整页商品卡片或文章列表（亦完美兼容 --scaffold 自动生成的模板直接回灌）：
+tkless "https://news.example.com/" --schema '{"items_selector":".post-item","title":"h2","url":"a@href","author":".author"}' -f json
 
 # 28. 🔍 页面 DOM 结构骨架分析与 Schema 自动脚手架 (Scaffolding，超低 Token 探索未知页面)
 # 自动探测目标页面内的重复列表容器 (如商品、文章、卡片) 并输出就绪的 JSON Schema 模版：
@@ -428,6 +428,12 @@ tkless search "技术资讯" --mobile --fetch-content
 # 40. 📈 Token 经济性与管道耗时基准遥测报告 (--stats)
 # 输出完整的管道耗时（获取、清洗、转 Markdown、分词）与实测 Token 节省率、降噪比指标：
 tkless "https://example.com/long-article" --stats
+
+# 41. 🩺 运行环境与核心服务自检诊断 (tkless doctor)
+# 自检系统 Chrome/Edge 无头浏览器路径、本地缓存目录读写权限、核心网络服务 (Bing, DuckDuckGo, Bilibili) 连通性：
+tkless doctor
+# 也可搭配代理参数测试代理网络环境：
+tkless doctor -p http://127.0.0.1:7890
 ```
 
 ---

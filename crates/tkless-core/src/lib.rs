@@ -162,8 +162,8 @@ impl TklessEngine {
             }
         }
 
-        // 1. Attempt platform adapter fast path if enabled
-        if !options.no_adapter {
+        // 1. Attempt platform adapter fast path if enabled (bypass if explicit DOM schema extraction is requested)
+        if !options.no_adapter && options.schema.is_none() {
             if let Some(adapter) = self.adapter_registry.find_adapter(&parsed_url) {
                 debug!(
                     platform = adapter.name(),
@@ -217,6 +217,61 @@ impl TklessEngine {
                                     ExtractedTable::format_tables(tables, options.table_format);
                             }
                         }
+
+                        // Ensure extract_links is honored on adapter pages
+                        if options.extract_links {
+                            let parsed_doc = Html::parse_document(&doc.content);
+                            let l = extract_links(&parsed_doc, Some(url));
+                            if !l.is_empty() {
+                                doc.links = Some(l.clone());
+                                if (options.format == OutputFormat::Markdown
+                                    || options.format == OutputFormat::Text)
+                                    && !doc.content.contains("### 页面链接清单 (Links)")
+                                {
+                                    doc.content.push_str("\n\n### 页面链接清单 (Links)\n\n");
+                                    for link in l {
+                                        let text = if link.text.is_empty() {
+                                            "链接"
+                                        } else {
+                                            &link.text
+                                        };
+                                        doc.content.push_str(&format!(
+                                            "- [{}]({})\n",
+                                            text.replace(['\r', '\n'], " ").trim(),
+                                            link.url
+                                        ));
+                                    }
+                                }
+                            }
+                        }
+
+                        // Ensure extract_images is honored on adapter pages
+                        if options.extract_images {
+                            let parsed_doc = Html::parse_document(&doc.content);
+                            let imgs = extract_images(&parsed_doc, Some(url));
+                            if !imgs.is_empty() {
+                                doc.images = Some(imgs.clone());
+                                if (options.format == OutputFormat::Markdown
+                                    || options.format == OutputFormat::Text)
+                                    && !doc.content.contains("### 页面图片资产 (Images)")
+                                {
+                                    doc.content.push_str("\n\n### 页面图片资产 (Images)\n\n");
+                                    for img in imgs {
+                                        let alt = if img.alt.is_empty() {
+                                            "图片"
+                                        } else {
+                                            &img.alt
+                                        };
+                                        doc.content.push_str(&format!(
+                                            "- ![{}]({})\n",
+                                            alt.replace(['\r', '\n'], " ").trim(),
+                                            img.src
+                                        ));
+                                    }
+                                }
+                            }
+                        }
+
                         return Ok(doc);
                     }
                     Err(err) => {
@@ -541,21 +596,11 @@ impl TklessEngine {
             None
         };
 
-        // 2b. Extract structured entities if schema is provided
+        // 2b. Extract structured entities if schema is provided (errors are strictly propagated)
         let entity = if let Some(ref schema_input) = options.schema {
-            match schema::ExtractionSchema::parse(schema_input) {
-                Ok(schema) => match schema::extract_entities(effective_html, &schema, base_url) {
-                    Ok(val) => Some(val),
-                    Err(err) => {
-                        warn!(error = %err, "Schema 实体提取失败");
-                        None
-                    }
-                },
-                Err(err) => {
-                    warn!(error = %err, "解析 Schema 定义失败");
-                    None
-                }
-            }
+            let schema = schema::ExtractionSchema::parse(schema_input)?;
+            let val = schema::extract_entities(effective_html, &schema, base_url)?;
+            Some(val)
         } else {
             None
         };
@@ -579,6 +624,20 @@ impl TklessEngine {
         let mut content = if options.tables_only {
             let table_list = tables.as_deref().unwrap_or(&[]);
             ExtractedTable::format_tables(table_list, options.table_format)
+        } else if let Some(ref ent) = entity {
+            match options.format {
+                OutputFormat::Json => {
+                    serde_json::to_string_pretty(ent).unwrap_or_else(|_| "{}".to_string())
+                }
+                OutputFormat::Markdown => {
+                    let mut s = String::new();
+                    s.push_str("### 结构化实体提取 (Extracted Entity)\n\n```json\n");
+                    s.push_str(&serde_json::to_string_pretty(ent).unwrap_or_default());
+                    s.push_str("\n```\n");
+                    s
+                }
+                _ => serde_json::to_string(ent).unwrap_or_default(),
+            }
         } else {
             match options.format {
                 OutputFormat::Markdown | OutputFormat::Json => {
@@ -647,7 +706,8 @@ impl TklessEngine {
 
         // Append structured entity JSON to Markdown if extracted
         if let Some(ref ent) = entity {
-            if options.format == OutputFormat::Markdown {
+            if options.format == OutputFormat::Markdown && !content.starts_with("# 结构化实体提取")
+            {
                 content.push_str("\n\n### 结构化实体提取 (Extracted Entity)\n\n```json\n");
                 content.push_str(&serde_json::to_string_pretty(ent).unwrap_or_default());
                 content.push_str("\n```\n");

@@ -296,11 +296,11 @@ pub async fn web_search_scoped(
             let (bing_res, ddg_res) = tokio::join!(bing_fut, ddg_fut);
 
             let bing_items = bing_res.unwrap_or_else(|e| {
-                warn!(error = %e, "Bing search failed during multi-engine search");
+                debug!(error = %e, "Bing search failed during multi-engine search");
                 Vec::new()
             });
             let ddg_items = ddg_res.unwrap_or_else(|e| {
-                warn!(error = %e, "DuckDuckGo search failed during multi-engine search");
+                debug!(error = %e, "DuckDuckGo search failed during multi-engine search");
                 Vec::new()
             });
 
