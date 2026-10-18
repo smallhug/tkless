@@ -254,6 +254,48 @@ pub fn extract_links(doc: &Html, base_url_str: Option<&str>) -> Vec<ExtractedLin
     results
 }
 
+/// Formats a list of extracted links into a standard GFM Markdown section.
+pub fn format_links_markdown(links: &[ExtractedLink]) -> String {
+    if links.is_empty() {
+        return String::new();
+    }
+    let mut out = String::from("\n\n## Links\n\n");
+    for link in links {
+        let text = if link.text.is_empty() {
+            "链接"
+        } else {
+            &link.text
+        };
+        out.push_str(&format!(
+            "- [{}]({})\n",
+            text.replace(['\r', '\n'], " ").trim(),
+            link.url
+        ));
+    }
+    out
+}
+
+/// Formats a list of extracted images into a standard GFM Markdown section.
+pub fn format_images_markdown(images: &[ExtractedImage]) -> String {
+    if images.is_empty() {
+        return String::new();
+    }
+    let mut out = String::from("\n\n## Images\n\n");
+    for img in images {
+        let alt = if img.alt.is_empty() {
+            "图片"
+        } else {
+            &img.alt
+        };
+        out.push_str(&format!(
+            "- ![{}]({})\n",
+            alt.replace(['\r', '\n'], " ").trim(),
+            img.src
+        ));
+    }
+    out
+}
+
 /// Extracts all image assets from the document, resolving relative paths against `base_url`
 /// and deduplicating by source URL while preserving appearance order.
 pub fn extract_images(doc: &Html, base_url_str: Option<&str>) -> Vec<ExtractedImage> {

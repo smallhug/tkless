@@ -82,7 +82,10 @@ pub use splitter::{export_sections_to_dir, split_markdown_by_headings, DocumentS
 pub use summarizer::{extract_key_takeaways, summarize_markdown};
 
 use cleaner::{clean_html, extract_selector};
-use extractor::{extract_images, extract_json_ld, extract_links, extract_metadata, extract_tables};
+pub use extractor::{
+    extract_clean_cell_text, extract_images, extract_json_ld, extract_links, extract_metadata,
+    extract_tables, format_images_markdown, format_links_markdown,
+};
 use fetcher::Fetcher;
 use markdown::MarkdownConverter;
 use scraper::Html;
@@ -261,19 +264,7 @@ impl TklessEngine {
                                     || options.format == OutputFormat::Text)
                                     && !doc.content.contains("## Links")
                                 {
-                                    doc.content.push_str("\n\n## Links\n\n");
-                                    for link in extracted {
-                                        let text = if link.text.is_empty() {
-                                            "链接"
-                                        } else {
-                                            &link.text
-                                        };
-                                        doc.content.push_str(&format!(
-                                            "- [{}]({})\n",
-                                            text.replace(['\r', '\n'], " ").trim(),
-                                            link.url
-                                        ));
-                                    }
+                                    doc.content.push_str(&format_links_markdown(&extracted));
                                 }
                             }
                         }
@@ -314,19 +305,8 @@ impl TklessEngine {
                                     || options.format == OutputFormat::Text)
                                     && !doc.content.contains("## Images")
                                 {
-                                    doc.content.push_str("\n\n## Images\n\n");
-                                    for img in extracted_imgs {
-                                        let alt = if img.alt.is_empty() {
-                                            "图片"
-                                        } else {
-                                            &img.alt
-                                        };
-                                        doc.content.push_str(&format!(
-                                            "- ![{}]({})\n",
-                                            alt.replace(['\r', '\n'], " ").trim(),
-                                            img.src
-                                        ));
-                                    }
+                                    doc.content
+                                        .push_str(&format_images_markdown(&extracted_imgs));
                                 }
                             }
                         }
@@ -766,19 +746,7 @@ impl TklessEngine {
                         || options.format == OutputFormat::Text)
                     && !content.contains("## Links")
                 {
-                    content.push_str("\n\n## Links\n\n");
-                    for link in link_list {
-                        let text = if link.text.is_empty() {
-                            "链接"
-                        } else {
-                            &link.text
-                        };
-                        content.push_str(&format!(
-                            "- [{}]({})\n",
-                            text.replace(['\r', '\n'], " ").trim(),
-                            link.url
-                        ));
-                    }
+                    content.push_str(&format_links_markdown(link_list));
                 }
             }
         }
@@ -790,19 +758,7 @@ impl TklessEngine {
                         || options.format == OutputFormat::Text)
                     && !content.contains("## Images")
                 {
-                    content.push_str("\n\n## Images\n\n");
-                    for image in image_list {
-                        let alt = if image.alt.is_empty() {
-                            "图片"
-                        } else {
-                            &image.alt
-                        };
-                        content.push_str(&format!(
-                            "- ![{}]({})\n",
-                            alt.replace(['\r', '\n'], " ").trim(),
-                            image.src
-                        ));
-                    }
+                    content.push_str(&format_images_markdown(image_list));
                 }
             }
         }
