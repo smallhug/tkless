@@ -19,6 +19,7 @@ pub mod fetcher;
 pub mod markdown;
 pub mod mcp;
 pub mod model;
+pub mod research;
 pub mod schema;
 pub mod search;
 pub mod splitter;
@@ -55,6 +56,10 @@ pub use model::{
     ExtractedLink, ExtractedTable, ExtractionMetrics, ExtractionMode, ExtractionOptions,
     FetchOptions, OnTooLarge, OutputFormat, PageDocument, PageMetadata, SearchEngineKind,
     SubtitleLine, TableExportFormat, TokenizerKind, VideoConclusion, VideoQuality,
+};
+pub use research::{
+    deep_research, format_deep_research_markdown, DeepResearchReport, ResearchCitation,
+    ResearchDimension, ResearchOptions, ResearchTelemetry,
 };
 pub use schema::{
     extract_entities, scaffold_dom_skeleton, ExtractionSchema, FieldDef, FieldDetail,
@@ -333,6 +338,9 @@ impl TklessEngine {
             timeout_ms: None,
             user_agent: self.fetcher.options().user_agent.clone(),
             cookie: self.fetcher.resolve_cookie_for_url(parsed_url),
+            block_resources: Some(options.cdp_block_resources),
+            auto_scroll: Some(options.cdp_auto_scroll),
+            scroll_count: Some(5),
         };
         let html = cdp::fetch_html_via_cdp(url, &cdp_opts).await?;
         let mut doc = self.process_html(&html, Some(url), options)?;

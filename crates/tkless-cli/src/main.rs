@@ -295,6 +295,8 @@ async fn run(args: CliArgs) -> Result<()> {
         stats: args.stats,
         remove_selector: args.remove_selector.clone(),
         auto_cdp: args.auto_cdp,
+        cdp_block_resources: !args.cdp_no_block_resources,
+        cdp_auto_scroll: args.cdp_auto_scroll,
         summarize: args.summarize,
     };
 
@@ -672,6 +674,43 @@ async fn run(args: CliArgs) -> Result<()> {
     }
 
     // -------------------------------------------------------------------------
+    // Execution Branch 1.55: Autonomous Multi-Hop Deep Web Research
+    // -------------------------------------------------------------------------
+    if let Some(SubCommand::Research(ref res_args)) = args.command {
+        let mut res_fetch_options = fetch_options.clone();
+        if res_args.proxy.is_some() {
+            res_fetch_options.proxy = res_args.proxy.clone();
+        }
+        res_fetch_options.mobile = args.mobile;
+        let engine = TklessEngine::with_options(res_fetch_options)
+            .context("Failed to initialize TkLess engine for deep research")?;
+
+        let options = tkless_core::ResearchOptions {
+            depth: res_args.depth,
+            breadth: res_args.breadth,
+            max_pages: res_args.max_pages,
+            max_tokens_per_page: res_args.max_tokens_per_page,
+            max_tokens: Some(res_args.max_tokens),
+            engine: res_args.engine.into(),
+            dedup: !res_args.no_dedup,
+            format: res_args.format.into(),
+        };
+
+        let report = tkless_core::deep_research(&engine, &res_args.topic, &options)
+            .await
+            .context("Failed to execute autonomous deep research")?;
+
+        let payload = match res_args.format {
+            CliFormat::Json => serde_json::to_string_pretty(&report)
+                .context("Failed to serialize deep research report to JSON")?,
+            _ => tkless_core::format_deep_research_markdown(&report),
+        };
+
+        output::write_payload(&payload, res_args.output.as_deref())?;
+        return Ok(());
+    }
+
+    // -------------------------------------------------------------------------
     // Execution Branch 1.6: Concurrent Batch URL Fetch & Extraction
     // -------------------------------------------------------------------------
     if let Some(SubCommand::Batch(ref batch_args)) = args.command {
@@ -742,6 +781,8 @@ async fn run(args: CliArgs) -> Result<()> {
             stats: false,
             remove_selector: args.remove_selector.clone(),
             auto_cdp: args.auto_cdp,
+            cdp_block_resources: !args.cdp_no_block_resources,
+            cdp_auto_scroll: args.cdp_auto_scroll,
             summarize: args.summarize,
         });
 
@@ -971,9 +1012,12 @@ async fn run(args: CliArgs) -> Result<()> {
         let cdp_opts = tkless_core::cdp::CdpOptions {
             endpoint: cdp_ep,
             wait_ms: args.cdp_wait_ms.or(Some(1000)),
-            timeout_ms: None,
+            timeout_ms: Some(30_000),
             user_agent: args.user_agent.clone(),
             cookie: engine.fetcher().resolve_cookie_for_url(&parsed_url),
+            block_resources: Some(false),
+            auto_scroll: Some(args.cdp_auto_scroll),
+            scroll_count: Some(5),
         };
         let img_bytes = tkless_core::capture_screenshot_via_cdp(&target, &cdp_opts, None).await?;
         std::fs::write(shot_path, &img_bytes)?;
@@ -1054,6 +1098,9 @@ async fn run(args: CliArgs) -> Result<()> {
                 timeout_ms: None,
                 user_agent: args.user_agent.clone(),
                 cookie: engine.fetcher().resolve_cookie_for_url(&parsed_url),
+                block_resources: Some(!args.cdp_no_block_resources),
+                auto_scroll: Some(args.cdp_auto_scroll),
+                scroll_count: Some(5),
             };
             tkless_core::cdp::fetch_html_via_cdp(&target, &cdp_opts).await?
         } else {

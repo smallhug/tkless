@@ -87,6 +87,13 @@ pub fn get_tool_catalog() -> Vec<ToolCatalogEntry> {
             keywords: &["adapters", "platforms", "bilibili", "zhihu", "wechat", "github"],
             is_core: false,
         },
+        ToolCatalogEntry {
+            name: "deep_research",
+            category: "search",
+            summary: "Autonomous multi-hop web research loop across multiple sub-queries with citation tracking and report synthesis.",
+            keywords: &["research", "deep_research", "investigate", "report", "synthesis", "study", "analysis"],
+            is_core: false,
+        },
         // Specialized Media tools
         ToolCatalogEntry {
             name: "fetch_bilibili_feed",
@@ -313,6 +320,8 @@ pub fn get_available_tools() -> Vec<McpTool> {
                     "cookie_file": { "type": "string", "description": "Path to cookie file" },
                     "cdp_endpoint": { "type": "string", "description": "CDP endpoint for JS rendering (e.g. http://127.0.0.1:9222)" },
                     "cdp_wait_ms": { "type": "integer", "description": "CDP wait time in ms for DOM hydration" },
+                    "cdp_block_resources": { "type": "boolean", "default": true, "description": "Block heavy static resources (images, fonts, media, analytics) in CDP rendering to accelerate page loads by 3-5x" },
+                    "cdp_auto_scroll": { "type": "boolean", "default": false, "description": "Automatically scroll down dynamic / infinite scroll pages in CDP to trigger lazy loading" },
                     "schema": { "type": "string", "description": "Extraction schema JSON or path for structured entity extraction" },
                     "chunk": { "type": "boolean", "default": false, "description": "Segment Markdown into semantic chunks for RAG" },
                     "chunk_size": { "type": "integer", "default": 500, "description": "Target token size per chunk" },
@@ -429,6 +438,30 @@ pub fn get_available_tools() -> Vec<McpTool> {
                     "format": { "type": "string", "enum": ["markdown", "json"], "default": "markdown", "description": "Output format" }
                 },
                 "required": ["query"]
+            }),
+        },
+        McpTool {
+            name: "deep_research".to_string(),
+            description: "Autonomous multi-hop deep web research loop. Decomposes complex topics into sub-queries, executes concurrent multi-engine search, tracks citations, and synthesizes a publication-grade research report.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "topic": { "type": "string", "description": "Research question, thesis, or technical topic" },
+                    "depth": { "type": "integer", "default": 2, "description": "Research hop depth (1: single-hop broad search, 2: two-hop citation tracking)" },
+                    "breadth": { "type": "integer", "default": 3, "description": "Number of research dimensions/sub-queries to explore (2-5)" },
+                    "max_pages": { "type": "integer", "default": 8, "description": "Maximum number of total pages to analyze (3-20)" },
+                    "max_tokens_per_page": { "type": "integer", "default": 1500, "description": "Max tokens per webpage during deep analysis" },
+                    "max_tokens": { "type": "integer", "default": 8000, "description": "Overall token budget for the compiled research report" },
+                    "engine": {
+                        "type": "string",
+                        "enum": ["all", "bing", "duckduckgo"],
+                        "default": "all",
+                        "description": "Search engine backend"
+                    },
+                    "dedup": { "type": "boolean", "default": true, "description": "Filter near-duplicate pages via SimHash" },
+                    "format": { "type": "string", "enum": ["markdown", "json"], "default": "markdown", "description": "Output presentation format" }
+                },
+                "required": ["topic"]
             }),
         },
         McpTool {

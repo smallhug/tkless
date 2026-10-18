@@ -345,6 +345,19 @@ tkless crawl "https://docs.rs/tokio/sitemap.xml" --sitemap --max-pages 50 -o ./t
 tkless "https://zhuanlan.zhihu.com/p/123456" --cdp http://127.0.0.1:9222 --cdp-wait 1000
 # 与搜索即抓取、整站爬虫协同使用：
 tkless search "Rust 教程" --fetch-content --cdp http://127.0.0.1:9222
+# ⚡ CDP 性能飞跃与动态懒加载扩展 (Direction 3)：
+# - 默认启用网络层静态重资产与跟踪器拦截 (自动阻断图片、字体、音视频、分析脚本)，提速 3~5 倍
+# - 支持 --cdp-auto-scroll 自动平滑滚动加载动态无限滚动页面 (如推特/微博/小红书)，完成后自动提取：
+tkless "https://example.com/dynamic-feed" --cdp http://127.0.0.1:9222 --cdp-auto-scroll
+# 若需要完整视觉资产加载，可通过 --cdp-no-block-resources 禁用拦截：
+tkless "https://example.com/gallery" --cdp http://127.0.0.1:9222 --cdp-no-block-resources
+
+# 27. 🔬 多跳自主深度网络调研流水线 (Autonomous Deep Research Loop，Direction 4)
+# 自动化研报闭环：自动拆解维度 -> 跨引擎并发检索 (Hop-1) -> 权威正文提取 -> 引文链接跟踪追踪 (Hop-2) -> 汇编出版级 Markdown 报告
+tkless research "Polars 与 Pandas 2.0 架构原理与内存性能对比" --depth 2 --breadth 3 --max-pages 8
+# 导出为结构化 JSON 供下游 LLM 或工作流使用，或保存为完整长篇综述报告：
+tkless research "Rust Web 框架技术选型 Axum vs Actix-web" -f markdown -o ./rust_web_research.md
+tkless research "大模型上下文压缩与长文本推理优化" --max-pages 10 --max-tokens 10000 -f json
 
 # 27. 🎯 结构化实体提取 Schema (Schema-Driven Entity Extraction，极简声明式字段抽取与 Token 极致压缩)
 # 通过内联 JSON 或模式文件，直接从 DOM 抽取指定字段与属性，直出纯净结构化 JSON 或 Markdown 附录：
@@ -490,7 +503,7 @@ AI Agent（如 **Claude Desktop**、**Cursor**、**Windsurf** 等）可以直接
 
 ---
 
-### 3. 全量 MCP 工具分类目录 (22 工具矩阵)
+### 3. 全量 MCP 工具分类目录 (23 工具矩阵)
 
 #### 🔍 动态发现元工具 (Dynamic Discovery Meta-Tools，动态模式 Stage 1 常驻)
 | 工具名 | 功能概述 | 核心参数 |
@@ -514,6 +527,7 @@ AI Agent（如 **Claude Desktop**、**Cursor**、**Windsurf** 等）可以直接
 | 工具名 | 功能概述 | 核心参数 |
 |---|---|---|
 | **`web_search`** *(Core)* | 免 API Key 的通用全网搜索（支持 Bing + DuckDuckGo 双引擎并发去重聚合，支持生态定向与 `--fetch-content` 一体化） | `query` (必填), `scope`, `engine` (all/bing/duckduckgo), `fetch_content`, `max_tokens_per_page`, `limit` |
+| **`deep_research`** | 多跳自主深度网络调研流水线（自动拆解维度、跨引擎并发检索、跟踪外部权威引链、汇编出版级综述报告） | `topic` (必填), `depth` (默认 2), `breadth` (默认 3), `max_pages` (默认 8), `max_tokens`, `engine`, `format` |
 | **`search_bilibili`** | 搜索 B站 视频，输出结构化 GFM 表格或 JSON，支持分页与排序（播放/最新/弹幕/收藏） | `keyword` (必填), `page`, `order`, `format` |
 | **`inspect_links`** | 批量探测超链接可达性、HTTP 状态码、延迟与重定向，具备内网 SSRF 拦截防御 | `urls` (必填数组), `concurrency`, `timeout_secs`, `format` |
 | **`list_adapters`** | 列出当前支持的全部 16+ 平台原生适配器、匹配域名与专属优化能力 | `format` (markdown/json) |
