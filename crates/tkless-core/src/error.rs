@@ -55,6 +55,9 @@ pub enum TklessError {
 
     #[error("Search anti-scraping challenge: {0}")]
     SearchAntiScraping(String),
+
+    #[error("PDF extraction error: {0}")]
+    PdfError(String),
 }
 
 impl TklessError {
@@ -66,7 +69,10 @@ impl TklessError {
             Self::HttpStatusError { status, .. } if *status >= 500 => 3,
             Self::HttpStatusError { status, .. } if *status >= 400 => 4,
             Self::HttpStatusError { .. } => 1,
-            Self::CleaningError(_) | Self::ConversionError(_) | Self::EncodingError(_) => 4,
+            Self::CleaningError(_)
+            | Self::ConversionError(_)
+            | Self::EncodingError(_)
+            | Self::PdfError(_) => 4,
             Self::ResponseTooLarge { .. } => 5,
             Self::SsrfBlocked(_) => 6,
             Self::Io(_)

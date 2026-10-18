@@ -434,6 +434,12 @@ tkless "https://example.com/long-article" --stats
 tkless doctor
 # 也可搭配代理参数测试代理网络环境：
 tkless doctor -p http://127.0.0.1:7890
+
+# 42. 📄 原生 PDF 文档智能解析与 Markdown 重排 (Native PDF to LLM Markdown)
+# 纯 Rust 原生零外部 C 库依赖，支持远程 URL、本地 .pdf 文件与 stdin 输入流自动识别与排版提纯：
+tkless "https://arxiv.org/pdf/1706.03762.pdf" -o ./transformer_paper.md
+tkless ./research_paper.pdf --chunk --chunk-size 500
+cat ./annual_report.pdf | tkless - --summarize
 ```
 
 ---
@@ -522,7 +528,7 @@ AI Agent（如 **Claude Desktop**、**Cursor**、**Windsurf** 等）可以直接
 #### 📄 内容抓取与知识汇编 (Content)
 | 工具名 | 功能概述 | 核心参数 |
 |---|---|---|
-| **`fetch_webpage`** *(Core)* | 全网网页抓取与清洗为纯净 Markdown/JSON，支持平台适配器、CSS 定向、Token 预算、CDP 浏览器渲染与表格独立提取 | `url` (必填), `format`, `mode`, `selector`, `schema`, `chunk`, `tables_only`, `table_format`, `mobile`, `stats`, `proxy` |
+| **`fetch_webpage`** *(Core)* | 全网网页/PDF论文抓取与清洗为纯净 Markdown/JSON，支持平台适配器、CSS 定向、Token 预算、CDP 浏览器渲染与表格独立提取 | `url` (必填), `format`, `mode`, `selector`, `schema`, `chunk`, `tables_only`, `table_format`, `mobile`, `stats`, `proxy` |
 | **`batch_fetch_webpages`** | 多协程并发抓取多网页流水线，聚合返回清洗后的 Markdown 或 JSON 文档数组 | `urls` (必填), `concurrency` (默认 5), `format`, `max_tokens_per_page`, `selector`, `schema` |
 | **`crawl_site`** | 整站递归爬取与知识库汇编，支持 Sitemap、深度遍历、SimHash 去重与 TOC 目录构建 | `seed_url` (必填), `max_depth`, `max_pages`, `sitemap`, `dedup`, `same_path_prefix`, `max_tokens` |
 | **`clean_html`** | 本地直接清洗已有 HTML 字符串，剥离广告脚本噪点，执行 Schema 实体提取或转为 Markdown | `html` (必填), `base_url`, `format`, `mode`, `selector`, `schema`, `chunk`, `tables_only` |
