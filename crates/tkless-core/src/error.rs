@@ -58,6 +58,9 @@ pub enum TklessError {
 
     #[error("PDF extraction error: {0}")]
     PdfError(String),
+
+    #[error("Search engine error: {0}")]
+    SearchEngineError(String),
 }
 
 impl TklessError {
@@ -81,6 +84,7 @@ impl TklessError {
             | Self::CdpError(_)
             | Self::SchemaError(_)
             | Self::SearchAntiScraping(_)
+            | Self::SearchEngineError(_)
             | Self::McpError { .. } => 1,
         }
     }

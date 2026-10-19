@@ -29,9 +29,10 @@ pub mod token;
 
 pub use adapters::{
     format_adapters_markdown, AdapterInfo, AdapterRegistry, ArxivAdapter, BaikeAdapter,
-    BilibiliAdapter, CsdnAdapter, GithubAdapter, HuggingfaceAdapter, JuejinAdapter, MediumAdapter,
-    PlatformAdapter, RedditAdapter, StackoverflowAdapter, SubstackAdapter, V2exAdapter,
-    WechatAdapter, WikipediaAdapter, XiaohongshuAdapter, ZhihuAdapter,
+    BilibiliAdapter, CsdnAdapter, DiscourseAdapter, GithubAdapter, HackerNewsAdapter,
+    HuggingfaceAdapter, JuejinAdapter, MediumAdapter, PapersWithCodeAdapter, PlatformAdapter,
+    RedditAdapter, StackoverflowAdapter, SubstackAdapter, TwitterAdapter, V2exAdapter,
+    WechatAdapter, WikipediaAdapter, XiaohongshuAdapter, YoutubeAdapter, ZhihuAdapter,
 };
 pub use auth::{
     execute_login_flow, generate_qrcode, poll_qrcode_status, LoginOptions, QrPollStatus,
@@ -72,10 +73,13 @@ pub use schema::{
 };
 pub use search::{
     format_search_fetch_markdown, format_search_results_markdown, merge_and_dedup_search_results,
-    normalize_url_for_dedup, parse_duckduckgo_html, search_baike, search_bing,
-    search_bing_with_options, search_duckduckgo, search_duckduckgo_with_options,
-    search_wechat_sogou, unwrap_duckduckgo_url, web_search, web_search_and_fetch,
-    web_search_and_fetch_scoped, web_search_scoped, web_search_with_engine,
+    merge_multi_engine_search_results, normalize_url_for_dedup, parse_brave_html, parse_brave_json,
+    parse_duckduckgo_html, parse_google_html, parse_searxng_json, parse_yandex_html, search_baike,
+    search_bing, search_bing_with_options, search_brave, search_brave_with_options,
+    search_duckduckgo, search_duckduckgo_with_options, search_google, search_google_with_options,
+    search_searxng, search_searxng_with_options, search_wechat_sogou, search_yandex,
+    search_yandex_with_options, unwrap_duckduckgo_url, unwrap_google_url, web_search,
+    web_search_and_fetch, web_search_and_fetch_scoped, web_search_scoped, web_search_with_engine,
     web_search_with_options, SearchFetchItem, SearchResultItem,
 };
 pub use splitter::{export_sections_to_dir, split_markdown_by_headings, DocumentSection};

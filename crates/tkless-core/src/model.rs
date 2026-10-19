@@ -46,13 +46,21 @@ pub enum OnTooLarge {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SearchEngineKind {
-    /// Concurrent multi-engine search (Bing + DuckDuckGo) with deduplication & merged ranking
+    /// Concurrent multi-engine search across enabled engines with deduplication & merged ranking
     #[default]
     All,
     /// Microsoft Bing search only
     Bing,
     /// DuckDuckGo search only
     DuckDuckGo,
+    /// Brave Search (Web scraping or official REST API)
+    Brave,
+    /// Yandex Search (Web scraping)
+    Yandex,
+    /// SearXNG metasearch engine (REST JSON API)
+    Searxng,
+    /// Google Search (Web scraping)
+    Google,
 }
 
 impl SearchEngineKind {
@@ -61,6 +69,10 @@ impl SearchEngineKind {
             SearchEngineKind::All => "all",
             SearchEngineKind::Bing => "bing",
             SearchEngineKind::DuckDuckGo => "duckduckgo",
+            SearchEngineKind::Brave => "brave",
+            SearchEngineKind::Yandex => "yandex",
+            SearchEngineKind::Searxng => "searxng",
+            SearchEngineKind::Google => "google",
         }
     }
 }

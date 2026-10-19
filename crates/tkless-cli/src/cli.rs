@@ -118,7 +118,7 @@ impl From<CliTokenizer> for tkless_core::model::TokenizerKind {
 /// Search engine provider choices.
 #[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum CliSearchEngine {
-    /// Concurrent multi-engine search (Bing + DuckDuckGo) with deduplication & merged ranking
+    /// Concurrent multi-engine search across enabled engines with deduplication & merged ranking
     #[default]
     All,
     /// Microsoft Bing search only
@@ -126,6 +126,18 @@ pub enum CliSearchEngine {
     /// DuckDuckGo search only
     #[value(name = "duckduckgo", alias = "ddg", alias = "duck-duck-go")]
     DuckDuckGo,
+    /// Brave Search (Web scraping or official REST API)
+    #[value(name = "brave", alias = "brave-search")]
+    Brave,
+    /// Yandex Search (Web scraping)
+    #[value(name = "yandex")]
+    Yandex,
+    /// SearXNG metasearch engine (REST JSON API)
+    #[value(name = "searxng", alias = "searx")]
+    Searxng,
+    /// Google Search (Web scraping)
+    #[value(name = "google")]
+    Google,
 }
 
 impl From<CliSearchEngine> for tkless_core::model::SearchEngineKind {
@@ -134,6 +146,10 @@ impl From<CliSearchEngine> for tkless_core::model::SearchEngineKind {
             CliSearchEngine::All => tkless_core::model::SearchEngineKind::All,
             CliSearchEngine::Bing => tkless_core::model::SearchEngineKind::Bing,
             CliSearchEngine::DuckDuckGo => tkless_core::model::SearchEngineKind::DuckDuckGo,
+            CliSearchEngine::Brave => tkless_core::model::SearchEngineKind::Brave,
+            CliSearchEngine::Yandex => tkless_core::model::SearchEngineKind::Yandex,
+            CliSearchEngine::Searxng => tkless_core::model::SearchEngineKind::Searxng,
+            CliSearchEngine::Google => tkless_core::model::SearchEngineKind::Google,
         }
     }
 }
@@ -915,13 +931,13 @@ pub struct ResearchSubArgs {
     )]
     pub max_tokens: usize,
 
-    /// Search engine provider: all (concurrent Bing + DuckDuckGo, default), bing, duckduckgo (ddg)
+    /// Search engine provider: all (default), bing, duckduckgo (ddg), brave, yandex, searxng, google
     #[arg(
         short = 'e',
         long = "engine",
         value_enum,
         default_value_t = CliSearchEngine::All,
-        help = "Search engine provider: all (default), bing, duckduckgo"
+        help = "Search engine provider: all (default), bing, duckduckgo, brave, yandex, searxng, google"
     )]
     pub engine: CliSearchEngine,
 
@@ -1148,15 +1164,23 @@ pub struct SearchSubArgs {
     )]
     pub baike: bool,
 
-    /// Search engine provider: all (concurrent Bing + DuckDuckGo, default), bing, duckduckgo (ddg)
+    /// Search engine provider: all (default), bing, duckduckgo (ddg), brave, yandex, searxng, google
     #[arg(
         short = 'e',
         long = "engine",
         value_enum,
         default_value_t = CliSearchEngine::All,
-        help = "Search engine provider: all (concurrent Bing + DuckDuckGo, default), bing, duckduckgo"
+        help = "Search engine provider: all (default), bing, duckduckgo, brave, yandex, searxng, google"
     )]
     pub engine: CliSearchEngine,
+
+    /// 自定义 SearXNG 聚合搜索引擎实例 URL (例如 https://searx.be 或私有部署端点)
+    #[arg(long = "searxng-url", value_name = "URL")]
+    pub searxng_url: Option<String>,
+
+    /// Brave Search 官方 API Key (亦可读取环境变量 BRAVE_API_KEY)
+    #[arg(long = "brave-api-key", value_name = "KEY")]
+    pub brave_api_key: Option<String>,
 
     /// Fetch and extract full cleaned content for each search result in parallel
     #[arg(
