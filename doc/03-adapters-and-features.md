@@ -1,17 +1,22 @@
 # 03 - 平台适配器矩阵与功能特性实战手册
 
-本文档是 TkLess 的全量功能特性、15+ 平台适配器与 CLI 命令行使用手册，旨在为开发者与 AI Agent 管道集成提供完整的参考标准。
+本文档是 TkLess 的全量功能特性、21+ 平台适配器与 CLI 命令行使用手册，旨在为开发者与 AI Agent 管道集成提供完整的参考标准。
 > **Spend less tokens, perceive more web.**
 
 ---
 
-## 1. 平台专属适配器矩阵 (15+ Platforms)
+## 1. 平台专属适配器矩阵 (21+ Platforms)
 
 TkLess 内置自动化平台识别调度器，当输入的 URL 命中受支持的主流平台时，会自动激活专属的数据提取与降噪策略：
 
 | 平台名称 | 匹配域名规则 | 核心支持能力与专属选项 |
 | :--- | :--- | :--- |
 | **哔哩哔哩 (Bilibili)** | `bilibili.com`, `b23.tv` | - 提取 CC 官方/AI 字幕轨 (`--bili-sub`)<br>- 提取 AI 视频大纲总结 (`--bili-sum`)<br>- 提取时间轴弹幕表 (`--bili-dm`)<br>- 提取高赞精选热评 (`--bili-cm`)<br>- 视频与高清封面下载 (`--bili-dl`, `--bili-dl-cover`) |
+| **YouTube** | `youtube.com`, `youtu.be` | - 原生多语言字幕轨提纯 (`timedtext` 格式)<br>- 视频章节目录与时间戳 (Chapters)<br>- 频道名称、发布时间、时长与播放量元数据<br>- 视频简介提纯与 Markdown 结构化呈现 |
+| **Hacker News** | `news.ycombinator.com` | - Top / 首页 30 条极客资讯榜单抽取<br>- 讨论帖官方 Firebase API + HTML 双通道<br>- 层级缩进评论树 (Comment Tree) 递归提取与清洗 |
+| **Discourse / linux.do** | `linux.do`, `users.rust-lang.org`, `community.openai.com` 等 | - linux.do 技术社区深度适配<br>- 原生 `/t/{id}.json` REST API 免无头浏览器直出<br>- 提取主楼正文、楼层回复、点赞量、分类与标签 |
+| **X (Twitter)** | `x.com`, `twitter.com` | - 免鉴权官方 Syndication API 接口（抗封锁、零 API Key）<br>- 单推文、长推文讨论串 (Threads) 提取<br>- 高清图集/视频媒体附件与引用推文 (Quoted Tweet) 嵌套解析 |
+| **Papers With Code** | `paperswithcode.com` | - 论文 Abstract 摘要与作者列表提取<br>- arXiv 原文与直接 PDF 下载链接<br>- GitHub 开源实现与 Stars 关注度表格<br>- SOTA 基准评测结果表格结构化呈现 |
 | **知乎 (Zhihu)** | `zhihu.com`, `zhuanlan.zhihu.com` | - 问题、回答、想法、专栏文章高保真纯净抓取<br>- 防外链重定向拦截解包（还原真实目标 URL）<br>- 自动替换高清原图与 LaTeX 数学公式标准化<br>- 智能探测知乎安全验证码与反爬挑战 |
 | **微信公众号 (WeChat)** | `mp.weixin.qq.com` | - 自动解析 `data-src` 懒加载真实高清图片<br>- 提取精准作者名与发布时间戳<br>- 智能识别“该内容已被发布者删除”与反爬风控页面 |
 | **小红书 (Xiaohongshu)** | `xiaohongshu.com`, `xhslink.com` | - 提取笔记正文、话题标签与发布者信息<br>- 自动提取高清无水印多图画廊列表 |

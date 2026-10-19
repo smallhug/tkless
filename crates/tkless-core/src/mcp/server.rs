@@ -972,6 +972,10 @@ impl McpServer {
         let engine = match args.get("engine").and_then(|v| v.as_str()) {
             Some("bing") => SearchEngineKind::Bing,
             Some("duckduckgo") | Some("ddg") => SearchEngineKind::DuckDuckGo,
+            Some("brave") => SearchEngineKind::Brave,
+            Some("yandex") => SearchEngineKind::Yandex,
+            Some("searxng") | Some("searx") => SearchEngineKind::Searxng,
+            Some("google") => SearchEngineKind::Google,
             _ => SearchEngineKind::All,
         };
         let scope = args.get("scope").and_then(|v| v.as_str()).unwrap_or("all");
@@ -1142,9 +1146,15 @@ impl McpServer {
                 }
             });
 
+            let auto_cdp = args
+                .get("auto_cdp")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+
             let options = ExtractionOptions {
                 cdp_endpoint,
                 cdp_wait_ms,
+                auto_cdp,
                 schema,
                 ..Default::default()
             };
@@ -1257,6 +1267,10 @@ impl McpServer {
         let engine = match args.get("engine").and_then(|v| v.as_str()) {
             Some("bing") => SearchEngineKind::Bing,
             Some("duckduckgo") | Some("ddg") => SearchEngineKind::DuckDuckGo,
+            Some("brave") => SearchEngineKind::Brave,
+            Some("yandex") => SearchEngineKind::Yandex,
+            Some("searxng") | Some("searx") => SearchEngineKind::Searxng,
+            Some("google") => SearchEngineKind::Google,
             _ => SearchEngineKind::All,
         };
         let dedup = args.get("dedup").and_then(|v| v.as_bool()).unwrap_or(true);

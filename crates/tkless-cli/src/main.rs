@@ -423,6 +423,12 @@ async fn run(args: CliArgs) -> Result<()> {
     // Execution Branch 1.5: Zero-API-Key Web Search
     // -------------------------------------------------------------------------
     if let Some(SubCommand::Search(ref search_args)) = args.command {
+        if let Some(ref url) = search_args.searxng_url {
+            std::env::set_var("SEARXNG_URL", url);
+        }
+        if let Some(ref key) = search_args.brave_api_key {
+            std::env::set_var("BRAVE_API_KEY", key);
+        }
         let mut search_fetch_options = fetch_options.clone();
         if search_args.proxy.is_some() {
             search_fetch_options.proxy = search_args.proxy.clone();

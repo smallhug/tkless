@@ -5,7 +5,46 @@
 
 ---
 
-## [0.4.0] - 2026-10-18
+## [Unreleased] - 2026-10-19
+
+### 🌟 核心突破与重大更新
+
+#### 1. 全球化核心平台适配器扩充 (21+ 原生平台矩阵)
+- **YouTube 深度适配器 (`tkless-core::adapters::youtube`)**：
+  - 自动识别并解析视频标准地址、短链接 (`youtu.be`) 与 Shorts 短视频；
+  - 提取视频元数据（标题、频道作者、发布时间、时长、播放量与简介提纯）；
+  - 智能提取视频章节时间戳（Chapters）；
+  - 深度解析原生多语言字幕轨（`timedtext` XML/JSON3），结构化为带精确时间标签的 Markdown 文本实录。
+- **Hacker News 极客社区适配器 (`tkless-core::adapters::hackernews`)**：
+  - 官方 Firebase REST API + HTML 双通道支持；
+  - 抽取 Top 30 极客资讯榜单（排名、标题、直达链接、得分与作者）；
+  - 提取讨论帖正文与递归层级缩进评论树（Comment Tree）。
+- **Discourse 通用引擎矩阵 / linux.do 适配器 (`tkless-core::adapters::discourse`)**：
+  - 原生适配 `linux.do` 论坛及全球主流 Discourse 技术社区（`users.rust-lang.org`、`community.openai.com` 等）；
+  - 优先调用原生 `/t/{id}.json` REST API 零无头浏览器直出，遇风控挑战时平滑回退至 HTML 提取；
+  - 提纯主楼正文、楼层回复、点赞互动与完整代码块。
+- **X / Twitter 适配器 (`tkless-core::adapters::twitter`)**：
+  - 基于 Twitter 官方只读 Syndication API，免登录、免 API Key、抗风控挑战；
+  - 提取单推文正文、高分辨率多图与视频、引用推文（Quoted Tweet）嵌套卡片及互动指标。
+- **Papers With Code 学术与代码适配器 (`tkless-core::adapters::paperswithcode`)**：
+  - 提取学术论文 Abstract 摘要与作者列表；
+  - 自动提取 arXiv 原文直达链接与 PDF 下载地址；
+  - 抽取官方/社区 GitHub 开源实现与 Stars 关注度；
+  - 结构化提取 SOTA Benchmark 基准评测结果表格。
+
+#### 2. 多源搜索引擎生态扩展 (Brave / Yandex / SearXNG / Google)
+- **Brave Search 全球独立检索 (`search_brave`)**：
+  - 支持官方 `BRAVE_API_KEY` 高速 REST API，无 Key 时自动切换为 Web HTML 结果解析；
+  - 支持 auto-CDP 验证码挑战容灾。
+- **Yandex 独立搜索引擎 (`search_yandex`)**：
+  - 支持 Yandex Web 搜索结果解析，覆盖泛欧与技术正文，配备 SmartCaptcha 防爬感知。
+- **SearXNG 聚合元搜索引擎 (`search_searxng`)**：
+  - 支持通过环境变量 `SEARXNG_URL` 或 CLI 参数 `--searxng-url` 指定私有化实例（默认回退 `https://searx.be`）；
+  - 直接对接标准 JSON API，提供零追踪、高保真的纯净搜索数据流。
+- **Google 搜索源 (`search_google`)**：
+  - 支持 Google 网页搜索结果结构化解析与重定向解包（`unwrap_google_url`）。
+- **多引擎并发轮询聚合 (`merge_multi_engine_search_results`)**：
+  - 升级 `SearchEngineKind::All`，支持在 Bing、DuckDuckGo、Brave 等多个可用引擎间并发查询，基于 URL 规范化与 SimHash 汉明距离双重去重，全面提升信息覆盖率与召回准确度。
 
 ### 🌟 核心突破与重大更新
 

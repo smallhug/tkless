@@ -14,6 +14,8 @@ static BING_TITLE_SELECTOR: LazyLock<Selector> =
 static BING_SNIPPET_SELECTOR: LazyLock<Selector> = LazyLock::new(|| {
     Selector::parse(".b_caption p, .b_algoSlug, .b_snippet, .b_lineclamp2, .b_lineclamp3, .b_lineclamp4, .b_paractl").unwrap()
 });
+static BING_NEXT_PAGE_RE: LazyLock<regex::Regex> =
+    LazyLock::new(|| regex::Regex::new(r#"href="(/search\?[^"]*first=11[^"]*)""#).unwrap());
 
 // DuckDuckGo Selectors
 static DDG_ITEM_SELECTOR: LazyLock<Selector> =
@@ -22,6 +24,45 @@ static DDG_TITLE_SELECTOR: LazyLock<Selector> =
     LazyLock::new(|| Selector::parse("a.result__a").unwrap());
 static DDG_SNIPPET_SELECTOR: LazyLock<Selector> =
     LazyLock::new(|| Selector::parse("a.result__snippet, .result__snippet").unwrap());
+
+// Brave Search Selectors
+static BRAVE_ITEM_SELECTOR: LazyLock<Selector> = LazyLock::new(|| {
+    Selector::parse("div.snippet[data-type='web'], div#results div.snippet, div.snippet, div.fdb")
+        .unwrap()
+});
+static BRAVE_TITLE_SELECTOR: LazyLock<Selector> = LazyLock::new(|| {
+    Selector::parse("a.heading-serpresult, .title, a.h4, .snippet-title a, h2 a").unwrap()
+});
+static BRAVE_SNIPPET_SELECTOR: LazyLock<Selector> = LazyLock::new(|| {
+    Selector::parse(".snippet-description, .snippet-content, .generic-desc, p.snippet-description")
+        .unwrap()
+});
+
+// Yandex Selectors
+static YANDEX_ITEM_SELECTOR: LazyLock<Selector> = LazyLock::new(|| {
+    Selector::parse("li.serp-item, .serp-list .serp-item, div.serp-item").unwrap()
+});
+static YANDEX_TITLE_SELECTOR: LazyLock<Selector> = LazyLock::new(|| {
+    Selector::parse("h2.OrganicTitle a, a.OrganicTitle-Link, h2 a, .organic__url").unwrap()
+});
+static YANDEX_SNIPPET_SELECTOR: LazyLock<Selector> = LazyLock::new(|| {
+    Selector::parse(".OrganicText, .organic__text, .extended-text, .text-container").unwrap()
+});
+
+// Google Selectors
+static GOOGLE_ITEM_SELECTOR: LazyLock<Selector> = LazyLock::new(|| {
+    Selector::parse("div.g, div.tF2Cxc, div.MjjYud, div[data-hveid], div.Ww4FFb").unwrap()
+});
+static GOOGLE_TITLE_SELECTOR: LazyLock<Selector> =
+    LazyLock::new(|| Selector::parse("h3, a > h3, a.DKV0Md, div[role='heading']").unwrap());
+static GOOGLE_LINK_SELECTOR: LazyLock<Selector> =
+    LazyLock::new(|| Selector::parse("a:has(h3), a[href]").unwrap());
+static GOOGLE_SNIPPET_SELECTOR: LazyLock<Selector> = LazyLock::new(|| {
+    Selector::parse(
+        "div.VwiC3b, div[data-sncf], .yXK7lf, span.aCOpRe, div[style*='-webkit-line-clamp']",
+    )
+    .unwrap()
+});
 
 /// Structured web search result item with provider attribution.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -292,8 +333,10 @@ pub async fn web_search_scoped(
                 search_bing_with_options(client, clean_query, limit, cdp_options, auto_cdp);
             let ddg_fut =
                 search_duckduckgo_with_options(client, clean_query, limit, cdp_options, auto_cdp);
+            let brave_fut =
+                search_brave_with_options(client, clean_query, limit, cdp_options, auto_cdp);
 
-            let (bing_res, ddg_res) = tokio::join!(bing_fut, ddg_fut);
+            let (bing_res, ddg_res, brave_res) = tokio::join!(bing_fut, ddg_fut, brave_fut);
 
             let bing_items = bing_res.unwrap_or_else(|e| {
                 debug!(error = %e, "Bing search failed during multi-engine search");
@@ -303,27 +346,35 @@ pub async fn web_search_scoped(
                 debug!(error = %e, "DuckDuckGo search failed during multi-engine search");
                 Vec::new()
             });
+            let brave_items = brave_res.unwrap_or_else(|e| {
+                debug!(error = %e, "Brave search failed during multi-engine search");
+                Vec::new()
+            });
 
-            if bing_items.is_empty() && ddg_items.is_empty() {
+            if bing_items.is_empty() && ddg_items.is_empty() && brave_items.is_empty() {
                 return Ok(Vec::new());
             }
 
-            // If one engine yielded no results (e.g. DDG anti-scraping 202 or temporary network block),
-            // seamlessly return the other engine's results to fulfill user limit.
-            if ddg_items.is_empty() {
-                return Ok(bing_items);
-            }
-            if bing_items.is_empty() {
-                return Ok(ddg_items);
-            }
-
-            Ok(merge_and_dedup_search_results(bing_items, ddg_items, limit))
+            Ok(merge_multi_engine_search_results(
+                vec![bing_items, ddg_items, brave_items],
+                limit,
+            ))
         }
         SearchEngineKind::Bing => {
             search_bing_with_options(client, clean_query, limit, cdp_options, auto_cdp).await
         }
         SearchEngineKind::DuckDuckGo => {
             search_duckduckgo_with_options(client, clean_query, limit, cdp_options, auto_cdp).await
+        }
+        SearchEngineKind::Brave => {
+            search_brave_with_options(client, clean_query, limit, cdp_options, auto_cdp).await
+        }
+        SearchEngineKind::Yandex => {
+            search_yandex_with_options(client, clean_query, limit, cdp_options, auto_cdp).await
+        }
+        SearchEngineKind::Searxng => search_searxng_with_options(client, clean_query, limit).await,
+        SearchEngineKind::Google => {
+            search_google_with_options(client, clean_query, limit, cdp_options, auto_cdp).await
         }
     }
 }
@@ -548,6 +599,11 @@ pub struct QueryTokens {
 }
 
 /// Tokenizes a user query into core semantic tokens, temporal modifiers, domain filters, and exact phrases.
+static STOPWORDS: &[&str] = &[
+    "vs", "and", "or", "in", "on", "at", "to", "for", "of", "with", "by", "from", "the", "a", "an",
+    "is", "it", "as", "be", "are", "was", "were", "that", "this",
+];
+
 pub fn tokenize_query(query: &str) -> QueryTokens {
     let clean = query.trim().to_lowercase();
     let mut phrase_filters = Vec::new();
@@ -623,11 +679,49 @@ pub fn tokenize_query(query: &str) -> QueryTokens {
             continue;
         }
 
-        // Check if 4-digit year (e.g. 2024, 2025, 2026, 2027)
+        // Skip English stopwords for core token matching
+        if STOPWORDS.contains(&t) {
+            continue;
+        }
+
+        // Check if 4-digit year (e.g. 2024, 2025, 2026, 2027) or year prefix (e.g. 2026年)
         if t.len() == 4 && t.chars().all(|c| c.is_ascii_digit()) {
             temporal_tokens.push(t.to_string());
+        } else if t.len() >= 4
+            && (t.starts_with("19") || t.starts_with("20"))
+            && t[..4].chars().all(|c| c.is_ascii_digit())
+        {
+            temporal_tokens.push(t[..4].to_string());
+            let rem = t[4..].trim_start_matches('年').trim();
+            if !rem.is_empty() {
+                core_tokens.push(rem.to_string());
+                if rem.chars().any(|c| (c as u32) >= 0x4E00) && rem.chars().count() >= 4 {
+                    let chars: Vec<char> = rem.chars().collect();
+                    let half = chars.len() / 2;
+                    let s1: String = chars[..half].iter().collect();
+                    let s2: String = chars[half..].iter().collect();
+                    if !core_tokens.contains(&s1) {
+                        core_tokens.push(s1);
+                    }
+                    if !core_tokens.contains(&s2) {
+                        core_tokens.push(s2);
+                    }
+                }
+            }
         } else {
             core_tokens.push(t.to_string());
+            if t.chars().any(|c| (c as u32) >= 0x4E00) && t.chars().count() >= 4 {
+                let chars: Vec<char> = t.chars().collect();
+                let half = chars.len() / 2;
+                let s1: String = chars[..half].iter().collect();
+                let s2: String = chars[half..].iter().collect();
+                if !core_tokens.contains(&s1) {
+                    core_tokens.push(s1);
+                }
+                if !core_tokens.contains(&s2) {
+                    core_tokens.push(s2);
+                }
+            }
         }
     }
 
@@ -729,7 +823,79 @@ pub fn is_bing_ad_or_promotion(
         }
     }
 
+    // 5. Local store / offline storefront cards heuristic (e.g. "XX餐厅 (蓝色港湾店)", "XX酒店 (国贸店)")
+    if (trimmed_title.contains("店）") || trimmed_title.contains("店)"))
+        && !query_tokens.all_tokens.iter().any(|t| t.contains("店"))
+    {
+        return true;
+    }
+
     false
+}
+
+/// Checks if token matches inside haystack, enforcing word boundaries for short ASCII tokens (<= 3 chars).
+pub fn is_token_matched(haystack: &str, token: &str) -> bool {
+    if token.is_empty() || haystack.is_empty() {
+        return false;
+    }
+    let h_lower = haystack.to_lowercase();
+    let t_lower = token.to_lowercase();
+
+    if token.is_ascii() && token.len() <= 3 {
+        let bytes = h_lower.as_bytes();
+        let t_bytes = t_lower.as_bytes();
+        let t_len = t_bytes.len();
+
+        let mut start = 0;
+        while let Some(pos) = h_lower[start..].find(&t_lower) {
+            let abs_pos = start + pos;
+            let left_ok = abs_pos == 0 || !bytes[abs_pos - 1].is_ascii_alphanumeric();
+            let right_ok =
+                abs_pos + t_len >= bytes.len() || !bytes[abs_pos + t_len].is_ascii_alphanumeric();
+            if left_ok && right_ok {
+                return true;
+            }
+            start = abs_pos + 1;
+            if start >= h_lower.len() {
+                break;
+            }
+        }
+        false
+    } else {
+        h_lower.contains(&t_lower)
+    }
+}
+
+/// Returns variations and stems of a word (e.g. "troubleshooting" -> ["troubleshooting", "troubleshoot"]).
+pub fn get_word_stems(token: &str) -> Vec<&str> {
+    let mut stems = vec![token];
+    if token.len() >= 6 && token.is_ascii() {
+        if let Some(s) = token.strip_suffix("ing") {
+            if s.len() >= 3 {
+                stems.push(s);
+            }
+        }
+        if let Some(s) = token.strip_suffix("tion") {
+            if s.len() >= 3 {
+                stems.push(s);
+            }
+        }
+        if let Some(s) = token.strip_suffix("es") {
+            if s.len() >= 3 {
+                stems.push(s);
+            }
+        } else if let Some(s) = token.strip_suffix('s') {
+            if s.len() >= 3 {
+                stems.push(s);
+            }
+        }
+        if let Some(s) = token.strip_suffix("ed") {
+            if s.len() >= 3 {
+                stems.push(s);
+            }
+        }
+    }
+    stems
 }
 
 /// Evaluates query relevance and scores a candidate result with full URL and domain awareness.
@@ -781,13 +947,16 @@ pub fn calculate_relevance_full(
     let mut matched_core = Vec::new();
     for (idx, token) in query_tokens.core_tokens.iter().enumerate() {
         let token_compact = token.replace([' ', '-', '_'], "");
-        let in_title = title_lower.contains(token)
+        let stems = get_word_stems(token);
+        let in_title = stems.iter().any(|st| is_token_matched(title, st))
             || (!token_compact.is_empty() && title_compact.contains(&token_compact));
-        let in_snippet = snippet_lower.contains(token)
+        let in_snippet = stems.iter().any(|st| is_token_matched(snippet, st))
             || (!token_compact.is_empty() && snippet_compact.contains(&token_compact));
         let in_url = !resolved_url.is_empty()
-            && (url_lower.contains(token)
-                || (!token_compact.is_empty() && url_compact.contains(&token_compact)));
+            && (stems.iter().any(|st| is_token_matched(resolved_url, st))
+                || (!token_compact.is_empty()
+                    && token.len() >= 4
+                    && url_compact.contains(&token_compact)));
 
         if in_title || in_snippet || in_url {
             matched_core.push(idx);
@@ -810,17 +979,19 @@ pub fn calculate_relevance_full(
                 matched_core.push(idx);
                 score += 8;
             }
-        } else if token.chars().any(|c| (c as u32) >= 0x4E00) && token.chars().count() >= 4 {
-            // CJK compound word sub-gram matching (e.g. "小参数模型" -> "小模型", "模型", "参数")
+        } else if token.chars().any(|c| (c as u32) >= 0x4E00) && token.chars().count() >= 3 {
+            // CJK compound word n-gram matching
             let chars: Vec<char> = token.chars().collect();
-            let prefix_2: String = chars[..2].iter().collect();
-            let suffix_2: String = chars[chars.len() - 2..].iter().collect();
-            let in_title_sub = title_lower.contains(&prefix_2) || title_lower.contains(&suffix_2);
-            let in_snippet_sub =
-                snippet_lower.contains(&prefix_2) || snippet_lower.contains(&suffix_2);
-            if in_title_sub || in_snippet_sub {
+            let mut cjk_sub_matches = 0;
+            for window in chars.windows(2) {
+                let bi_gram: String = window.iter().collect();
+                if title_lower.contains(&bi_gram) || snippet_lower.contains(&bi_gram) {
+                    cjk_sub_matches += 1;
+                }
+            }
+            if cjk_sub_matches >= 2 || (chars.len() <= 3 && cjk_sub_matches >= 1) {
                 matched_core.push(idx);
-                score += 10;
+                score += 15 + cjk_sub_matches * 3;
             }
         }
     }
@@ -832,27 +1003,10 @@ pub fn calculate_relevance_full(
 
     // Hard Filter 2: First-Token-Only Fallback (Bing Term Drop)
     // If user asked a multi-token query (>=2 core tokens), but the result ONLY matches token 0,
-    // and matches NONE of the other 1..N core tokens (e.g. "北京 小学 入学 政策" -> only matches "北京", becoming "北京市 - 百度百科"),
-    // check if this is an encyclopedia/homepage generic fallback without domain constraint.
-    if query_tokens.core_tokens.len() >= 2 && !domain_matched {
-        if matched_core == vec![0] {
-            let is_generic_entry = title_lower.contains("百科")
-                || title_lower.contains("官网")
-                || title_lower.contains("商城")
-                || title_lower.contains("首页")
-                || title_lower.contains("into the unknown");
-            if is_generic_entry {
-                return None;
-            }
-        }
-        // If 3 or more core tokens, require at least 2 matched core tokens unless domain matched or phrase matched
-        if query_tokens.core_tokens.len() >= 3
-            && matched_core.len() < 2
-            && !domain_matched
-            && query_tokens.phrase_filters.is_empty()
-        {
-            return None;
-        }
+    // and matches NONE of the other 1..N core tokens (e.g. "Python asyncio", "Rust vs Go", "北京 小学 入学 政策"),
+    // reject this term-drop casualty so Stage 1d can retry with quoted discriminating keywords.
+    if query_tokens.core_tokens.len() >= 2 && !domain_matched && matched_core == vec![0] {
+        return None;
     }
 
     // Check temporal tokens (e.g. 2026, 2025)
@@ -912,13 +1066,16 @@ pub fn calculate_relaxed_relevance(
     let mut any_match = false;
     for token in &query_tokens.core_tokens {
         let token_compact = token.replace([' ', '-', '_'], "");
-        let in_title = title_lower.contains(token)
+        let stems = get_word_stems(token);
+        let in_title = stems.iter().any(|st| is_token_matched(title, st))
             || (!token_compact.is_empty() && title_compact.contains(&token_compact));
-        let in_snippet = snippet_lower.contains(token)
+        let in_snippet = stems.iter().any(|st| is_token_matched(snippet, st))
             || (!token_compact.is_empty() && snippet_compact.contains(&token_compact));
         let in_url = !resolved_url.is_empty()
-            && (url_lower.contains(token)
-                || (!token_compact.is_empty() && url_compact.contains(&token_compact)));
+            && (stems.iter().any(|st| is_token_matched(resolved_url, st))
+                || (!token_compact.is_empty()
+                    && token.len() >= 4
+                    && url_compact.contains(&token_compact)));
 
         if in_title || in_snippet || in_url {
             any_match = true;
@@ -937,17 +1094,18 @@ pub fn calculate_relaxed_relevance(
                 any_match = true;
                 score += 5;
             }
-        } else if token.chars().any(|c| (c as u32) >= 0x4E00) && token.chars().count() >= 4 {
+        } else if token.chars().any(|c| (c as u32) >= 0x4E00) && token.chars().count() >= 3 {
             let chars: Vec<char> = token.chars().collect();
-            let prefix_2: String = chars[..2].iter().collect();
-            let suffix_2: String = chars[chars.len() - 2..].iter().collect();
-            if title_lower.contains(&prefix_2)
-                || title_lower.contains(&suffix_2)
-                || snippet_lower.contains(&prefix_2)
-                || snippet_lower.contains(&suffix_2)
-            {
+            let mut cjk_sub_matches = 0;
+            for window in chars.windows(2) {
+                let bi_gram: String = window.iter().collect();
+                if title_lower.contains(&bi_gram) || snippet_lower.contains(&bi_gram) {
+                    cjk_sub_matches += 1;
+                }
+            }
+            if cjk_sub_matches >= 1 {
                 any_match = true;
-                score += 8;
+                score += 8 + cjk_sub_matches * 2;
             }
         }
     }
@@ -1024,7 +1182,37 @@ pub async fn search_bing_with_options(
         })
     };
 
-    if domain_satisfied {
+    // A result set is only truly satisfied if it's not a severe single-token term drop on a multi-word query
+    let is_relevant = if tokens.core_tokens.len() >= 3 {
+        let last_token = tokens.core_tokens.last().unwrap();
+        let second_token = &tokens.core_tokens[1];
+        let stems_last = get_word_stems(last_token);
+        let stems_second = get_word_stems(second_token);
+        results.iter().any(|r| {
+            let t_low = r.title.to_lowercase();
+            let s_low = r.snippet.to_lowercase();
+            stems_last
+                .iter()
+                .any(|st| is_token_matched(&t_low, st) || is_token_matched(&s_low, st))
+                || stems_second
+                    .iter()
+                    .any(|st| is_token_matched(&t_low, st) || is_token_matched(&s_low, st))
+        })
+    } else if tokens.core_tokens.len() == 2 {
+        let second = &tokens.core_tokens[1];
+        let stems_second = get_word_stems(second);
+        results.iter().any(|r| {
+            let t_low = r.title.to_lowercase();
+            let s_low = r.snippet.to_lowercase();
+            stems_second
+                .iter()
+                .any(|st| is_token_matched(&t_low, st) || is_token_matched(&s_low, st))
+        })
+    } else {
+        !results.is_empty()
+    };
+
+    if is_relevant && domain_satisfied {
         return Ok(results);
     }
 
@@ -1101,6 +1289,51 @@ pub async fn search_bing_with_options(
             .await?;
             if !unquoted_results.is_empty() {
                 return Ok(unquoted_results);
+            }
+        }
+    }
+
+    // Stage 1d: Anti-Term-Drop Quoting of Discriminating Keywords
+    // If query has 2+ core tokens and Stage 1 failed to find multi-token relevant results (e.g. "Python asyncio best practices", "artificial intelligence history"),
+    // quote the discriminating keyword (e.g. `artificial intelligence "history"`) case-insensitively to prevent Bing from dropping it!
+    if tokens.core_tokens.len() >= 2 && tokens.phrase_filters.is_empty() {
+        let discriminating_token = if tokens.core_tokens.len() >= 3 {
+            tokens.core_tokens.last().unwrap()
+        } else {
+            &tokens.core_tokens[1]
+        };
+
+        if discriminating_token.len() >= 2
+            && !clean_query.contains(&format!("\"{discriminating_token}\""))
+        {
+            let re_pattern = format!(r#"(?i)\b{}\b"#, regex::escape(discriminating_token));
+            if let Ok(re) = regex::Regex::new(&re_pattern) {
+                if let Some(mat) = re.find(clean_query) {
+                    let matched_str = mat.as_str();
+                    let quoted_query = format!(
+                        "{}\"{}\"{}",
+                        &clean_query[..mat.start()],
+                        matched_str,
+                        &clean_query[mat.end()..]
+                    );
+                    debug!(
+                        original = clean_query,
+                        quoted = %quoted_query,
+                        "Stage 1d: Quoting discriminating keyword to prevent Bing Term Drop"
+                    );
+                    let quoted_results = fetch_and_parse_bing(
+                        client,
+                        &quoted_query,
+                        clean_query,
+                        limit,
+                        cdp_options,
+                        auto_cdp,
+                    )
+                    .await?;
+                    if !quoted_results.is_empty() {
+                        return Ok(quoted_results);
+                    }
+                }
             }
         }
     }
@@ -1182,6 +1415,10 @@ pub async fn search_bing_with_options(
         }
     }
 
+    if !results.is_empty() {
+        return Ok(results);
+    }
+
     Ok(Vec::new())
 }
 
@@ -1193,7 +1430,10 @@ async fn fetch_and_parse_bing(
     cdp_options: Option<&crate::cdp::CdpOptions>,
     auto_cdp: bool,
 ) -> Result<Vec<SearchResultItem>, TklessError> {
-    let encoded_q: String = url::form_urlencoded::byte_serialize(search_query.as_bytes()).collect();
+    // Replace intra-word hyphens in search query to avoid search engine NOT/negation exclusion (e.g. "near-duplicate" -> "near duplicate")
+    let normalized_query = search_query.replace('-', " ");
+    let encoded_q: String =
+        url::form_urlencoded::byte_serialize(normalized_query.as_bytes()).collect();
     // Use clean global search URL without &setlang=... which disrupts backend search query routing
     let search_url = format!("https://www.bing.com/search?q={encoded_q}");
 
@@ -1206,8 +1446,9 @@ async fn fetch_and_parse_bing(
     }
 
     let is_cjk = search_query.chars().any(|c| (c as u32) >= 0x4E00);
+    // Use worldwide market en-ww instead of zh-cn to avoid severely crippled regional term drop
     let cookie_val = if is_cjk {
-        "SRCHD=AF=NOFORM; SRCHHPGUSR=SRCHLANG=zh-Hans; _EDGE_S=mkt=zh-cn; _SS=SID=1;"
+        "SRCHD=AF=NOFORM; SRCHHPGUSR=SRCHLANG=zh-Hans; _EDGE_S=mkt=en-ww; _SS=SID=1;"
     } else {
         "SRCHD=AF=NOFORM; SRCHHPGUSR=SRCHLANG=en; _EDGE_S=mkt=en-us; _SS=SID=1;"
     };
@@ -1244,8 +1485,18 @@ async fn fetch_and_parse_bing(
         .send()
         .await?;
 
+    let mut page2_cookie = cookie_val.to_string();
+    for val in resp.headers().get_all(reqwest::header::SET_COOKIE) {
+        if let Ok(s) = val.to_str() {
+            if let Some(cookie_pair) = s.split(';').next() {
+                page2_cookie.push_str("; ");
+                page2_cookie.push_str(cookie_pair.trim());
+            }
+        }
+    }
+
     let html = resp.text().await?;
-    match parse_bing_html_with_query(&html, relevance_query, limit) {
+    let mut initial_results = match parse_bing_html_with_query(&html, relevance_query, limit) {
         Err(TklessError::SearchAntiScraping(ref err_msg)) if auto_cdp => {
             warn!(
                 error = %err_msg,
@@ -1258,10 +1509,76 @@ async fn fetch_and_parse_bing(
                 ..Default::default()
             };
             let cdp_html = crate::cdp::fetch_html_via_cdp(&search_url, &fallback_cdp).await?;
-            parse_bing_html_with_query(&cdp_html, relevance_query, limit)
+            parse_bing_html_with_query(&cdp_html, relevance_query, limit)?
         }
-        other => other,
+        other => other?,
+    };
+
+    // Pagination support: if user requested limit > 10 and we have >= 8 results on page 1, fetch page 2 (&first=11 with FPIG token)
+    if limit > 10 && initial_results.len() >= 8 {
+        let page2_url = if let Some(cap) = BING_NEXT_PAGE_RE.captures(&html) {
+            let rel = cap[1].replace("&amp;", "&");
+            format!("https://www.bing.com{rel}")
+        } else {
+            format!("{search_url}&first=11")
+        };
+        debug!(url = %page2_url, "Fetching Bing page 2 for pagination");
+        if let Ok(resp2) = client
+            .get(&page2_url)
+            .header(
+                "User-Agent",
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36 Edg/133.0.0.0",
+            )
+            .header("Referer", "https://www.bing.com/")
+            .header(
+                "Accept",
+                "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+            )
+            .header("Accept-Language", accept_lang)
+            .header("Cookie", page2_cookie)
+            .header(
+                "Sec-Ch-Ua",
+                "\"Not(A:Brand\";v=\"99\", \"Microsoft Edge\";v=\"133\", \"Chromium\";v=\"133\"",
+            )
+            .header("Sec-Ch-Ua-Mobile", "?0")
+            .header("Sec-Ch-Ua-Platform", "\"Windows\"")
+            .send()
+            .await
+        {
+            debug!(status = %resp2.status(), "Page 2 HTTP response received");
+            if let Ok(html2) = resp2.text().await {
+                match parse_bing_html_with_query(&html2, relevance_query, limit) {
+                    Ok(p2_items) => {
+                        debug!(count = p2_items.len(), "Page 2 items parsed");
+                        for item in &p2_items {
+                            debug!(p2_url = %item.url, "P2 item URL");
+                        }
+                        let mut seen_urls: std::collections::HashSet<String> = initial_results
+                            .iter()
+                            .map(|i| normalize_url_for_dedup(&i.url))
+                            .collect();
+                        for item in p2_items {
+                            if seen_urls.insert(normalize_url_for_dedup(&item.url)) {
+                                initial_results.push(item);
+                                if initial_results.len() >= limit {
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        debug!(error = %e, "Page 2 parsing failed");
+                    }
+                }
+            }
+        }
     }
+
+    debug!(
+        final_bing_count = initial_results.len(),
+        "fetch_and_parse_bing done"
+    );
+    Ok(initial_results)
 }
 
 /// Parses Bing search results HTML into structured items with query-aware relevance gatekeeping.
@@ -1284,6 +1601,7 @@ pub fn parse_bing_html_with_query(
     let doc = Html::parse_document(html);
     let mut scored_results: Vec<ScoredBingItem> = Vec::new();
     let mut fallback_results: Vec<ScoredBingItem> = Vec::new();
+    let mut raw_non_ad_items: Vec<ScoredBingItem> = Vec::new();
     let mut seen_urls = std::collections::HashSet::new();
 
     let query_tokens = tokenize_query(query);
@@ -1327,6 +1645,16 @@ pub fn parse_bing_html_with_query(
             continue;
         }
 
+        raw_non_ad_items.push(ScoredBingItem {
+            item: SearchResultItem {
+                title: raw_title.clone(),
+                url: resolved_url.clone(),
+                snippet: snippet.clone(),
+                engine: "bing".to_string(),
+            },
+            score: 1,
+        });
+
         // 2. Strict evaluation (Tier 1)
         if let Some(score) =
             calculate_relevance_full(&raw_title, &snippet, &resolved_url, &query_tokens)
@@ -1360,8 +1688,10 @@ pub fn parse_bing_html_with_query(
 
     let mut final_scored = if !scored_results.is_empty() {
         scored_results
-    } else {
+    } else if !fallback_results.is_empty() {
         fallback_results
+    } else {
+        raw_non_ad_items
     };
 
     // Sort by relevance score descending so the most relevant results come first
@@ -1457,16 +1787,16 @@ pub async fn search_duckduckgo_with_options(
     }
 
     let encoded_q: String = url::form_urlencoded::byte_serialize(clean_query.as_bytes()).collect();
-    let search_url = format!("https://html.duckduckgo.com/html/?q={encoded_q}");
+    let cdp_search_url = format!("https://duckduckgo.com/?q={encoded_q}");
 
     // 1. Direct CDP headless Chrome rendering if explicitly configured
     if let Some(cdp_opts) = cdp_options {
         debug!(
             query = clean_query,
-            url = %search_url,
+            url = %cdp_search_url,
             "Fetching DuckDuckGo via explicit CDP endpoint"
         );
-        let cdp_html = crate::cdp::fetch_html_via_cdp(&search_url, cdp_opts).await?;
+        let cdp_html = crate::cdp::fetch_html_via_cdp(&cdp_search_url, cdp_opts).await?;
         return parse_duckduckgo_html(&cdp_html, limit);
     }
 
@@ -1511,11 +1841,12 @@ pub async fn search_duckduckgo_with_options(
         );
         let fallback_cdp = crate::cdp::CdpOptions {
             endpoint: "http://127.0.0.1:9222".to_string(),
-            wait_ms: Some(1500),
+            wait_ms: Some(2500),
             timeout_ms: Some(30_000),
+            block_resources: Some(false),
             ..Default::default()
         };
-        let cdp_html = crate::cdp::fetch_html_via_cdp(&search_url, &fallback_cdp).await?;
+        let cdp_html = crate::cdp::fetch_html_via_cdp(&cdp_search_url, &fallback_cdp).await?;
         return parse_duckduckgo_html(&cdp_html, limit);
     }
 
@@ -1536,6 +1867,78 @@ pub fn parse_duckduckgo_html(
     let doc = Html::parse_document(html);
     let mut results = Vec::new();
     let mut seen_urls = std::collections::HashSet::new();
+
+    // 0. Modern DuckDuckGo dynamic React SPA format (rendered via CDP / headless Chrome)
+    let spa_item_sel = Selector::parse(
+        "article[data-testid='result'], li[data-layout='organic'], div[data-testid='result']",
+    )
+    .unwrap();
+    let spa_title_sel = Selector::parse("a[data-testid='result-title-a'], h2 a, a.result__url, [data-testid='result-extras-url-link']").unwrap();
+    let spa_snip_sel = Selector::parse(
+        "[data-testid='result-snippet'], div.result__snippet, div[data-result='snippet']",
+    )
+    .unwrap();
+
+    let spa_items: Vec<_> = doc.select(&spa_item_sel).collect();
+    if !spa_items.is_empty() {
+        for element in spa_items {
+            let link_el = match element.select(&spa_title_sel).next() {
+                Some(el) => el,
+                None => continue,
+            };
+
+            let raw_title = link_el
+                .text()
+                .collect::<Vec<_>>()
+                .join(" ")
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ");
+
+            let raw_href = link_el.value().attr("href").unwrap_or("").trim();
+            if raw_title.is_empty() || raw_href.is_empty() {
+                continue;
+            }
+
+            let resolved_url = unwrap_duckduckgo_url(raw_href);
+            if !resolved_url.starts_with("http://") && !resolved_url.starts_with("https://") {
+                continue;
+            }
+
+            let norm_url = normalize_url_for_dedup(&resolved_url);
+            if !seen_urls.insert(norm_url) {
+                continue;
+            }
+
+            let snippet = element
+                .select(&spa_snip_sel)
+                .next()
+                .map(|el| {
+                    el.text()
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                        .split_whitespace()
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                })
+                .unwrap_or_default();
+
+            results.push(SearchResultItem {
+                title: raw_title,
+                url: resolved_url,
+                snippet,
+                engine: "duckduckgo".to_string(),
+            });
+
+            if results.len() >= limit {
+                break;
+            }
+        }
+
+        if !results.is_empty() {
+            return Ok(results);
+        }
+    }
 
     // 1. DuckDuckGo Lite format (a.result-link, td.result-snippet)
     let lite_link_sel = Selector::parse("a.result-link").unwrap();
@@ -1699,6 +2102,628 @@ pub fn unwrap_duckduckgo_url(raw_href: &str) -> String {
     trimmed.to_string()
 }
 
+/// Searches Brave Search with optional API key or web scraping fallback.
+pub async fn search_brave(
+    client: &reqwest::Client,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<SearchResultItem>, TklessError> {
+    search_brave_with_options(client, query, limit, None, false).await
+}
+
+/// Searches Brave Search with optional CDP headless browser rendering or BRAVE_API_KEY.
+pub async fn search_brave_with_options(
+    client: &reqwest::Client,
+    query: &str,
+    limit: usize,
+    cdp_options: Option<&crate::cdp::CdpOptions>,
+    auto_cdp: bool,
+) -> Result<Vec<SearchResultItem>, TklessError> {
+    let clean_query = query.trim();
+    if clean_query.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // 1. Check for official Brave Search API Key
+    if let Ok(api_key) = std::env::var("BRAVE_API_KEY") {
+        if !api_key.trim().is_empty() {
+            let encoded_q: String =
+                url::form_urlencoded::byte_serialize(clean_query.as_bytes()).collect();
+            let api_url = format!(
+                "https://api.search.brave.com/res/v1/web/search?q={encoded_q}&count={limit}"
+            );
+            if let Ok(resp) = client
+                .get(&api_url)
+                .header("Accept", "application/json")
+                .header("X-Subscription-Token", api_key.trim())
+                .send()
+                .await
+            {
+                if resp.status().is_success() {
+                    if let Ok(val) = resp.json::<serde_json::Value>().await {
+                        return Ok(parse_brave_json(&val, limit));
+                    }
+                }
+            }
+        }
+    }
+
+    // 2. Web HTML endpoint
+    let encoded_q: String = url::form_urlencoded::byte_serialize(clean_query.as_bytes()).collect();
+    let search_url = format!("https://search.brave.com/search?q={encoded_q}");
+
+    if let Some(cdp_opts) = cdp_options {
+        let cdp_html = crate::cdp::fetch_html_via_cdp(&search_url, cdp_opts).await?;
+        return parse_brave_html(&cdp_html, limit);
+    }
+
+    let resp = client
+        .get(&search_url)
+        .header(
+            "User-Agent",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",
+        )
+        .header(
+            "Accept",
+            "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        )
+        .header("Accept-Language", "en-US,en;q=0.9,zh-CN;q=0.8")
+        .send()
+        .await?;
+
+    let status = resp.status();
+    let is_blocked = status == reqwest::StatusCode::FORBIDDEN
+        || status == reqwest::StatusCode::TOO_MANY_REQUESTS;
+
+    if is_blocked && auto_cdp {
+        let fallback_cdp = crate::cdp::CdpOptions {
+            endpoint: "http://127.0.0.1:9222".to_string(),
+            wait_ms: Some(2500),
+            timeout_ms: Some(30_000),
+            block_resources: Some(false),
+            ..Default::default()
+        };
+        let cdp_html = crate::cdp::fetch_html_via_cdp(&search_url, &fallback_cdp).await?;
+        return parse_brave_html(&cdp_html, limit);
+    }
+
+    if !status.is_success() {
+        return Err(TklessError::SearchAntiScraping(format!(
+            "Brave search returned HTTP status {status}"
+        )));
+    }
+
+    let html = resp.text().await?;
+    if (html.contains("cf-challenge") || html.contains("Checking your browser")) && auto_cdp {
+        let fallback_cdp = crate::cdp::CdpOptions {
+            endpoint: "http://127.0.0.1:9222".to_string(),
+            wait_ms: Some(2500),
+            timeout_ms: Some(30_000),
+            block_resources: Some(false),
+            ..Default::default()
+        };
+        let cdp_html = crate::cdp::fetch_html_via_cdp(&search_url, &fallback_cdp).await?;
+        return parse_brave_html(&cdp_html, limit);
+    }
+
+    parse_brave_html(&html, limit)
+}
+
+/// Parses Brave Search REST API JSON payload.
+pub fn parse_brave_json(val: &serde_json::Value, limit: usize) -> Vec<SearchResultItem> {
+    let mut results = Vec::new();
+    if let Some(res_arr) = val
+        .get("web")
+        .and_then(|w| w.get("results"))
+        .and_then(|r| r.as_array())
+    {
+        for r in res_arr.iter().take(limit) {
+            let title = r
+                .get("title")
+                .and_then(|t| t.as_str())
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            let url = r
+                .get("url")
+                .and_then(|u| u.as_str())
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            let snippet = r
+                .get("description")
+                .and_then(|d| d.as_str())
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            if !title.is_empty() && !url.is_empty() {
+                results.push(SearchResultItem {
+                    title,
+                    url,
+                    snippet,
+                    engine: "brave".to_string(),
+                });
+            }
+        }
+    }
+    results
+}
+
+/// Parses Brave Search HTML into structured items.
+pub fn parse_brave_html(html: &str, limit: usize) -> Result<Vec<SearchResultItem>, TklessError> {
+    let doc = Html::parse_document(html);
+    let mut results = Vec::new();
+    let mut seen_urls = std::collections::HashSet::new();
+
+    for item in doc.select(&BRAVE_ITEM_SELECTOR) {
+        let link_el = item.select(&BRAVE_TITLE_SELECTOR).next();
+        let href = link_el
+            .and_then(|el| el.value().attr("href"))
+            .unwrap_or("")
+            .trim();
+        let title = link_el
+            .map(|el| {
+                el.text()
+                    .collect::<Vec<_>>()
+                    .join(" ")
+                    .split_whitespace()
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            })
+            .unwrap_or_default();
+
+        if href.is_empty() || !href.starts_with("http") || title.is_empty() {
+            continue;
+        }
+
+        let snippet = item
+            .select(&BRAVE_SNIPPET_SELECTOR)
+            .next()
+            .map(|el| {
+                el.text()
+                    .collect::<Vec<_>>()
+                    .join(" ")
+                    .split_whitespace()
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            })
+            .unwrap_or_default();
+
+        let norm = normalize_url_for_dedup(href);
+        if seen_urls.insert(norm) {
+            results.push(SearchResultItem {
+                title,
+                url: href.to_string(),
+                snippet,
+                engine: "brave".to_string(),
+            });
+        }
+
+        if results.len() >= limit {
+            break;
+        }
+    }
+
+    Ok(results)
+}
+
+/// Searches Yandex Search with default options.
+pub async fn search_yandex(
+    client: &reqwest::Client,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<SearchResultItem>, TklessError> {
+    search_yandex_with_options(client, query, limit, None, false).await
+}
+
+/// Searches Yandex with optional CDP headless browser rendering to bypass anti-scraping challenges.
+pub async fn search_yandex_with_options(
+    client: &reqwest::Client,
+    query: &str,
+    limit: usize,
+    cdp_options: Option<&crate::cdp::CdpOptions>,
+    auto_cdp: bool,
+) -> Result<Vec<SearchResultItem>, TklessError> {
+    let clean_query = query.trim();
+    if clean_query.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let encoded_q: String = url::form_urlencoded::byte_serialize(clean_query.as_bytes()).collect();
+    let search_url = format!("https://yandex.com/search/?text={encoded_q}");
+
+    if let Some(cdp_opts) = cdp_options {
+        let cdp_html = crate::cdp::fetch_html_via_cdp(&search_url, cdp_opts).await?;
+        return parse_yandex_html(&cdp_html, limit);
+    }
+
+    let resp = client
+        .get(&search_url)
+        .header(
+            "User-Agent",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",
+        )
+        .header(
+            "Accept",
+            "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        )
+        .header("Accept-Language", "en-US,en;q=0.9,ru;q=0.8,zh;q=0.7")
+        .send()
+        .await?;
+
+    let html = resp.text().await?;
+    let is_captcha = html.contains("CheckboxCaptcha")
+        || html.contains("smart-captcha")
+        || html.contains("showcaptcha")
+        || html.contains("yandex.com/showcaptcha");
+
+    if is_captcha && auto_cdp {
+        let fallback_cdp = crate::cdp::CdpOptions {
+            endpoint: "http://127.0.0.1:9222".to_string(),
+            wait_ms: Some(2500),
+            timeout_ms: Some(30_000),
+            block_resources: Some(false),
+            ..Default::default()
+        };
+        let cdp_html = crate::cdp::fetch_html_via_cdp(&search_url, &fallback_cdp).await?;
+        return parse_yandex_html(&cdp_html, limit);
+    }
+
+    if is_captcha {
+        return Err(TklessError::SearchAntiScraping(
+            "遭遇 Yandex 验证码挑战 (SmartCaptcha)。建议操作：开启 --auto-cdp 使用本地无头浏览器渲染。".to_string(),
+        ));
+    }
+
+    parse_yandex_html(&html, limit)
+}
+
+/// Parses Yandex search results HTML into structured items.
+pub fn parse_yandex_html(html: &str, limit: usize) -> Result<Vec<SearchResultItem>, TklessError> {
+    let doc = Html::parse_document(html);
+    let mut results = Vec::new();
+    let mut seen_urls = std::collections::HashSet::new();
+
+    for item in doc.select(&YANDEX_ITEM_SELECTOR) {
+        let link_el = item.select(&YANDEX_TITLE_SELECTOR).next();
+        let href = link_el
+            .and_then(|el| el.value().attr("href"))
+            .unwrap_or("")
+            .trim();
+        let title = link_el
+            .map(|el| {
+                el.text()
+                    .collect::<Vec<_>>()
+                    .join(" ")
+                    .split_whitespace()
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            })
+            .unwrap_or_default();
+
+        if href.is_empty() || !href.starts_with("http") || title.is_empty() {
+            continue;
+        }
+
+        let snippet = item
+            .select(&YANDEX_SNIPPET_SELECTOR)
+            .next()
+            .map(|el| {
+                el.text()
+                    .collect::<Vec<_>>()
+                    .join(" ")
+                    .split_whitespace()
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            })
+            .unwrap_or_default();
+
+        let norm = normalize_url_for_dedup(href);
+        if seen_urls.insert(norm) {
+            results.push(SearchResultItem {
+                title,
+                url: href.to_string(),
+                snippet,
+                engine: "yandex".to_string(),
+            });
+        }
+
+        if results.len() >= limit {
+            break;
+        }
+    }
+
+    Ok(results)
+}
+
+/// Searches SearXNG metasearch instance (reading SEARXNG_URL or defaulting to public instance).
+pub async fn search_searxng(
+    client: &reqwest::Client,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<SearchResultItem>, TklessError> {
+    search_searxng_with_options(client, query, limit).await
+}
+
+/// Searches SearXNG with explicit options.
+pub async fn search_searxng_with_options(
+    client: &reqwest::Client,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<SearchResultItem>, TklessError> {
+    let clean_query = query.trim();
+    if clean_query.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let base_url = std::env::var("SEARXNG_URL").unwrap_or_else(|_| "https://searx.be".to_string());
+    let base_clean = base_url.trim_end_matches('/');
+
+    let encoded_q: String = url::form_urlencoded::byte_serialize(clean_query.as_bytes()).collect();
+    let api_url = format!("{base_clean}/search?q={encoded_q}&format=json&language=auto");
+
+    let resp = client
+        .get(&api_url)
+        .header(
+            "User-Agent",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36 TkLess/0.4",
+        )
+        .header("Accept", "application/json")
+        .send()
+        .await?;
+
+    if !resp.status().is_success() {
+        return Err(TklessError::SearchEngineError(format!(
+            "SearXNG instance '{base_clean}' returned HTTP status {}",
+            resp.status()
+        )));
+    }
+
+    let text = resp.text().await?;
+    if !text.trim_start().starts_with('{') {
+        return Err(TklessError::SearchAntiScraping(format!(
+            "SearXNG 实例 '{base_clean}' 返回了非 JSON 验证页面或遭遇 Cloudflare 拦截。建议指定私有部署端点 (--searxng-url 或 SEARXNG_URL)。"
+        )));
+    }
+    let val: serde_json::Value =
+        serde_json::from_str(&text).map_err(|e| TklessError::SearchEngineError(e.to_string()))?;
+    Ok(parse_searxng_json(&val, limit))
+}
+
+/// Parses SearXNG JSON API response.
+pub fn parse_searxng_json(val: &serde_json::Value, limit: usize) -> Vec<SearchResultItem> {
+    let mut results = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+
+    if let Some(res_arr) = val.get("results").and_then(|r| r.as_array()) {
+        for item in res_arr {
+            let title = item
+                .get("title")
+                .and_then(|t| t.as_str())
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            let url = item
+                .get("url")
+                .and_then(|u| u.as_str())
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            let snippet = item
+                .get("content")
+                .and_then(|c| c.as_str())
+                .unwrap_or("")
+                .trim()
+                .to_string();
+
+            if !title.is_empty() && url.starts_with("http") {
+                let norm = normalize_url_for_dedup(&url);
+                if seen.insert(norm) {
+                    results.push(SearchResultItem {
+                        title,
+                        url,
+                        snippet,
+                        engine: "searxng".to_string(),
+                    });
+                }
+            }
+
+            if results.len() >= limit {
+                break;
+            }
+        }
+    }
+    results
+}
+
+/// Unwraps Google redirect URLs (e.g. `/url?q=https://...&sa=...`).
+pub fn unwrap_google_url(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if trimmed.starts_with("/url?") {
+        let fake = format!("https://www.google.com{trimmed}");
+        if let Ok(parsed) = url::Url::parse(&fake) {
+            for (k, v) in parsed.query_pairs() {
+                if k == "q" || k == "url" {
+                    let target = v.into_owned();
+                    if target.starts_with("http://") || target.starts_with("https://") {
+                        return target;
+                    }
+                }
+            }
+        }
+    }
+    trimmed.to_string()
+}
+
+/// Searches Google Search with default options.
+pub async fn search_google(
+    client: &reqwest::Client,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<SearchResultItem>, TklessError> {
+    search_google_with_options(client, query, limit, None, false).await
+}
+
+/// Searches Google with optional CDP headless browser rendering to bypass anti-scraping challenges.
+pub async fn search_google_with_options(
+    client: &reqwest::Client,
+    query: &str,
+    limit: usize,
+    cdp_options: Option<&crate::cdp::CdpOptions>,
+    auto_cdp: bool,
+) -> Result<Vec<SearchResultItem>, TklessError> {
+    let clean_query = query.trim();
+    if clean_query.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let encoded_q: String = url::form_urlencoded::byte_serialize(clean_query.as_bytes()).collect();
+    let search_url =
+        format!("https://www.google.com/search?q={encoded_q}&hl=en&num={limit}&gws_rd=cr&pws=0");
+
+    if let Some(cdp_opts) = cdp_options {
+        let cdp_html = crate::cdp::fetch_html_via_cdp(&search_url, cdp_opts).await?;
+        return parse_google_html(&cdp_html, limit);
+    }
+
+    let resp = client
+        .get(&search_url)
+        .header(
+            "User-Agent",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",
+        )
+        .header(
+            "Accept",
+            "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        )
+        .header("Accept-Language", "en-US,en;q=0.9")
+        .send()
+        .await?;
+
+    let status = resp.status();
+    let is_blocked = status == reqwest::StatusCode::TOO_MANY_REQUESTS
+        || status == reqwest::StatusCode::FORBIDDEN;
+    let html = resp.text().await?;
+    let has_sorry =
+        html.contains("sorry/index") || html.contains("recaptcha") || html.contains("enablejs");
+
+    if (is_blocked || has_sorry) && auto_cdp {
+        let fallback_cdp = crate::cdp::CdpOptions {
+            endpoint: "http://127.0.0.1:9222".to_string(),
+            wait_ms: Some(2500),
+            timeout_ms: Some(30_000),
+            block_resources: Some(false),
+            ..Default::default()
+        };
+        let cdp_html = crate::cdp::fetch_html_via_cdp(&search_url, &fallback_cdp).await?;
+        return parse_google_html(&cdp_html, limit);
+    }
+
+    if is_blocked || has_sorry {
+        return Err(TklessError::SearchAntiScraping(
+            "遭遇 Google JS 动态验证或反爬拦截 (enablejs / recaptcha)。建议操作：开启 --auto-cdp 或使用默认多引擎。".to_string(),
+        ));
+    }
+
+    parse_google_html(&html, limit)
+}
+
+/// Parses Google search results HTML into structured items.
+pub fn parse_google_html(html: &str, limit: usize) -> Result<Vec<SearchResultItem>, TklessError> {
+    let doc = Html::parse_document(html);
+    let mut results = Vec::new();
+    let mut seen_urls = std::collections::HashSet::new();
+
+    for item in doc.select(&GOOGLE_ITEM_SELECTOR) {
+        let title_el = item.select(&GOOGLE_TITLE_SELECTOR).next();
+        let title = title_el
+            .map(|el| {
+                el.text()
+                    .collect::<Vec<_>>()
+                    .join(" ")
+                    .split_whitespace()
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            })
+            .unwrap_or_default();
+
+        let link_el = item.select(&GOOGLE_LINK_SELECTOR).next();
+        let raw_href = link_el
+            .and_then(|el| el.value().attr("href"))
+            .unwrap_or("")
+            .trim();
+
+        let href = unwrap_google_url(raw_href);
+
+        if href.is_empty() || !href.starts_with("http") || title.is_empty() {
+            continue;
+        }
+
+        let snippet = item
+            .select(&GOOGLE_SNIPPET_SELECTOR)
+            .next()
+            .map(|el| {
+                el.text()
+                    .collect::<Vec<_>>()
+                    .join(" ")
+                    .split_whitespace()
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            })
+            .unwrap_or_default();
+
+        let norm = normalize_url_for_dedup(&href);
+        if seen_urls.insert(norm) {
+            results.push(SearchResultItem {
+                title,
+                url: href,
+                snippet,
+                engine: "google".to_string(),
+            });
+        }
+
+        if results.len() >= limit {
+            break;
+        }
+    }
+
+    Ok(results)
+}
+
+/// Merges search results from arbitrary number of engines round-robin with URL deduplication.
+pub fn merge_multi_engine_search_results(
+    engine_lists: Vec<Vec<SearchResultItem>>,
+    limit: usize,
+) -> Vec<SearchResultItem> {
+    let mut merged = Vec::with_capacity(limit);
+    let mut seen = std::collections::HashSet::new();
+    let mut iters: Vec<_> = engine_lists
+        .into_iter()
+        .map(|list| list.into_iter())
+        .collect();
+
+    while merged.len() < limit {
+        let mut progress = false;
+        for iter in &mut iters {
+            if merged.len() >= limit {
+                break;
+            }
+            for item in iter.by_ref() {
+                let norm = normalize_url_for_dedup(&item.url);
+                if seen.insert(norm) {
+                    merged.push(item);
+                    progress = true;
+                    break;
+                }
+            }
+        }
+        if !progress {
+            break;
+        }
+    }
+    merged
+}
+
 /// Normalizes a URL for deduplication across search engines.
 pub fn normalize_url_for_dedup(raw: &str) -> String {
     let mut norm = raw.trim().to_lowercase();
@@ -1717,45 +2742,7 @@ pub fn merge_and_dedup_search_results(
     engine2_results: Vec<SearchResultItem>,
     limit: usize,
 ) -> Vec<SearchResultItem> {
-    let mut merged = Vec::with_capacity(limit);
-    let mut seen = std::collections::HashSet::new();
-
-    let mut iter1 = engine1_results.into_iter();
-    let mut iter2 = engine2_results.into_iter();
-
-    while merged.len() < limit {
-        let mut progress = false;
-
-        // Try to pull one unique item from engine 1
-        for item in iter1.by_ref() {
-            let norm = normalize_url_for_dedup(&item.url);
-            if seen.insert(norm) {
-                merged.push(item);
-                progress = true;
-                break;
-            }
-        }
-
-        if merged.len() >= limit {
-            break;
-        }
-
-        // Try to pull one unique item from engine 2
-        for item in iter2.by_ref() {
-            let norm = normalize_url_for_dedup(&item.url);
-            if seen.insert(norm) {
-                merged.push(item);
-                progress = true;
-                break;
-            }
-        }
-
-        if !progress {
-            break;
-        }
-    }
-
-    merged
+    merge_multi_engine_search_results(vec![engine1_results, engine2_results], limit)
 }
 
 /// Formats search results as a clean GitHub Flavored Markdown document with engine source attribution.
@@ -2313,7 +3300,10 @@ mod tests {
     fn test_tokenize_query_domain_and_phrase_extraction() {
         let tokens = tokenize_query("site:zhuanlan.zhihu.com DeepSeek 深度解析");
         assert_eq!(tokens.domain_filters, vec!["zhuanlan.zhihu.com"]);
-        assert_eq!(tokens.core_tokens, vec!["deepseek", "深度解析"]);
+        assert_eq!(
+            tokens.core_tokens,
+            vec!["deepseek", "深度解析", "深度", "解析"]
+        );
         assert!(tokens.phrase_filters.is_empty());
 
         let tokens_quote = tokenize_query("\"small language model\" release");
@@ -2370,5 +3360,141 @@ mod tests {
             relaxed_score.is_some(),
             "Llama query must pass relaxed fallback scoring"
         );
+    }
+
+    #[test]
+    fn test_parse_brave_html() {
+        let sample = r#"
+        <div id="results">
+            <div class="snippet" data-type="web">
+                <a class="heading-serpresult" href="https://www.rust-lang.org/">Rust Programming Language</a>
+                <p class="snippet-description">A language empowering everyone to build reliable software.</p>
+            </div>
+            <div class="snippet" data-type="web">
+                <a class="heading-serpresult" href="https://doc.rust-lang.org/book/">The Rust Programming Language</a>
+                <p class="snippet-description">The official book for learning Rust.</p>
+            </div>
+        </div>
+        "#;
+        let results = parse_brave_html(sample, 5).unwrap();
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].title, "Rust Programming Language");
+        assert_eq!(results[0].url, "https://www.rust-lang.org/");
+        assert_eq!(results[0].engine, "brave");
+        assert!(results[0].snippet.contains("reliable software"));
+    }
+
+    #[test]
+    fn test_parse_brave_json() {
+        let sample = serde_json::json!({
+            "web": {
+                "results": [
+                    {
+                        "title": "TkLess on GitHub",
+                        "url": "https://github.com/smallhug/tkless",
+                        "description": "Spend less tokens, perceive more web."
+                    }
+                ]
+            }
+        });
+        let results = parse_brave_json(&sample, 5);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].title, "TkLess on GitHub");
+        assert_eq!(results[0].url, "https://github.com/smallhug/tkless");
+        assert_eq!(results[0].engine, "brave");
+    }
+
+    #[test]
+    fn test_parse_yandex_html() {
+        let sample = r#"
+        <ul class="serp-list">
+            <li class="serp-item">
+                <h2 class="OrganicTitle"><a class="OrganicTitle-Link" href="https://www.rust-lang.org/">Rust Language</a></h2>
+                <div class="OrganicText">Fast and memory-efficient.</div>
+            </li>
+        </ul>
+        "#;
+        let results = parse_yandex_html(sample, 5).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].title, "Rust Language");
+        assert_eq!(results[0].url, "https://www.rust-lang.org/");
+        assert_eq!(results[0].engine, "yandex");
+        assert!(results[0].snippet.contains("Fast and memory-efficient"));
+    }
+
+    #[test]
+    fn test_parse_searxng_json() {
+        let sample = serde_json::json!({
+            "results": [
+                {
+                    "title": "SearXNG Project",
+                    "url": "https://docs.searxng.org/",
+                    "content": "A privacy-respecting, hackable metasearch engine.",
+                    "engine": "google"
+                }
+            ]
+        });
+        let results = parse_searxng_json(&sample, 5);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].title, "SearXNG Project");
+        assert_eq!(results[0].url, "https://docs.searxng.org/");
+        assert_eq!(results[0].engine, "searxng");
+    }
+
+    #[test]
+    fn test_unwrap_google_url_and_parse_html() {
+        let raw = "/url?q=https://www.rust-lang.org/&sa=U&ved=2ahUKEwj";
+        assert_eq!(unwrap_google_url(raw), "https://www.rust-lang.org/");
+
+        let sample = r#"
+        <div id="search">
+            <div class="g">
+                <a href="/url?q=https://www.rust-lang.org/&sa=U"><h3>Rust Language</h3></a>
+                <div class="VwiC3b">Empowering everyone to build reliable software.</div>
+            </div>
+        </div>
+        "#;
+        let results = parse_google_html(sample, 5).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].title, "Rust Language");
+        assert_eq!(results[0].url, "https://www.rust-lang.org/");
+        assert_eq!(results[0].engine, "google");
+    }
+
+    #[test]
+    fn test_merge_multi_engine_search_results() {
+        let list1 = vec![
+            SearchResultItem {
+                title: "A1".to_string(),
+                url: "https://a.com/1".to_string(),
+                snippet: "s1".to_string(),
+                engine: "bing".to_string(),
+            },
+            SearchResultItem {
+                title: "A2".to_string(),
+                url: "https://a.com/2".to_string(),
+                snippet: "s2".to_string(),
+                engine: "bing".to_string(),
+            },
+        ];
+        let list2 = vec![SearchResultItem {
+            title: "B1".to_string(),
+            url: "https://b.com/1".to_string(),
+            snippet: "sb1".to_string(),
+            engine: "duckduckgo".to_string(),
+        }];
+        let list3 = vec![SearchResultItem {
+            title: "C1".to_string(),
+            url: "https://c.com/1".to_string(),
+            snippet: "sc1".to_string(),
+            engine: "brave".to_string(),
+        }];
+
+        let merged = merge_multi_engine_search_results(vec![list1, list2, list3], 5);
+        assert_eq!(merged.len(), 4);
+        assert_eq!(merged[0].title, "A1");
+        assert_eq!(merged[1].title, "B1");
+        assert_eq!(merged[2].title, "C1");
+        assert_eq!(merged[3].title, "A2");
     }
 }

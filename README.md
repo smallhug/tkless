@@ -24,8 +24,8 @@
   - 针对大模型预置 System Prompt 膨胀问题，独创两阶段 MCP 协议；
   - 初始仅暴露 2 核心工具 + 4 发现元工具，握手 Token 开销从 6,724 tokens 骤降至 **1,700 tokens（节省 74.7%）**；
   - 支持运行时按需探查参数 Schema、单次即时调用 (`execute_tool`) 以及 `notifications/tools/list_changed` 动态拉起入库。
-- **🧩 16+ 原生平台深度适配器矩阵**：
-  - 原生适配 B站、知乎、微信公众号、小红书、GitHub、Hugging Face、Stack Overflow、V2EX、Reddit、维基百科、百度百科、ArXiv、Medium、CSDN、Substack、掘金等；
+- **🧩 21+ 原生平台深度适配器矩阵**：
+  - 原生适配 YouTube、Hacker News、Discourse / linux.do、X (Twitter)、Papers With Code、B站、知乎、微信公众号、小红书、GitHub、Hugging Face、Stack Overflow、V2EX、Reddit、维基百科、百度百科、ArXiv、Medium、CSDN、Substack、掘金等；
   - 提供 `tkless adapters` 命令行子命令与 `list_adapters` MCP 工具，一键检索支持平台与专属优化能力。
 - **📊 独立表格提取与 SQL 导出 (`tkless tables`)**：
   - 深度解析网页中的 `<table>` 元素，自动推导列名并去重，一键导出为标准 **SQL DDL/INSERT** 建表与数据写入脚本、CSV、TSV 或 JSON。
@@ -310,13 +310,15 @@ tkless login zhihu
 # 或指定凭据保存路径与禁止自动拉起浏览器（纯终端字符画二维码，单行文字提示）：
 tkless login bilibili -o ./my_bilibili_cookies.txt --no-browser
 
-# 23. 🌐 免 Key 通用网页搜索与平台定向搜索 (并发多引擎 Bing + DuckDuckGo 智能去重聚合，直供 AI Agent 全流程搜索闭环)
-# 默认启用双引擎并发聚合检索 (Bing + DuckDuckGo 交叉去重排名)
+# 23. 🌐 免 Key 通用网页搜索与平台定向搜索 (并发多引擎 Bing + DuckDuckGo + Brave 智能去重聚合，直供 AI Agent 全流程搜索闭环)
+# 默认启用多引擎并发聚合检索 (Bing + DuckDuckGo + Brave 交叉去重排名)
 tkless search "Rust 异步编程最佳实践" --limit 5
 tkless search "Tokio 教程" --limit 5 -f json
-# 指定独立搜索引擎 (--engine all / bing / duckduckgo)
-tkless search "Python asyncio" --engine duckduckgo --limit 3
-tkless search "Linux kernel" --engine bing --limit 5
+# 指定独立搜索引擎 (--engine all / bing / duckduckgo / brave / yandex / searxng / google)
+tkless search "Python asyncio" --engine brave --limit 3
+tkless search "Distributed systems" --engine yandex --limit 5
+tkless search "Self-hosted LLM" --engine searxng --searxng-url "https://searx.be" --limit 5
+tkless search "Linux kernel CVE" --engine google --limit 5
 # 专享生态定向：一键限定抓取微信公众号、百度百科、知乎、GitHub、掘金平台
 tkless search "开源项目" --wechat --limit 5
 tkless search "光合作用" --baike --limit 3
@@ -326,6 +328,20 @@ tkless search "Vue3 源码解析" --juejin --limit 5
 # ⚡ 搜索即抓取一体化 (Search & Fetch All-in-One，单次交互并发抓取并清洗各页面正文，Token 预算严格可控)
 tkless search "Rust 异步运行时" --fetch-content --limit 3 --max-tokens-per-page 1500
 tkless search "Tokio runtime" --fetch-content --limit 2 -f json --max-tokens-per-page 300
+
+# 23.1 ⚡ 全球化核心平台原生适配矩阵 (YouTube / HN / linux.do / X / Papers With Code)
+# 抓取 YouTube 视频 (提取时长、播放量、章节目录与原生字幕轨 timedtext)
+tkless "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+# 抓取 Hacker News 首页 Top 30 极客资讯榜单
+tkless "https://news.ycombinator.com/"
+# 抓取 Hacker News 讨论帖 (提取外部链接与层级缩进评论树)
+tkless "https://news.ycombinator.com/item?id=39123456"
+# 抓取 linux.do / Discourse 社区话题 (原生 .json API 免无头浏览器直出，提纯主楼正文与楼层讨论)
+tkless "https://linux.do/t/topic-slug/12345"
+# 抓取 X (Twitter) 推文与讨论串 (免登录、免 API Key，提取正文、图集、引用推文与互动指标)
+tkless "https://x.com/rustlang/status/1890000000000000000"
+# 抓取 Papers With Code 论文主页 (提取摘要、arXiv/PDF直链、GitHub 开源仓库 Stars 与 SOTA 评测表)
+tkless "https://paperswithcode.com/paper/deepseek-v3-technical-report"
 
 # 24. ⚡ 批量并发抓取与多 URL 流水线 (通过多协程并发池并发处理，支持从文件或管道批量输入)
 tkless batch ./urls.txt --concurrency 5 -o ./batch_results.md
