@@ -417,9 +417,9 @@ pub fn get_available_tools() -> Vec<McpTool> {
                     "limit": { "type": "integer", "default": 5, "description": "Max results count (1-20)" },
                     "engine": {
                         "type": "string",
-                        "enum": ["all", "bing", "duckduckgo"],
+                        "enum": ["all", "bing", "duckduckgo", "brave", "yandex", "searxng", "google"],
                         "default": "all",
-                        "description": "Search engine provider: all (concurrent Bing + DuckDuckGo with deduplication), bing, duckduckgo"
+                        "description": "Search engine provider: all (concurrent multi-engine with deduplication), bing, duckduckgo, brave, yandex, searxng, google"
                     },
                     "scope": {
                         "type": "string",
@@ -432,6 +432,7 @@ pub fn get_available_tools() -> Vec<McpTool> {
                     "max_tokens_per_page": { "type": "integer", "default": 1500, "description": "Max tokens per webpage during fetch_content" },
                     "cdp_endpoint": { "type": "string", "description": "CDP endpoint for JS rendering" },
                     "cdp_wait_ms": { "type": "integer", "description": "CDP wait time in ms" },
+                    "auto_cdp": { "type": "boolean", "default": false, "description": "Auto-fallback to CDP headless browser on anti-bot challenges" },
                     "schema": { "type": "string", "description": "Extraction schema for entity extraction during fetch" },
                     "proxy": { "type": "string", "description": "HTTP/HTTPS proxy URL" },
                     "mobile": { "type": "boolean", "default": false, "description": "Emulate mobile browser during fetch" },
@@ -454,9 +455,9 @@ pub fn get_available_tools() -> Vec<McpTool> {
                     "max_tokens": { "type": "integer", "default": 8000, "description": "Overall token budget for the compiled research report" },
                     "engine": {
                         "type": "string",
-                        "enum": ["all", "bing", "duckduckgo"],
+                        "enum": ["all", "bing", "duckduckgo", "brave", "yandex", "searxng", "google"],
                         "default": "all",
-                        "description": "Search engine backend"
+                        "description": "Search engine backend: all (default), bing, duckduckgo, brave, yandex, searxng, google"
                     },
                     "dedup": { "type": "boolean", "default": true, "description": "Filter near-duplicate pages via SimHash" },
                     "format": { "type": "string", "enum": ["markdown", "json"], "default": "markdown", "description": "Output presentation format" }

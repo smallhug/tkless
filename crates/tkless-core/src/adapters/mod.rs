@@ -2,34 +2,44 @@ pub mod arxiv;
 pub mod baike;
 pub mod bilibili;
 pub mod csdn;
+pub mod discourse;
 pub mod github;
+pub mod hackernews;
 pub mod huggingface;
 pub mod juejin;
 pub mod medium;
+pub mod paperswithcode;
 pub mod reddit;
 pub mod stackoverflow;
 pub mod substack;
+pub mod twitter;
 pub mod v2ex;
 pub mod wechat;
 pub mod wikipedia;
 pub mod xiaohongshu;
+pub mod youtube;
 pub mod zhihu;
 
 pub use arxiv::ArxivAdapter;
 pub use baike::BaikeAdapter;
 pub use bilibili::BilibiliAdapter;
 pub use csdn::CsdnAdapter;
+pub use discourse::DiscourseAdapter;
 pub use github::GithubAdapter;
+pub use hackernews::HackerNewsAdapter;
 pub use huggingface::HuggingfaceAdapter;
 pub use juejin::JuejinAdapter;
 pub use medium::MediumAdapter;
+pub use paperswithcode::PapersWithCodeAdapter;
 pub use reddit::RedditAdapter;
 pub use stackoverflow::StackoverflowAdapter;
 pub use substack::SubstackAdapter;
+pub use twitter::TwitterAdapter;
 pub use v2ex::V2exAdapter;
 pub use wechat::WechatAdapter;
 pub use wikipedia::WikipediaAdapter;
 pub use xiaohongshu::XiaohongshuAdapter;
+pub use youtube::YoutubeAdapter;
 pub use zhihu::ZhihuAdapter;
 
 use crate::error::TklessError;
@@ -83,11 +93,16 @@ impl AdapterRegistry {
     pub fn with_builtins() -> Self {
         let mut registry = Self::new();
         registry.register(Arc::new(BilibiliAdapter::new()));
+        registry.register(Arc::new(YoutubeAdapter::new()));
         registry.register(Arc::new(WechatAdapter::new()));
         registry.register(Arc::new(ZhihuAdapter::new()));
         registry.register(Arc::new(XiaohongshuAdapter::new()));
         registry.register(Arc::new(JuejinAdapter::new()));
         registry.register(Arc::new(GithubAdapter::new()));
+        registry.register(Arc::new(HackerNewsAdapter::new()));
+        registry.register(Arc::new(DiscourseAdapter::new()));
+        registry.register(Arc::new(TwitterAdapter::new()));
+        registry.register(Arc::new(PapersWithCodeAdapter::new()));
         registry.register(Arc::new(CsdnAdapter::new()));
         registry.register(Arc::new(MediumAdapter::new()));
         registry.register(Arc::new(SubstackAdapter::new()));
@@ -114,7 +129,7 @@ impl AdapterRegistry {
             .map(|b| b.as_ref())
     }
 
-    /// Returns structured metadata for all 16 built-in platform adapters.
+    /// Returns structured metadata for all 21 built-in platform adapters.
     pub fn list_adapter_metadata() -> Vec<AdapterInfo> {
         vec![
             AdapterInfo {
@@ -128,6 +143,67 @@ impl AdapterRegistry {
                     "高赞评论",
                     "封面/视频流下载",
                     "推荐流与排行榜",
+                ],
+            },
+            AdapterInfo {
+                name: "youtube",
+                title: "YouTube",
+                domain_patterns: &["youtube.com", "youtu.be"],
+                features: &[
+                    "多语言字幕轨(timedtext)",
+                    "视频章节时间戳",
+                    "频道作者与播放量",
+                    "高清简介提纯",
+                ],
+            },
+            AdapterInfo {
+                name: "hackernews",
+                title: "Hacker News",
+                domain_patterns: &["news.ycombinator.com"],
+                features: &[
+                    "Top极客榜单提取",
+                    "官方Firebase API解析",
+                    "层级讨论评论树",
+                    "直达外链提取",
+                ],
+            },
+            AdapterInfo {
+                name: "discourse",
+                title: "Discourse / linux.do",
+                domain_patterns: &[
+                    "linux.do",
+                    "users.rust-lang.org",
+                    "community.openai.com",
+                    "meta.discourse.org",
+                ],
+                features: &[
+                    "linux.do深度适配",
+                    "原生.json API免渲染解析",
+                    "楼层回复与点赞结构化",
+                    "代码块与外链解包",
+                ],
+            },
+            AdapterInfo {
+                name: "twitter",
+                title: "X (Twitter)",
+                domain_patterns: &["x.com", "twitter.com"],
+                features: &[
+                    "免鉴权Syndication API",
+                    "长推文与讨论串(Threads)",
+                    "高清媒体大图/视频",
+                    "引用推文嵌套解析",
+                    "点赞/转推互动指标",
+                ],
+            },
+            AdapterInfo {
+                name: "paperswithcode",
+                title: "Papers With Code",
+                domain_patterns: &["paperswithcode.com"],
+                features: &[
+                    "论文摘要与作者列表",
+                    "arXiv与PDF直达下载",
+                    "GitHub开源实现与Stars",
+                    "Benchmark评测SOTA表现",
                 ],
             },
             AdapterInfo {
