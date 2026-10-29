@@ -1,17 +1,18 @@
 # 03 - 平台适配器矩阵与功能特性实战手册
 
-本文档是 TkLess 的全量功能特性、21+ 平台适配器与 CLI 命令行使用手册，旨在为开发者与 AI Agent 管道集成提供完整的参考标准。
+本文档是 TkLess 的全量功能特性、22 个平台适配器与 CLI 命令行使用手册，旨在为开发者与 AI Agent 管道集成提供完整的参考标准。
 > **Spend less tokens, perceive more web.**
 
 ---
 
-## 1. 平台专属适配器矩阵 (21+ Platforms)
+## 1. 平台专属适配器矩阵 (22 Platforms)
 
 TkLess 内置自动化平台识别调度器，当输入的 URL 命中受支持的主流平台时，会自动激活专属的数据提取与降噪策略：
 
 | 平台名称 | 匹配域名规则 | 核心支持能力与专属选项 |
 | :--- | :--- | :--- |
-| **哔哩哔哩 (Bilibili)** | `bilibili.com`, `b23.tv` | - 提取 CC 官方/AI 字幕轨 (`--bili-sub`)<br>- 提取 AI 视频大纲总结 (`--bili-sum`)<br>- 提取时间轴弹幕表 (`--bili-dm`)<br>- 提取高赞精选热评 (`--bili-cm`)<br>- 视频与高清封面下载 (`--bili-dl`, `--bili-dl-cover`) |
+| **Skills.sh (Agent Skills)** | `skills.sh`, `www.skills.sh` | - 技能详情与折叠正文恢复<br>- 仓库技能列表、站内搜索与榜单自动翻页 (`--skills-pages` / `--skills-limit`)<br>- 来源、安装命令与正文完整性等结构化元数据；见 [适配说明](08-skills-sh.md) |
+| **哔哩哔哩 (Bilibili)** | `bilibili.com`, `b23.tv` | - 提取 CC 官方/AI 字幕轨 (`--subtitles`)<br>- 提取 AI 视频大纲总结 (`--bili-sum`)<br>- 提取时间轴弹幕表 (`--danmaku`)<br>- 提取高赞精选热评 (`--comments`)<br>- 视频与高清封面下载 (`--download-video`, `--download-cover`) |
 | **YouTube** | `youtube.com`, `youtu.be` | - 原生多语言字幕轨提纯 (`timedtext` 格式)<br>- 视频章节目录与时间戳 (Chapters)<br>- 频道名称、发布时间、时长与播放量元数据<br>- 视频简介提纯与 Markdown 结构化呈现 |
 | **Hacker News** | `news.ycombinator.com` | - Top / 首页 30 条极客资讯榜单抽取<br>- 讨论帖官方 Firebase API + HTML 双通道<br>- 层级缩进评论树 (Comment Tree) 递归提取与清洗 |
 | **Discourse / linux.do** | `linux.do`, `users.rust-lang.org`, `community.openai.com` 等 | - linux.do 技术社区深度适配<br>- 原生 `/t/{id}.json` REST API 免无头浏览器直出<br>- 提取主楼正文、楼层回复、点赞量、分类与标签 |
@@ -108,15 +109,20 @@ tkless https://dashboard.example.com/app --screenshot ./dashboard.png
 
 ### 2.7 免 API Key 全网搜索与即搜即抓
 ```bash
-# 使用 Bing/Google 检索关键词并以 Markdown 呈现结果
-tkless search "Rust async tokio tutorial" --limit 5
+# 使用 Bing 检索关键词，默认最多 10 条
+tkless search "Rust async tokio tutorial"
 
 # 针对微信公众号定向检索
-tkless search "大模型 Agent 架构设计" --wechat --limit 5
+tkless search "大模型 Agent 架构设计" --scope wechat
+
+# GitHub 平台定向，并输出结构化结果
+tkless search "Tokio" --scope github -l 10 -f json
 
 # 搜索前 3 条结果并在一次调用中直接抓取其清洗后的正文内容
 tkless search "DeepSeek v3 架构解析" --limit 3 --fetch-content
 ```
+
+搜索固定使用 Bing，无需引擎参数。`--scope` 会添加 `site:` 查询并在本地校验结果 URL；过滤后的数量可以少于上限。`--dedup` 与 `--max-tokens-per-page` 要求同时启用 `--fetch-content`。连接预检、浏览器回退和迁移方式见 [Bing 搜索说明](06-bing-search.md)。
 
 ### 2.8 交互式 REPL 探索会话命令行 (tkless shell)
 ```bash

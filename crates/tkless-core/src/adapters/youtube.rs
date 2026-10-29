@@ -316,9 +316,9 @@ impl YoutubeAdapter {
             content.push_str("---\n\n");
         }
 
-        content.push_str(&format!("# 🎬 {title}\n\n"));
+        content.push_str(&format!("# {title}\n\n"));
         content.push_str(&format!(
-            "> 👤 **频道**: {} | ⏱️ **时长**: {} | 👁️ **播放量**: {}\n\n",
+            "> **频道**: {} | **时长**: {} | **播放量**: {}\n\n",
             if author.is_empty() { "未知" } else { &author },
             duration_str,
             if view_count.is_empty() {
@@ -329,7 +329,7 @@ impl YoutubeAdapter {
         ));
 
         if !chapters.is_empty() {
-            content.push_str("### 📑 视频章节目录 (Chapters)\n\n");
+            content.push_str("### 视频章节目录 (Chapters)\n\n");
             content.push_str("| 时间戳 | 章节名称 |\n");
             content.push_str("|:---|:---|\n");
             for (ts, ch_title) in &chapters {
@@ -339,13 +339,13 @@ impl YoutubeAdapter {
         }
 
         if !description.is_empty() {
-            content.push_str("### 📖 视频简介 (Description)\n\n");
+            content.push_str("### 视频简介 (Description)\n\n");
             content.push_str(description);
             content.push_str("\n\n---\n\n");
         }
 
         if !subtitle_lines.is_empty() {
-            content.push_str("### 📝 视频字幕与实录 (Transcript)\n\n");
+            content.push_str("### 视频字幕与实录 (Transcript)\n\n");
             for (time_label, line_text) in &subtitle_lines {
                 content.push_str(&format!("- **`{time_label}`** {line_text}\n"));
             }
@@ -371,6 +371,8 @@ impl YoutubeAdapter {
         };
 
         Ok(PageDocument {
+            extraction: Default::default(),
+            warnings: Vec::new(),
             url: url.to_string(),
             final_url: format!("https://www.youtube.com/watch?v={video_id}"),
             status: 200,

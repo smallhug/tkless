@@ -607,7 +607,7 @@ fn test_integration_rss_feed_parsing_and_markdown() {
     assert_eq!(doc.title.as_deref(), Some("Rust Security Announcements"));
     assert!(doc
         .content
-        .contains("# 📰 订阅源聚合 (RSS): Rust Security Announcements"));
+        .contains("# 订阅源聚合 (RSS): Rust Security Announcements"));
     assert!(doc.content.contains("Security Advisory 2026-01"));
     assert!(doc.content.contains("Rust Security WG"));
     assert!(doc

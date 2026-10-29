@@ -199,6 +199,8 @@ impl BaikeAdapter {
         let token_count = count_tokens(&markdown, options.tokenizer);
 
         Some(PageDocument {
+            extraction: Default::default(),
+            warnings: Vec::new(),
             url: url.to_string(),
             final_url: url.to_string(),
             status: 200,
@@ -339,7 +341,7 @@ impl BaikeAdapter {
 
                 // If infobox is present, format as a clean GFM table
                 if !infobox.is_empty() && !options.tables_only {
-                    md.push_str("### 📋 基本信息 (Basic Info)\n\n");
+                    md.push_str("### 基本信息 (Basic Info)\n\n");
                     md.push_str("| 属性 (Property) | 内容 (Value) |\n");
                     md.push_str("|---|---|\n");
                     for (k, v) in &infobox {
@@ -356,6 +358,8 @@ impl BaikeAdapter {
         let token_count = count_tokens(&content, options.tokenizer);
 
         Ok(PageDocument {
+            extraction: Default::default(),
+            warnings: Vec::new(),
             url: url.to_string(),
             final_url: url.to_string(),
             status: 200,

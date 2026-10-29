@@ -1,6 +1,7 @@
 use crate::error::TklessError;
 use crate::model::{ExtractionOptions, PageDocument};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{BufReader, BufWriter};
@@ -58,8 +59,8 @@ impl DocumentCache {
             cache_dir: dir,
             default_ttl_secs: default_ttl_secs.max(1),
         };
-        // Automatically prune expired cache files on initialization to prevent disk bloat
-        cache.prune_expired();
+        // Retain expired validators for cross-process HTTP revalidation.
+        // Explicit prune_expired / clear remain available for maintenance.
         cache
     }
 
@@ -72,39 +73,22 @@ impl DocumentCache {
         }
     }
 
-    /// Generates a deterministic FNV-1a hash key from the URL and canonical extraction options.
+    /// Generates a versioned key covering every extraction option and Schema file contents.
     pub fn generate_key(&self, url: &str, options: &ExtractionOptions) -> String {
-        let canonical = format!(
-            "{}|{:?}|{:?}|{:?}|{}|{}|{}|{}|{}|{:?}|{}|{}|{}|{}|{}|{:?}|{}|{:?}|{}",
-            url.trim(),
-            options.mode,
-            options.format,
-            options.max_tokens,
-            options.strip_images,
-            options.strip_links,
-            options.frontmatter,
-            options.no_adapter,
-            options.feed,
-            options.selector,
-            options.extract_links,
-            options.extract_images,
-            options.extract_tables,
-            options.subtitles,
-            options.danmaku,
-            options.danmaku_limit,
-            options.comments,
-            options.comments_limit,
-            options.conclusion
-        );
+        self.generate_scoped_key(url, options, &[])
+    }
 
-        let hash = fnv1a_64(canonical.as_bytes());
-        let safe_slug: String = url
-            .chars()
-            .filter(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-')
-            .take(24)
-            .collect();
-
-        format!("{hash:016x}_{safe_slug}")
+    /// Scope keys by request identity without placing credentials in filenames or logs.
+    pub fn generate_scoped_key(
+        &self,
+        url: &str,
+        options: &ExtractionOptions,
+        scope: &[u8],
+    ) -> String {
+        let schema_contents = options.schema.as_ref().and_then(|s| fs::read(s).ok());
+        let canonical = serde_json::to_vec(&(url.trim(), options, schema_contents, scope))
+            .expect("Extraction options are JSON serializable");
+        format!("v3_{:x}", Sha256::digest(canonical))
     }
 
     /// Retrieves a document from cache if present and unexpired.
@@ -338,19 +322,6 @@ impl DocumentCache {
     }
 }
 
-/// Computes a 64-bit FNV-1a hash over raw bytes.
-fn fnv1a_64(bytes: &[u8]) -> u64 {
-    const FNV_OFFSET_BASIS: u64 = 0xcbf29ce484222325;
-    const FNV_PRIME: u64 = 0x100000001b3;
-
-    let mut hash = FNV_OFFSET_BASIS;
-    for &byte in bytes {
-        hash ^= byte as u64;
-        hash = hash.wrapping_mul(FNV_PRIME);
-    }
-    hash
-}
-
 fn current_time_secs() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -438,6 +409,8 @@ mod tests {
         let cache = DocumentCache::memory_only(300);
         let key = "test_key_01";
         let doc = PageDocument {
+            extraction: Default::default(),
+            warnings: Vec::new(),
             url: "https://example.com".into(),
             final_url: "https://example.com".into(),
             status: 200,
@@ -475,6 +448,8 @@ mod tests {
         let cache = DocumentCache::memory_only(0); // Expires immediately
         let key = "expire_key";
         let doc = PageDocument {
+            extraction: Default::default(),
+            warnings: Vec::new(),
             url: "https://example.com".into(),
             final_url: "https://example.com".into(),
             status: 200,
@@ -510,6 +485,8 @@ mod tests {
         let cache = DocumentCache::memory_only(10);
         let key = "revalidate_key";
         let doc = PageDocument {
+            extraction: Default::default(),
+            warnings: Vec::new(),
             url: "https://example.com/api/data".into(),
             final_url: "https://example.com/api/data".into(),
             status: 200,

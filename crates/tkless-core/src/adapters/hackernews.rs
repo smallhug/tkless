@@ -141,7 +141,7 @@ impl HackerNewsAdapter {
         }
 
         let mut out = String::new();
-        out.push_str("# 🚀 Hacker News Top Stories\n\n");
+        out.push_str("# Hacker News Top Stories\n\n");
         out.push_str("| 排名 | 标题 | 来源域名 | 得分 | 发布者 |\n");
         out.push_str("|:---|:---|:---|:---|:---|\n");
         for s in &stories {
@@ -198,26 +198,26 @@ impl HackerNewsAdapter {
             .map(|e| e.inner_html())
             .unwrap_or_default();
 
-        out.push_str(&format!("# 📰 {title}\n\n"));
+        out.push_str(&format!("# {title}\n\n"));
         if !link.is_empty() && link.starts_with("http") {
-            out.push_str(&format!("> 🔗 **直达原文**: [{link}]({link})\n"));
+            out.push_str(&format!("> **直达原文**: [{link}]({link})\n"));
         }
         out.push_str(&format!(
-            "> 💬 **HN 讨论链接**: [https://news.ycombinator.com/item?id={item_id}](https://news.ycombinator.com/item?id={item_id}){}\n\n",
-            if author.is_empty() { "".to_string() } else { format!(" | 👤 **作者**: `{author}`") }
+            "> **HN 讨论链接**: [https://news.ycombinator.com/item?id={item_id}](https://news.ycombinator.com/item?id={item_id}){}\n\n",
+            if author.is_empty() { "".to_string() } else { format!(" | **作者**: `{author}`") }
         ));
 
         if !toptext_html.is_empty() {
             let converter = MarkdownConverter::new();
             if let Ok(md_body) = converter.convert(&toptext_html, false, false) {
-                out.push_str("### 📝 主楼说明 / 正文\n\n");
+                out.push_str("### 主楼说明 / 正文\n\n");
                 out.push_str(&md_body);
                 out.push_str("\n\n---\n\n");
             }
         }
 
         // 2. Comments Tree
-        out.push_str("### 💬 社区精选讨论 (Discussion Tree)\n\n");
+        out.push_str("### 社区精选讨论 (Discussion Tree)\n\n");
 
         let mut comment_count = 0;
         let converter = MarkdownConverter::new();
@@ -254,7 +254,7 @@ impl HackerNewsAdapter {
                 .convert(&comment_html, false, false)
                 .unwrap_or_else(|_| comment_html.clone());
 
-            out.push_str(&format!("{quote_prefix}👤 **`{comment_author}`**:\n"));
+            out.push_str(&format!("{quote_prefix}**`{comment_author}`**:\n"));
             for line in comment_md.lines() {
                 out.push_str(&format!("{quote_prefix}{line}\n"));
             }
@@ -291,20 +291,20 @@ impl HackerNewsAdapter {
                             let text_html = val.get("text").and_then(|t| t.as_str()).unwrap_or("");
 
                             let mut md = String::new();
-                            md.push_str(&format!("# 📰 {title}\n\n"));
+                            md.push_str(&format!("# {title}\n\n"));
                             if !target_url.is_empty() {
                                 md.push_str(&format!(
-                                    "> 🔗 **直达原文**: [{target_url}]({target_url})\n"
+                                    "> **直达原文**: [{target_url}]({target_url})\n"
                                 ));
                             }
                             md.push_str(&format!(
-                                "> 💬 **HN 讨论**: [https://news.ycombinator.com/item?id={item_id}](https://news.ycombinator.com/item?id={item_id}) | ⭐ **得分**: {score} | 👤 **作者**: `{by}`\n\n"
+                                "> **HN 讨论**: [https://news.ycombinator.com/item?id={item_id}](https://news.ycombinator.com/item?id={item_id}) | **得分**: {score} | **作者**: `{by}`\n\n"
                             ));
 
                             if !text_html.is_empty() {
                                 let converter = MarkdownConverter::new();
                                 if let Ok(clean_body) = converter.convert(text_html, false, false) {
-                                    md.push_str("### 📝 主楼说明 / 正文\n\n");
+                                    md.push_str("### 主楼说明 / 正文\n\n");
                                     md.push_str(&clean_body);
                                     md.push_str("\n\n---\n\n");
                                 }
@@ -312,7 +312,7 @@ impl HackerNewsAdapter {
 
                             // Concurrently fetch top 5 comments
                             if let Some(kids) = val.get("kids").and_then(|k| k.as_array()) {
-                                md.push_str("### 💬 社区热门讨论 (Top Comments)\n\n");
+                                md.push_str("### 社区热门讨论 (Top Comments)\n\n");
                                 let mut comment_set = tokio::task::JoinSet::new();
                                 for kid_id in kids.iter().take(5).filter_map(|k| k.as_u64()) {
                                     let f = fetcher.clone();
@@ -342,7 +342,7 @@ impl HackerNewsAdapter {
                                             let c_md = converter
                                                 .convert(c_text, false, false)
                                                 .unwrap_or_else(|_| c_text.to_string());
-                                            md.push_str(&format!("- 👤 **`{c_by}`**:\n"));
+                                            md.push_str(&format!("- **`{c_by}`**:\n"));
                                             for line in c_md.lines() {
                                                 md.push_str(&format!("  {line}\n"));
                                             }
@@ -354,6 +354,8 @@ impl HackerNewsAdapter {
 
                             let token_count = count_tokens(&md, options.tokenizer);
                             return Ok(PageDocument {
+                                extraction: Default::default(),
+                                warnings: Vec::new(),
                                 url: format!("https://news.ycombinator.com/item?id={item_id}"),
                                 final_url: format!(
                                     "https://news.ycombinator.com/item?id={item_id}"
@@ -406,6 +408,8 @@ impl HackerNewsAdapter {
         let token_count = count_tokens(&content, options.tokenizer);
 
         Ok(PageDocument {
+            extraction: Default::default(),
+            warnings: Vec::new(),
             url: url.to_string(),
             final_url: url.to_string(),
             status: 200,

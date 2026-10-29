@@ -27,6 +27,7 @@ pub struct FetchedResponse {
 pub struct Fetcher {
     client: reqwest::Client,
     options: FetchOptions,
+    search_preflight: crate::search_preflight::HttpState,
 }
 
 impl Fetcher {
@@ -74,6 +75,7 @@ impl Fetcher {
             .default_headers(headers)
             .timeout(Duration::from_secs(options.timeout_secs))
             .connect_timeout(Duration::from_secs(options.connect_timeout_secs))
+            .connector_layer(crate::search_preflight::ConnectionTimingLayer)
             .redirect(reqwest::redirect::Policy::none());
 
         if let Some(ref proxy_url) = options.proxy {
@@ -83,7 +85,11 @@ impl Fetcher {
 
         let client = client_builder.build()?;
 
-        Ok(Self { client, options })
+        Ok(Self {
+            client,
+            options,
+            search_preflight: Default::default(),
+        })
     }
 
     /// Access the underlying reqwest HTTP client.
@@ -94,6 +100,10 @@ impl Fetcher {
     /// Access the underlying fetch options.
     pub fn options(&self) -> &FetchOptions {
         &self.options
+    }
+
+    pub(crate) fn search_preflight(&self) -> &crate::search_preflight::HttpState {
+        &self.search_preflight
     }
 
     /// Builds a GET request for target URL with domain-scoped cookies automatically attached.
@@ -199,7 +209,26 @@ impl Fetcher {
         etag: Option<&str>,
         last_modified: Option<&str>,
     ) -> Result<FetchedResponse, TklessError> {
+        self.fetch_with_origin_policy(target_url, etag, last_modified, false)
+            .await
+    }
+
+    /// Fetch a UTF-8 API response without allowing credentials to redirect to another origin.
+    /// Public library entry point for API consumers; webpage fetching uses `fetch` instead.
+    pub async fn fetch_api(&self, target_url: &str) -> Result<FetchedResponse, TklessError> {
+        self.fetch_with_origin_policy(target_url, None, None, true)
+            .await
+    }
+
+    async fn fetch_with_origin_policy(
+        &self,
+        target_url: &str,
+        etag: Option<&str>,
+        last_modified: Option<&str>,
+        same_origin: bool,
+    ) -> Result<FetchedResponse, TklessError> {
         let mut current_url = Url::parse(target_url)?;
+        let initial_origin = current_url.origin();
         let mut redirect_count = 0;
         const MAX_REDIRECTS: usize = 10;
         let connect_timeout = Duration::from_secs(self.options.connect_timeout_secs);
@@ -227,17 +256,24 @@ impl Fetcher {
                 match tokio::time::timeout(connect_timeout, send_fut).await {
                     Ok(Ok(r)) => {
                         let status = r.status();
-                        if status.is_server_error() && attempt < self.options.retries {
+                        if (status.is_server_error()
+                            || status == reqwest::StatusCode::TOO_MANY_REQUESTS)
+                            && attempt < self.options.retries
+                        {
                             attempt += 1;
-                            let delay = Duration::from_millis(200 * (1 << (attempt - 1)))
-                                .min(Duration::from_secs(5));
+                            let delay = retry_delay(
+                                attempt,
+                                r.headers()
+                                    .get(reqwest::header::RETRY_AFTER)
+                                    .and_then(|v| v.to_str().ok()),
+                            );
                             warn!(
                                 url = %current_url,
                                 status = status.as_u16(),
                                 attempt = attempt,
                                 retries = self.options.retries,
                                 delay = ?delay,
-                                "Server returned 5xx error, retrying with exponential backoff..."
+                                "Server returned a retryable status; respecting Retry-After"
                             );
                             tokio::time::sleep(delay).await;
                             continue;
@@ -247,8 +283,7 @@ impl Fetcher {
                     Ok(Err(err)) => {
                         if attempt < self.options.retries {
                             attempt += 1;
-                            let delay = Duration::from_millis(200 * (1 << (attempt - 1)))
-                                .min(Duration::from_secs(5));
+                            let delay = retry_delay(attempt, None);
                             warn!(
                                 url = %current_url,
                                 error = %err,
@@ -265,8 +300,7 @@ impl Fetcher {
                     Err(_) => {
                         if attempt < self.options.retries {
                             attempt += 1;
-                            let delay = Duration::from_millis(200 * (1 << (attempt - 1)))
-                                .min(Duration::from_secs(5));
+                            let delay = retry_delay(attempt, None);
                             warn!(
                                 url = %current_url,
                                 attempt = attempt,
@@ -326,6 +360,9 @@ impl Fetcher {
                             ))
                         })?;
 
+                        if same_origin && next_url.origin() != initial_origin {
+                            return Err(TklessError::InvalidArgument("API redirect changed origin; configure the final instance URL explicitly".into()));
+                        }
                         redirect_count += 1;
                         if redirect_count > MAX_REDIRECTS {
                             return Err(TklessError::InvalidArgument(format!(
@@ -417,6 +454,10 @@ impl Fetcher {
         // Decode character encoding (UTF-8, GBK, Shift-JIS, etc.)
         let html = if is_pdf {
             String::new()
+        } else if same_origin {
+            std::str::from_utf8(&raw_bytes)
+                .map_err(|_| TklessError::EncodingError("API response is not valid UTF-8".into()))?
+                .to_owned()
         } else {
             decode_html(&raw_bytes, content_type.as_deref())
         };
@@ -480,6 +521,20 @@ impl Fetcher {
 
         Ok(())
     }
+}
+
+fn retry_delay(attempt: u32, retry_after: Option<&str>) -> Duration {
+    if let Some(value) = retry_after {
+        if let Ok(seconds) = value.trim().parse::<u64>() {
+            return Duration::from_secs(seconds.min(300));
+        }
+        if let Ok(date) = chrono::DateTime::parse_from_rfc2822(value) {
+            let seconds = (date.timestamp() - chrono::Utc::now().timestamp()).max(0) as u64;
+            return Duration::from_secs(seconds.min(300));
+        }
+    }
+    Duration::from_millis(200 * (1u64 << attempt.saturating_sub(1).min(5)))
+        .min(Duration::from_secs(5))
 }
 
 fn is_private_ip(ip: std::net::IpAddr) -> bool {
@@ -727,12 +782,6 @@ pub fn load_cookie_from_file_for_url(
     Ok(parse_cookie_content_for_platform(&content, platform))
 }
 
-/// Loads and parses cookie credentials from a file supporting multi-platform prefixes,
-/// Netscape format, and standard HTTP header format.
-pub fn load_cookie_from_file(path: &Path) -> Result<String, TklessError> {
-    load_cookie_from_file_for_url(path, None)
-}
-
 /// Saves platform-specific cookies to file with mandatory platform prefix (e.g. `bilibili: SESSDATA=...`).
 /// Automatically preserves existing platform credentials to prevent accidental overwrite.
 pub fn save_platform_cookies_to_file(
@@ -887,11 +936,6 @@ fn ingest_cookie_pairs(cookies: &mut Vec<(String, String)>, raw: &str) {
             }
         }
     }
-}
-
-/// Parses raw cookie string content in Netscape or standard header format into "key1=val1; key2=val2".
-pub fn parse_cookie_content(content: &str) -> String {
-    parse_cookie_content_for_platform(content, None)
 }
 
 fn insert_or_update_cookie(cookies: &mut Vec<(String, String)>, name: &str, val: &str) {

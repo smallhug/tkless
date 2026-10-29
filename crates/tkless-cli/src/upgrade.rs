@@ -1,6 +1,7 @@
 //! Binary self-upgrade mechanism from GitHub Releases.
 
 use anyhow::{bail, Context, Result};
+use sha2::{Digest, Sha256};
 use tkless_core::TklessEngine;
 
 /// Automatically checks GitHub Releases and upgrades the current running executable (like bun upgrade).
@@ -34,17 +35,20 @@ pub async fn run_upgrade(engine: &TklessEngine, args: &crate::cli::UpgradeArgs) 
 
     eprintln!("[TkLess] 当前版本: v{current_version} | 最新版本: {tag_name}");
 
-    if latest_version == current_version && !args.force {
-        println!("✨ TkLess 已经是最新版本 (v{current_version})，无需更新。");
+    let current_semver = semver::Version::parse(current_version)?;
+    let latest_semver =
+        semver::Version::parse(latest_version).context("Release tag is not a semantic version")?;
+    if latest_semver <= current_semver && !args.force {
+        println!("TkLess 已经是最新版本 (v{current_version})，无需更新。");
         return Ok(());
     }
 
     if args.check {
-        if latest_version != current_version {
-            println!("🔔 检测到 TkLess 有新版本可用: {tag_name} (当前: v{current_version})");
+        if latest_semver > current_semver {
+            println!("检测到 TkLess 有新版本可用: {tag_name} (当前: v{current_version})");
             println!("   运行 'tkless upgrade' 即可一键自动升级。");
         } else {
-            println!("✨ 当前已是最新版本 (v{current_version})。");
+            println!("当前已是最新版本 (v{current_version})。");
         }
         return Ok(());
     }
@@ -79,16 +83,29 @@ pub async fn run_upgrade(engine: &TklessEngine, args: &crate::cli::UpgradeArgs) 
         .context("下载链接缺失")?;
 
     eprintln!("[TkLess] 正在下载最新二进制: {download_url}...");
-    let bytes = engine
-        .client()
-        .get(download_url)
-        .header("User-Agent", format!("tkless/{current_version}"))
-        .send()
-        .await
-        .context("下载 release 产物失败")?
-        .bytes()
-        .await
-        .context("读取下载数据流失败")?;
+    let bytes = download_release_bytes(engine, download_url).await?;
+    let expected = if let Some(digest) = asset
+        .get("digest")
+        .and_then(|v| v.as_str())
+        .and_then(|s| s.strip_prefix("sha256:"))
+    {
+        digest.to_string()
+    } else {
+        let checksum_name = format!("{target_asset_name}.sha256");
+        let checksum_asset = assets.iter().find(|a| a["name"].as_str() == Some(&checksum_name))
+            .context("Release has no SHA-256 digest or checksum asset; refusing to replace the executable")?;
+        let checksum_url = checksum_asset["browser_download_url"]
+            .as_str()
+            .context("Missing checksum download URL")?;
+        let checksum_bytes = download_release_bytes(engine, checksum_url).await?;
+        let checksum = std::str::from_utf8(&checksum_bytes).context("Invalid checksum encoding")?;
+        checksum
+            .split_whitespace()
+            .next()
+            .context("Empty checksum file")?
+            .to_string()
+    };
+    verify_sha256(&bytes, &expected)?;
 
     let current_exe = std::env::current_exe().context("无法确定当前执行程序的物理路径")?;
     eprintln!("[TkLess] 当前执行程序路径: {}", current_exe.display());
@@ -164,14 +181,68 @@ pub async fn run_upgrade(engine: &TklessEngine, args: &crate::cli::UpgradeArgs) 
         }
     }
 
-    println!("🎉 恭喜！TkLess 已成功自动升级至 {}！", tag_name);
+    println!("恭喜！TkLess 已成功自动升级至 {}！", tag_name);
     Ok(())
 }
 
-#[allow(dead_code)]
+#[cfg(target_os = "macos")]
 fn uuid_simple() -> u128 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_nanos()
+}
+
+/// Public release assets may redirect; validate each hop and bound the download.
+async fn download_release_bytes(engine: &TklessEngine, url: &str) -> Result<Vec<u8>> {
+    let mut current = url::Url::parse(url)?;
+    for _ in 0..=10 {
+        if current.scheme() != "https" {
+            bail!("Release downloads require HTTPS");
+        }
+        engine.fetcher().validate_ssrf(&current).await?;
+        let mut response = engine.client().get(current.clone()).send().await?;
+        if response.status().is_redirection() {
+            let location = response
+                .headers()
+                .get(reqwest::header::LOCATION)
+                .context("Redirect has no Location")?
+                .to_str()?;
+            current = current.join(location)?;
+            continue;
+        }
+        response.error_for_status_ref()?;
+        let mut bytes = Vec::new();
+        while let Some(chunk) = response.chunk().await? {
+            if bytes.len().saturating_add(chunk.len()) > 100 * 1024 * 1024 {
+                bail!("Release asset exceeds 100 MB");
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+        return Ok(bytes);
+    }
+    bail!("Too many release download redirects")
+}
+
+fn verify_sha256(bytes: &[u8], expected: &str) -> Result<()> {
+    if expected.len() != 64 || !expected.bytes().all(|b| b.is_ascii_hexdigit()) {
+        bail!("Invalid SHA-256 checksum");
+    }
+    let actual = format!("{:x}", Sha256::digest(bytes));
+    if !actual.eq_ignore_ascii_case(expected) {
+        bail!("Release SHA-256 mismatch; executable was not replaced");
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn rejects_corrupted_release_before_installation() {
+        let digest = format!("{:x}", Sha256::digest(b"release"));
+        assert!(verify_sha256(b"release", &digest).is_ok());
+        assert!(verify_sha256(b"corrupted", &digest).is_err());
+        assert!(verify_sha256(b"release", "bad").is_err());
+    }
 }

@@ -75,14 +75,14 @@ impl DiscourseAdapter {
         if let Some(tags) = val.get("tags").and_then(|t| t.as_array()) {
             let tag_names: Vec<&str> = tags.iter().filter_map(|t| t.as_str()).collect();
             if !tag_names.is_empty() {
-                tags_str = format!(" | 🏷️ **标签**: `{}`", tag_names.join("`, `"));
+                tags_str = format!(" | **标签**: `{}`", tag_names.join("`, `"));
             }
         }
 
         let mut out = String::new();
-        out.push_str(&format!("# 💬 {title}\n\n"));
+        out.push_str(&format!("# {title}\n\n"));
         out.push_str(&format!(
-            "> 🌐 **社区**: `{domain}` | 👁️ **浏览量**: {views} | ❤️ **点赞数**: {like_count} | 💬 **回帖数**: {posts_count}{tags_str}\n\n"
+            "> **社区**: `{domain}` | **浏览量**: {views} | **点赞数**: {like_count} | **回帖数**: {posts_count}{tags_str}\n\n"
         ));
 
         let converter = MarkdownConverter::new();
@@ -119,17 +119,17 @@ impl DiscourseAdapter {
                 };
 
                 if post_num == 1 {
-                    out.push_str("## 📝 主楼楼主正文\n\n");
+                    out.push_str("## 主楼楼主正文\n\n");
                     out.push_str(&format!(
-                        "> 👤 **发帖人**: `{username}` | 🕒 **时间**: {post_time} | ❤️ **点赞**: {likes}\n\n"
+                        "> **发帖人**: `{username}` | **时间**: {post_time} | **点赞**: {likes}\n\n"
                     ));
                     out.push_str(&clean_body);
-                    out.push_str("\n\n---\n\n## 💬 社区精选回帖\n\n");
+                    out.push_str("\n\n---\n\n## 社区精选回帖\n\n");
                 } else {
                     out.push_str(&format!(
-                        "### 楼层 #{post_num} | 👤 `{username}` {}\n\n",
+                        "### 楼层 #{post_num} | `{username}` {}\n\n",
                         if likes > 0 {
-                            format!("(❤️ {likes})")
+                            format!("(点赞: {likes})")
                         } else {
                             String::new()
                         }
@@ -153,9 +153,9 @@ impl DiscourseAdapter {
             .unwrap_or_else(|| format!("Discourse Topic #{topic_id}"));
 
         let mut out = String::new();
-        out.push_str(&format!("# 💬 {title}\n\n"));
+        out.push_str(&format!("# {title}\n\n"));
         out.push_str(&format!(
-            "> 🌐 **社区**: `{domain}` | 🔗 **链接**: https://{domain}/t/{topic_id}\n\n---\n\n"
+            "> **社区**: `{domain}` | **链接**: https://{domain}/t/{topic_id}\n\n---\n\n"
         ));
 
         let converter = MarkdownConverter::new();
@@ -184,11 +184,11 @@ impl DiscourseAdapter {
                 .unwrap_or_else(|_| body_html.clone());
 
             if idx == 0 {
-                out.push_str(&format!("## 📝 主楼楼主正文 (👤 `{author}`)\n\n"));
+                out.push_str(&format!("## 主楼楼主正文 (`{author}`)\n\n"));
                 out.push_str(&md);
-                out.push_str("\n\n---\n\n## 💬 社区回帖\n\n");
+                out.push_str("\n\n---\n\n## 社区回帖\n\n");
             } else {
-                out.push_str(&format!("### 楼层 #{} | 👤 `{author}`\n\n", idx + 1));
+                out.push_str(&format!("### 楼层 #{} | `{author}`\n\n", idx + 1));
                 out.push_str(&md);
                 out.push_str("\n\n");
             }
@@ -231,6 +231,8 @@ impl DiscourseAdapter {
                         let (content, title) = Self::parse_topic_json(&val, &domain, topic_id);
                         let token_count = count_tokens(&content, options.tokenizer);
                         return Ok(PageDocument {
+            extraction: Default::default(),
+            warnings: Vec::new(),
                             url: format!("https://{domain}/t/{topic_id}"),
                             final_url: format!("https://{domain}/t/{topic_id}"),
                             status: 200,
@@ -269,6 +271,8 @@ impl DiscourseAdapter {
         let token_count = count_tokens(&content, options.tokenizer);
 
         Ok(PageDocument {
+            extraction: Default::default(),
+            warnings: Vec::new(),
             url: url.to_string(),
             final_url: url.to_string(),
             status: 200,

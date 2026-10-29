@@ -6,8 +6,8 @@ use crate::adapters::BilibiliAdapter;
 use crate::cache::DocumentCache;
 use crate::error::TklessError;
 use crate::model::{
-    ExtractionMode, ExtractionOptions, FetchOptions, OnTooLarge, OutputFormat, SearchEngineKind,
-    TableExportFormat, TokenizerKind, VideoQuality,
+    ExtractionMode, ExtractionOptions, FetchOptions, OnTooLarge, OutputFormat, TableExportFormat,
+    TokenizerKind, VideoQuality,
 };
 use crate::TklessEngine;
 use serde_json::Value;
@@ -16,24 +16,25 @@ use std::path::Path;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::RwLock;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info, warn};
 use url::Url;
 
-/// Type alias for an unbounded JSON notification sender used for MCP progress streaming and logging.
-pub type NotificationSender = tokio::sync::mpsc::UnboundedSender<Value>;
+/// Bounded notification sender; consumers must drain it concurrently with streaming calls.
+pub type NotificationSender = tokio::sync::mpsc::Sender<Value>;
 
 /// Operational mode for the MCP server: Full exposure vs Two-Stage Dynamic Discovery.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum McpMode {
-    /// Standard full mode: exposes all 22 tools in tools/list.
+    /// Standard full mode: exposes all 23 tools in tools/list.
     #[default]
     Full,
     /// Two-stage dynamic discovery mode: exposes 2 core tools + 4 dynamic discovery meta-tools
-    /// (discover_tools, get_tool_schema, execute_tool, activate_tools) reducing upfront prompt tokens by >80%.
+    /// (discover_tools, get_tool_schema, execute_tool, activate_tools) reducing the initial tool declarations.
     Dynamic,
 }
 
 /// In-memory and stdio Model Context Protocol (MCP) server for TkLess.
+#[derive(Clone)]
 pub struct McpServer {
     engine: Arc<TklessEngine>,
     cache: Arc<DocumentCache>,
@@ -58,6 +59,7 @@ impl McpServer {
     }
 
     /// Builder method to specify the MCP operational mode.
+    /// Library callers may configure an existing server; the CLI uses `new_with_mode`.
     pub fn with_mode(mut self, mode: McpMode) -> Self {
         self.mode = mode;
         self
@@ -84,7 +86,7 @@ impl McpServer {
             return None;
         }
 
-        let request: JsonRpcRequest = match serde_json::from_str(trimmed) {
+        let value: Value = match serde_json::from_str(trimmed) {
             Ok(req) => req,
             Err(e) => {
                 warn!(error = %e, "Malformed JSON-RPC request");
@@ -95,18 +97,41 @@ impl McpServer {
                 ));
             }
         };
+        let request_id = value.get("id").cloned().unwrap_or(Value::Null);
+        let request: JsonRpcRequest = match serde_json::from_value(value) {
+            Ok(request) => request,
+            Err(error) => {
+                return Some(JsonRpcResponse::error(
+                    request_id,
+                    INVALID_REQUEST,
+                    format!("Invalid JSON-RPC request: {error}"),
+                ));
+            }
+        };
 
+        if request.jsonrpc != "2.0" {
+            return Some(JsonRpcResponse::error(
+                request.id.unwrap_or(Value::Null),
+                INVALID_REQUEST,
+                "Expected JSON-RPC 2.0",
+            ));
+        }
+        if request.id.is_none() && request.method != "notifications/initialized" {
+            return None;
+        }
         let req_id = request.id.unwrap_or(Value::Null);
 
         debug!(method = %request.method, id = ?req_id, "Handling MCP request");
 
         match request.method.as_str() {
             "initialize" => {
+                let version = "2025-11-25";
                 let init_result = serde_json::json!({
-                    "protocolVersion": "2024-11-05",
+                    "protocolVersion": version,
                     "capabilities": {
-                        "tools": {},
-                        "logging": {}
+                        "tools": {"listChanged": self.mode == McpMode::Dynamic},
+                        "logging": {},
+                        "experimental": {"tkless/batchStreaming":{"notification":"notifications/progress","itemKey":"tkless/batch_item"}}
                     },
                     "serverInfo": {
                         "name": "tkless",
@@ -185,61 +210,81 @@ impl McpServer {
         }
     }
 
-    /// Asynchronous stdio loop reading requests from stdin and streaming responses/notifications to stdout.
+    /// Run the standard transport, keeping the input responsive during long tool calls.
     pub async fn run_stdio(&self) -> Result<(), TklessError> {
-        info!("Starting TkLess MCP Server (transport: stdio, protocol: 2024-11-05)");
+        self.run_transport(tokio::io::stdin(), tokio::io::stdout())
+            .await
+    }
 
-        let (stdout_tx, mut stdout_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
-
-        let writer_handle = tokio::spawn(async move {
-            let mut stdout = tokio::io::stdout();
-            while let Some(line) = stdout_rx.recv().await {
-                if let Err(e) = stdout.write_all(line.as_bytes()).await {
-                    error!(error = %e, "Failed to write MCP response to stdout");
-                    break;
+    /// Transport-independent entry point for embedded hosts and protocol regression tests.
+    pub async fn run_transport<R, W>(&self, input: R, mut output: W) -> Result<(), TklessError>
+    where
+        R: tokio::io::AsyncRead + Unpin + Send,
+        W: tokio::io::AsyncWrite + Unpin + Send,
+    {
+        let mut lines = BufReader::new(input).lines();
+        let (notify_tx, mut notify_rx) = tokio::sync::mpsc::channel::<Value>(8);
+        let mut tasks = tokio::task::JoinSet::new();
+        let mut active = std::collections::HashMap::<String, tokio::task::AbortHandle>::new();
+        let mut eof = false;
+        loop {
+            if eof && tasks.is_empty() {
+                while let Ok(notification) = notify_rx.try_recv() {
+                    write_rpc(&mut output, &notification).await?;
                 }
-                let _ = stdout.flush().await;
+                break;
             }
-        });
-
-        let (notify_tx, mut notify_rx) = tokio::sync::mpsc::unbounded_channel::<Value>();
-        let stdout_tx_notify = stdout_tx.clone();
-        let forwarder_handle = tokio::spawn(async move {
-            while let Some(notif) = notify_rx.recv().await {
-                if let Ok(mut json_line) = serde_json::to_string(&notif) {
-                    json_line.push('\n');
-                    let _ = stdout_tx_notify.send(json_line);
-                }
-            }
-        });
-
-        let stdin = tokio::io::stdin();
-        let reader = BufReader::new(stdin);
-        let mut lines = reader.lines();
-
-        while let Some(line) = lines.next_line().await.map_err(TklessError::Io)? {
-            if let Some(response) = self
-                .handle_message_with_notifier(&line, Some(&notify_tx))
-                .await
-            {
-                match serde_json::to_string(&response) {
-                    Ok(mut json_line) => {
-                        json_line.push('\n');
-                        let _ = stdout_tx.send(json_line);
+            tokio::select! {
+                line = lines.next_line(), if !eof => {
+                    let Some(line) = line? else { eof = true; continue; };
+                    let value = serde_json::from_str::<Value>(line.trim().trim_matches('\u{feff}')).ok();
+                    if value.as_ref().and_then(|v| v.get("method")).and_then(Value::as_str) == Some("notifications/cancelled") {
+                        if let Some(id) = value.as_ref().and_then(|v| v.pointer("/params/requestId")) {
+                            if let Some(task) = active.remove(&id.to_string()) { task.abort(); }
+                        }
+                        continue;
                     }
-                    Err(e) => {
-                        error!(error = %e, "Failed to serialize JSON-RPC response");
+                    let id = value.as_ref().and_then(|v| v.get("id")).cloned();
+                    let tool_call = value.as_ref().and_then(|v| v.get("method")).and_then(Value::as_str) == Some("tools/call");
+                    if let (true, Some(id)) = (tool_call, id) {
+                        let key = id.to_string();
+                        if active.contains_key(&key) || active.len() >= 64 {
+                            let response = JsonRpcResponse::error(id, INVALID_REQUEST, "Duplicate request ID or too many concurrent requests (64)");
+                            write_rpc(&mut output, &response).await?;
+                            continue;
+                        }
+                        let server = self.clone();
+                        let tx = notify_tx.clone();
+                        let task_key = key.clone();
+                        let task = tasks.spawn(async move {
+                            let response = match tokio::time::timeout(std::time::Duration::from_secs(300), server.handle_message_with_notifier(&line, Some(&tx))).await {
+                                Ok(response) => response,
+                                Err(_) => Some(JsonRpcResponse::error(id, -32001, "Tool call exceeded the 300 second timeout")),
+                            };
+                            (task_key, response)
+                        });
+                        active.insert(key, task);
+                    } else if let Some(response) = self.handle_message_with_notifier(&line, Some(&notify_tx)).await {
+                        write_rpc(&mut output, &response).await?;
                     }
                 }
+                joined = tasks.join_next_with_id(), if !tasks.is_empty() => {
+                    if let Some(Ok((task_id, (key, response)))) = joined {
+                        if active.get(&key).is_some_and(|handle| handle.id() == task_id) {
+                            active.remove(&key);
+                            if let Some(response) = response {
+                                let pending = notify_rx.len();
+                                for _ in 0..pending {
+                                    if let Ok(notification) = notify_rx.try_recv() { write_rpc(&mut output, &notification).await?; }
+                                }
+                                write_rpc(&mut output, &response).await?;
+                            }
+                        }
+                    }
+                }
+                Some(notification) = notify_rx.recv() => { write_rpc(&mut output, &notification).await?; }
             }
         }
-
-        drop(notify_tx);
-        drop(stdout_tx);
-        let _ = forwarder_handle.await;
-        let _ = writer_handle.await;
-
-        info!("TkLess MCP Server connection closed");
         Ok(())
     }
 
@@ -247,7 +292,7 @@ impl McpServer {
     // Tool Dispatch Handlers & Dynamic Tool Discovery
     // -------------------------------------------------------------------------
 
-    /// Unified tool execution dispatcher supporting direct calls, prefixed calls, and meta execute_tool.
+    /// Executes canonical tool names directly or through execute_tool.
     pub async fn dispatch_tool_execution(
         &self,
         raw_tool_name: &str,
@@ -255,11 +300,11 @@ impl McpServer {
         notifier: Option<&NotificationSender>,
         progress_token: Option<&Value>,
     ) -> McpToolCallResult {
-        let tool_name = raw_tool_name
-            .strip_prefix("tkless_")
-            .unwrap_or(raw_tool_name);
-
-        match tool_name {
+        let tool_name = raw_tool_name;
+        if let Err(error) = super::contracts::validate_arguments(tool_name, arguments) {
+            return McpToolCallResult::from_error(&error);
+        }
+        let result = match tool_name {
             // Stage 1: Dynamic Discovery Meta-Tools
             "discover_tools" => self.call_discover_tools(arguments).await,
             "get_tool_schema" => self.call_get_tool_schema(arguments).await,
@@ -271,8 +316,7 @@ impl McpServer {
                 if target_tool.is_empty() {
                     return McpToolCallResult::error("Missing required parameter 'tool_name'");
                 }
-                let clean_target = target_tool.strip_prefix("tkless_").unwrap_or(target_tool);
-                if clean_target == "execute_tool" {
+                if target_tool == "execute_tool" {
                     return McpToolCallResult::error("Cannot execute 'execute_tool' recursively");
                 }
                 let target_args = arguments
@@ -280,7 +324,7 @@ impl McpServer {
                     .cloned()
                     .unwrap_or_else(|| serde_json::json!({}));
                 Box::pin(self.dispatch_tool_execution(
-                    clean_target,
+                    target_tool,
                     &target_args,
                     notifier,
                     progress_token,
@@ -294,7 +338,7 @@ impl McpServer {
             "fetch_bilibili_feed" => self.call_fetch_bilibili_feed(arguments).await,
             "search_bilibili" => self.call_search_bilibili(arguments).await,
             "download_media" => self.call_download_media(arguments).await,
-            "web_search" | "search_web" => self.call_web_search(arguments).await,
+            "web_search" => self.call_web_search(arguments).await,
             "crawl_site" => {
                 self.call_crawl_site(arguments, notifier, progress_token)
                     .await
@@ -311,20 +355,30 @@ impl McpServer {
             "fetch_feed" => self.call_fetch_feed(arguments).await,
             "inspect_links" => self.call_inspect_links(arguments).await,
             "check_auth" => self.call_check_auth(arguments).await,
-            "summarize_content" | "summarize_text" | "summarize" => {
-                self.call_summarize_content(arguments).await
-            }
+            "summarize_content" => self.call_summarize_content(arguments).await,
             "split_document" => self.call_split_document(arguments).await,
             "chunk_markdown" => self.call_chunk_markdown(arguments).await,
-            "diff_documents" | "diff_content" => self.call_diff_content(arguments).await,
-            "deep_research" | "research" => self.call_deep_research(arguments).await,
-            "take_screenshot" | "capture_screenshot" => {
-                self.call_capture_screenshot(arguments).await
-            }
-            "export_tables" | "convert_table" => self.call_export_tables(arguments).await,
+            "diff_documents" => self.call_diff_content(arguments).await,
+            "deep_research" => self.call_deep_research(arguments).await,
+            "take_screenshot" => self.call_capture_screenshot(arguments).await,
+            "export_tables" => self.call_export_tables(arguments).await,
             "list_adapters" => self.call_list_adapters(arguments).await,
             _ => McpToolCallResult::error(format!("Unknown tool: '{raw_tool_name}'")),
+        };
+        if let Some(schema) = super::contracts::output_schema(tool_name) {
+            let valid = result
+                .structured_content
+                .as_ref()
+                .ok_or_else(|| "Missing structuredContent".to_string())
+                .and_then(|value| super::contracts::validate_value(&schema, value, "result"));
+            if let Err(message) = valid {
+                return McpToolCallResult::from_error(&TklessError::McpError {
+                    code: INTERNAL_ERROR,
+                    message: format!("Invalid output from {tool_name}: {message}"),
+                });
+            }
         }
+        result
     }
 
     async fn call_discover_tools(&self, args: &Value) -> McpToolCallResult {
@@ -373,7 +427,7 @@ impl McpServer {
 
         let mut md = String::new();
         md.push_str(&format!(
-            "### 🔍 TkLess 动态工具发现目录 (匹配到 {} 个工具)\n\n",
+            "### TkLess 动态工具发现目录 (匹配到 {} 个工具)\n\n",
             filtered.len()
         ));
         md.push_str("| 工具名称 (Tool) | 分类 (Category) | 运行状态 | 功能概述 (Summary) |\n");
@@ -381,11 +435,11 @@ impl McpServer {
 
         for entry in &filtered {
             let status = if entry.is_core {
-                "🌟 核心常驻"
+                "核心常驻"
             } else if active_set.contains(entry.name) {
-                "⚡ 已动态激活"
+                "已动态激活"
             } else {
-                "💤 按需拉取"
+                "按需拉取"
             };
             md.push_str(&format!(
                 "| `{}` | `{}` | {} | {} |\n",
@@ -403,7 +457,7 @@ impl McpServer {
 
     async fn call_get_tool_schema(&self, args: &Value) -> McpToolCallResult {
         let tool_name = match args.get("tool_name").and_then(|v| v.as_str()) {
-            Some(n) if !n.trim().is_empty() => n.trim().strip_prefix("tkless_").unwrap_or(n.trim()),
+            Some(n) if !n.trim().is_empty() => n.trim(),
             _ => return McpToolCallResult::error("Missing required parameter 'tool_name'"),
         };
 
@@ -413,11 +467,17 @@ impl McpServer {
         if let Some(tool) = all_tools.into_iter().find(|t| t.name == tool_name) {
             let schema_pretty =
                 serde_json::to_string_pretty(&tool.input_schema).unwrap_or_default();
-            let response = format!(
-                "### 🛠️ 工具参数定义: `{}`\n\n**描述**: {}\n\n**inputSchema**:\n```json\n{}\n```\n",
+            let mut response = format!(
+                "### 工具参数定义: `{}`\n\n**描述**: {}\n\n**inputSchema**:\n```json\n{}\n```\n",
                 tool.name, tool.description, schema_pretty
             );
-            McpToolCallResult::success(response)
+            if let Some(ref output_schema) = tool.output_schema {
+                response.push_str(&format!(
+                    "\n**outputSchema**:\n```json\n{}\n```\n",
+                    serde_json::to_string_pretty(output_schema).unwrap_or_default()
+                ));
+            }
+            McpToolCallResult::success(response).with_structured(&tool)
         } else {
             McpToolCallResult::error(format!(
                 "Tool '{tool_name}' not found. Call 'discover_tools' to search available tools."
@@ -435,26 +495,37 @@ impl McpServer {
             _ => return McpToolCallResult::error("Missing or empty 'tool_names' array"),
         };
 
+        let available = get_available_tools();
+        if tool_names.iter().any(|item| {
+            !item
+                .as_str()
+                .is_some_and(|name| available.iter().any(|tool| tool.name == name))
+        }) {
+            return McpToolCallResult::invalid_argument(
+                "tool_names must contain canonical business tool names from tools/list",
+            );
+        }
         let mut newly_activated = Vec::new();
         let mut active_set = self.active_dynamic_tools.write().await;
         for item in tool_names {
             if let Some(name) = item.as_str() {
-                let clean_name = name.strip_prefix("tkless_").unwrap_or(name);
-                active_set.insert(clean_name.to_string());
-                newly_activated.push(clean_name.to_string());
+                active_set.insert(name.to_string());
+                newly_activated.push(name.to_string());
             }
         }
+
+        drop(active_set);
 
         if let Some(tx) = notifier {
             let notif = serde_json::json!({
                 "jsonrpc": "2.0",
                 "method": "notifications/tools/list_changed"
             });
-            let _ = tx.send(notif);
+            let _ = tx.send(notif).await;
         }
 
         let resp = format!(
-            "✅ 成功激活工具: [{}]。已向 MCP 客户端广播 'notifications/tools/list_changed'。后续 tools/list 声明将包含这些工具，您也可以直接调用。",
+            "成功激活工具: [{}]。已向 MCP 客户端广播 'notifications/tools/list_changed'。后续 tools/list 声明将包含这些工具，您也可以直接调用。",
             newly_activated.join(", ")
         );
         McpToolCallResult::success(resp)
@@ -682,6 +753,10 @@ impl McpServer {
             cdp_block_resources,
             cdp_auto_scroll,
             schema,
+            schema_strict: args
+                .get("schema_strict")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
             chunk,
             chunk_size,
             chunk_overlap,
@@ -693,6 +768,14 @@ impl McpServer {
             remove_selector,
             auto_cdp,
             summarize,
+            skills_pages: args
+                .get("skills_pages")
+                .and_then(Value::as_u64)
+                .unwrap_or(3) as usize,
+            skills_limit: args
+                .get("skills_limit")
+                .and_then(Value::as_u64)
+                .unwrap_or(1000) as usize,
         };
 
         let initial_target_host = Url::parse(url.as_str())
@@ -727,16 +810,12 @@ impl McpServer {
                 .await
             {
                 Ok(d) => d,
-                Err(e) => {
-                    return McpToolCallResult::error(format!("Failed to fetch URL '{url}': {e}"))
-                }
+                Err(e) => return McpToolCallResult::from_error(&e),
             }
         } else {
             match engine.process_url(url, &options).await {
                 Ok(d) => d,
-                Err(e) => {
-                    return McpToolCallResult::error(format!("Failed to fetch URL '{url}': {e}"))
-                }
+                Err(e) => return McpToolCallResult::from_error(&e),
             }
         };
 
@@ -799,7 +878,7 @@ impl McpServer {
         };
 
         let cache_key = if use_cache {
-            Some(self.cache.generate_key(&target_url, &options))
+            Some(self.engine.cache_key(&self.cache, &target_url, &options))
         } else {
             None
         };
@@ -861,7 +940,7 @@ impl McpServer {
         };
 
         let cache_key = if use_cache {
-            Some(self.cache.generate_key(&target_url, &options))
+            Some(self.engine.cache_key(&self.cache, &target_url, &options))
         } else {
             None
         };
@@ -960,139 +1039,26 @@ impl McpServer {
             _ => return McpToolCallResult::error("Missing required parameter 'query'"),
         };
 
-        let limit = args
-            .get("limit")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(5)
-            .clamp(1, 20) as usize;
+        let limit = match args.get("limit") {
+            None => 10,
+            Some(value) => match value.as_u64().filter(|value| (1..=20).contains(value)) {
+                Some(value) => value as usize,
+                None => {
+                    return McpToolCallResult::error("limit must be an integer between 1 and 20")
+                }
+            },
+        };
         let format = match args.get("format").and_then(|v| v.as_str()) {
             Some("json") => OutputFormat::Json,
             _ => OutputFormat::Markdown,
         };
-        let engine = match args.get("engine").and_then(|v| v.as_str()) {
-            Some("bing") => SearchEngineKind::Bing,
-            Some("duckduckgo") | Some("ddg") => SearchEngineKind::DuckDuckGo,
-            Some("brave") => SearchEngineKind::Brave,
-            Some("yandex") => SearchEngineKind::Yandex,
-            Some("searxng") | Some("searx") => SearchEngineKind::Searxng,
-            Some("google") => SearchEngineKind::Google,
-            _ => SearchEngineKind::All,
+        let scope = match args.get("scope") {
+            None => None,
+            Some(Value::String(value)) => Some(value.as_str()),
+            _ => return McpToolCallResult::error("scope must be a platform name"),
         };
-        let scope = args.get("scope").and_then(|v| v.as_str()).unwrap_or("all");
-
-        let (effective_scope, effective_query) = match scope {
-            "baike" => (Some("baike"), query.trim().to_string()),
-            "wechat" => (Some("wechat"), query.trim().to_string()),
-            "zhihu" => {
-                let clean = query.trim();
-                let q = if clean.starts_with("site:") {
-                    clean.to_string()
-                } else {
-                    format!("site:zhihu.com {clean}")
-                };
-                (Some("zhihu"), q)
-            }
-            "github" => {
-                let clean = query.trim();
-                let q = if clean.starts_with("site:") {
-                    clean.to_string()
-                } else {
-                    format!("site:github.com {clean}")
-                };
-                (Some("github"), q)
-            }
-            "juejin" => {
-                let clean = query.trim();
-                let q = if clean.starts_with("site:") {
-                    clean.to_string()
-                } else {
-                    format!("site:juejin.cn {clean}")
-                };
-                (Some("juejin"), q)
-            }
-            "csdn" => {
-                let clean = query.trim();
-                let q = if clean.starts_with("site:") {
-                    clean.to_string()
-                } else {
-                    format!("site:blog.csdn.net {clean}")
-                };
-                (Some("csdn"), q)
-            }
-            "medium" => {
-                let clean = query.trim();
-                let q = if clean.starts_with("site:") {
-                    clean.to_string()
-                } else {
-                    format!("site:medium.com {clean}")
-                };
-                (Some("medium"), q)
-            }
-            "substack" => {
-                let clean = query.trim();
-                let q = if clean.starts_with("site:") {
-                    clean.to_string()
-                } else {
-                    format!("site:substack.com {clean}")
-                };
-                (Some("substack"), q)
-            }
-            "arxiv" => {
-                let clean = query.trim();
-                let q = if clean.starts_with("site:") {
-                    clean.to_string()
-                } else {
-                    format!("site:arxiv.org {clean}")
-                };
-                (Some("arxiv"), q)
-            }
-            "huggingface" | "hf" => {
-                let clean = query.trim();
-                let q = if clean.starts_with("site:") {
-                    clean.to_string()
-                } else {
-                    format!("site:huggingface.co {clean}")
-                };
-                (Some("huggingface"), q)
-            }
-            "wikipedia" | "wiki" => {
-                let clean = query.trim();
-                let q = if clean.starts_with("site:") {
-                    clean.to_string()
-                } else {
-                    format!("site:wikipedia.org {clean}")
-                };
-                (Some("wikipedia"), q)
-            }
-            "reddit" => {
-                let clean = query.trim();
-                let q = if clean.starts_with("site:") {
-                    clean.to_string()
-                } else {
-                    format!("site:reddit.com {clean}")
-                };
-                (Some("reddit"), q)
-            }
-            "stackoverflow" | "so" => {
-                let clean = query.trim();
-                let q = if clean.starts_with("site:") {
-                    clean.to_string()
-                } else {
-                    format!("site:stackoverflow.com {clean}")
-                };
-                (Some("stackoverflow"), q)
-            }
-            "v2ex" => {
-                let clean = query.trim();
-                let q = if clean.starts_with("site:") {
-                    clean.to_string()
-                } else {
-                    format!("site:v2ex.com {clean}")
-                };
-                (Some("v2ex"), q)
-            }
-            _ => (None, query.to_string()),
-        };
+        let effective_scope = scope;
+        let effective_query = query.to_string();
 
         let fetch_content = args
             .get("fetch_content")
@@ -1112,8 +1078,9 @@ impl McpServer {
             .unwrap_or(false);
         let dedup = args.get("dedup").and_then(|v| v.as_bool()).unwrap_or(false);
 
+        let allow_private = args.get("allow_private_addresses").and_then(Value::as_bool);
         let custom_engine;
-        let engine_ref = if proxy.is_some() || mobile {
+        let engine_ref = if proxy.is_some() || mobile || allow_private.is_some() {
             let mut fetch_opts = self.engine.fetcher().options().clone();
             if let Some(ref p) = proxy {
                 fetch_opts.proxy = Some(p.clone());
@@ -1121,117 +1088,111 @@ impl McpServer {
             if mobile {
                 fetch_opts.mobile = true;
             }
+            if let Some(allow) = allow_private {
+                fetch_opts.allow_private_addresses = allow;
+            }
             match TklessEngine::with_options(fetch_opts) {
                 Ok(eng) => {
                     custom_engine = eng;
                     &custom_engine
                 }
-                Err(_) => &self.engine,
+                Err(error) => return McpToolCallResult::error(error.to_string()),
             }
         } else {
             &self.engine
         };
 
-        if fetch_content {
-            let cdp_endpoint = args
+        let options = ExtractionOptions {
+            cdp_endpoint: args
                 .get("cdp_endpoint")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string());
-            let cdp_wait_ms = args.get("cdp_wait_ms").and_then(|v| v.as_u64());
-            let schema = args.get("schema").map(|v| {
-                if let Some(s) = v.as_str() {
-                    s.to_string()
-                } else {
-                    v.to_string()
-                }
-            });
-
-            let auto_cdp = args
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            cdp_wait_ms: args.get("cdp_wait_ms").and_then(Value::as_u64),
+            auto_cdp: args
                 .get("auto_cdp")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false);
-
-            let options = ExtractionOptions {
-                cdp_endpoint,
-                cdp_wait_ms,
-                auto_cdp,
-                schema,
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            schema: args.get("schema").map(|value| {
+                value
+                    .as_str()
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| value.to_string())
+            }),
+            schema_strict: args
+                .get("schema_strict")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            ..Default::default()
+        };
+        if let Err(error) = options.validate() {
+            return McpToolCallResult::from_error(&error);
+        }
+        let cdp = options
+            .cdp_endpoint
+            .as_ref()
+            .map(|endpoint| crate::CdpOptions {
+                endpoint: endpoint.clone(),
+                wait_ms: options.cdp_wait_ms,
                 ..Default::default()
-            };
-
-            match crate::search::web_search_and_fetch_scoped(
-                engine_ref,
-                &effective_query,
-                effective_scope,
+            });
+        let report = match crate::web_search(
+            engine_ref,
+            &effective_query,
+            &crate::SearchOptions {
+                scope: effective_scope.map(str::to_owned),
                 limit,
-                engine,
+                cdp,
+                auto_cdp: options.auto_cdp,
+            },
+        )
+        .await
+        {
+            Ok(report) => report,
+            Err(error) => return McpToolCallResult::from_error(&error),
+        };
+        let diagnostics = args
+            .get("diagnostics")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        let diagnostic_md = if diagnostics {
+            report.markdown_diagnostics()
+        } else {
+            String::new()
+        };
+        let (structured, text) = if fetch_content {
+            let items = match crate::search::fetch_search_results(
+                engine_ref,
+                report.results.clone(),
                 &options,
                 max_tokens_per_page,
                 dedup,
             )
             .await
             {
-                Ok(items) => match format {
-                    OutputFormat::Json => match serde_json::to_string_pretty(&items) {
-                        Ok(json_str) => McpToolCallResult::success(json_str),
-                        Err(e) => {
-                            McpToolCallResult::error(format!("Failed to serialize JSON: {e}"))
-                        }
-                    },
-                    _ => {
-                        let md =
-                            crate::search::format_search_fetch_markdown(&effective_query, &items);
-                        McpToolCallResult::success(md)
-                    }
-                },
-                Err(e) => McpToolCallResult::error(format!("Search & fetch failed: {e}")),
-            }
+                Ok(items) => items,
+                Err(error) => return McpToolCallResult::from_error(&error),
+            };
+            let md = crate::search::format_search_fetch_markdown(&effective_query, &items)
+                + &diagnostic_md;
+            let text = md;
+            let value = serde_json::json!({"query":report.query,"effective_query":report.effective_query,"status":report.status,
+                "results":items,"diagnostics":report.diagnostics,"warnings":report.warnings});
+            (value, text)
         } else {
-            let cdp_options = args.get("cdp_endpoint").and_then(|v| v.as_str()).map(|ep| {
-                crate::cdp::CdpOptions {
-                    endpoint: ep.to_string(),
-                    wait_ms: args
-                        .get("cdp_wait_ms")
-                        .and_then(|v| v.as_u64())
-                        .or(Some(1000)),
-                    timeout_ms: Some(30_000),
-                    ..Default::default()
-                }
-            });
-            let auto_cdp = args
-                .get("auto_cdp")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false);
-
-            match crate::search::web_search_scoped(
-                engine_ref.client(),
-                &effective_query,
-                effective_scope,
-                limit,
-                engine,
-                cdp_options.as_ref(),
-                auto_cdp,
+            let text =
+                crate::search::format_search_results_markdown(&effective_query, &report.results)
+                    + &diagnostic_md;
+            (
+                serde_json::to_value(&report).expect("SearchReport is serializable"),
+                text,
             )
-            .await
-            {
-                Ok(results) => match format {
-                    OutputFormat::Json => match serde_json::to_string_pretty(&results) {
-                        Ok(json_str) => McpToolCallResult::success(json_str),
-                        Err(e) => {
-                            McpToolCallResult::error(format!("Failed to serialize JSON: {e}"))
-                        }
-                    },
-                    _ => {
-                        let md = crate::search::format_search_results_markdown(
-                            &effective_query,
-                            &results,
-                        );
-                        McpToolCallResult::success(md)
-                    }
-                },
-                Err(e) => McpToolCallResult::error(format!("Web search failed: {e}")),
-            }
-        }
+        };
+        let text = if format == OutputFormat::Json {
+            serde_json::to_string_pretty(&structured).unwrap_or_default()
+        } else {
+            text
+        };
+        McpToolCallResult::success(text).with_structured(structured)
     }
 
     async fn call_deep_research(&self, args: &Value) -> McpToolCallResult {
@@ -1244,7 +1205,7 @@ impl McpServer {
             .get("depth")
             .and_then(|v| v.as_u64())
             .unwrap_or(2)
-            .clamp(1, 3) as usize;
+            .clamp(1, 2) as usize;
         let breadth = args
             .get("breadth")
             .and_then(|v| v.as_u64())
@@ -1264,15 +1225,6 @@ impl McpServer {
             .and_then(|v| v.as_u64())
             .map(|v| v as usize)
             .or(Some(8000));
-        let engine = match args.get("engine").and_then(|v| v.as_str()) {
-            Some("bing") => SearchEngineKind::Bing,
-            Some("duckduckgo") | Some("ddg") => SearchEngineKind::DuckDuckGo,
-            Some("brave") => SearchEngineKind::Brave,
-            Some("yandex") => SearchEngineKind::Yandex,
-            Some("searxng") | Some("searx") => SearchEngineKind::Searxng,
-            Some("google") => SearchEngineKind::Google,
-            _ => SearchEngineKind::All,
-        };
         let dedup = args.get("dedup").and_then(|v| v.as_bool()).unwrap_or(true);
         let format = match args.get("format").and_then(|v| v.as_str()) {
             Some("json") => OutputFormat::Json,
@@ -1285,23 +1237,14 @@ impl McpServer {
             max_pages,
             max_tokens_per_page,
             max_tokens,
-            engine,
             dedup,
             format,
         };
 
         match crate::research::deep_research(&self.engine, topic, &options).await {
-            Ok(report) => match format {
-                OutputFormat::Json => match serde_json::to_string_pretty(&report) {
-                    Ok(json_str) => McpToolCallResult::success(json_str),
-                    Err(e) => {
-                        McpToolCallResult::error(format!("Failed to serialize report to JSON: {e}"))
-                    }
-                },
-                _ => {
-                    let md = crate::research::format_deep_research_markdown(&report);
-                    McpToolCallResult::success(md)
-                }
+            Ok(report) => match crate::research::render_deep_research(&report, &options) {
+                Ok(text) => McpToolCallResult::success(text),
+                Err(e) => McpToolCallResult::error(e.to_string()),
             },
             Err(e) => McpToolCallResult::error(format!("Deep research failed: {e}")),
         }
@@ -1374,7 +1317,11 @@ impl McpServer {
         let crawl_options = crate::crawler::CrawlOptions {
             max_depth,
             max_pages,
-            concurrency: 5,
+            concurrency: args
+                .get("concurrency")
+                .and_then(Value::as_u64)
+                .unwrap_or(5)
+                .clamp(1, 32) as usize,
             same_domain_only: true,
             same_path_prefix,
             exclude_patterns: crate::crawler::CrawlOptions::default().exclude_patterns,
@@ -1387,6 +1334,10 @@ impl McpServer {
             cdp_endpoint,
             cdp_wait_ms,
             schema,
+            schema_strict: args
+                .get("schema_strict")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
             ..Default::default()
         };
 
@@ -1426,7 +1377,7 @@ impl McpServer {
                             "url": current_url
                         }
                     });
-                    let _ = tx.send(notif);
+                    let _ = tx.try_send(notif);
                 },
             )
         } else {
@@ -1443,33 +1394,36 @@ impl McpServer {
         .await
         {
             Ok(report) => {
-                if is_jsonl {
-                    McpToolCallResult::success(crate::crawler::format_crawl_report_jsonl(&report))
-                } else {
-                    match format {
-                        OutputFormat::Json => match serde_json::to_string_pretty(&report) {
-                            Ok(json_str) => McpToolCallResult::success(json_str),
-                            Err(e) => {
-                                McpToolCallResult::error(format!("Failed to serialize JSON: {e}"))
-                            }
-                        },
-                        _ => {
-                            let mut md = crate::crawler::format_crawl_report_markdown(&report);
-                            if let Some(limit) = max_tokens {
-                                let current_tokens =
-                                    crate::token::count_tokens(&md, TokenizerKind::default());
-                                if current_tokens > limit {
-                                    let (truncated_md, _) = crate::token::truncate_to_tokens(
-                                        &md,
-                                        limit,
-                                        TokenizerKind::default(),
-                                    );
-                                    md = truncated_md;
-                                }
-                            }
-                            McpToolCallResult::success(md)
-                        }
+                let mut payload = if is_jsonl {
+                    crate::crawler::format_crawl_report_jsonl(&report)
+                } else if format == OutputFormat::Json {
+                    match serde_json::to_string(&report) {
+                        Ok(text) => text,
+                        Err(e) => return McpToolCallResult::error(e.to_string()),
                     }
+                } else {
+                    crate::crawler::format_crawl_report_markdown(&report)
+                };
+                if let Some(limit) = max_tokens {
+                    if (is_jsonl || format == OutputFormat::Json)
+                        && crate::token::count_tokens(&payload, TokenizerKind::default()) > limit
+                    {
+                        return McpToolCallResult::error("JSON report exceeds max_tokens; increase the budget or reduce max_pages");
+                    }
+                    if !is_jsonl && format != OutputFormat::Json {
+                        payload = crate::token::truncate_to_tokens(
+                            &payload,
+                            limit,
+                            TokenizerKind::default(),
+                        )
+                        .0;
+                    }
+                }
+                if !report.pages.is_empty() && report.pages.iter().all(|page| page.error.is_some())
+                {
+                    McpToolCallResult::error(payload)
+                } else {
+                    McpToolCallResult::success(payload)
                 }
             }
             Err(e) => McpToolCallResult::error(format!("Site crawl failed: {e}")),
@@ -1487,14 +1441,13 @@ impl McpServer {
                 .iter()
                 .filter_map(|v| v.as_str())
                 .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
                 .collect::<Vec<_>>(),
             _ => return McpToolCallResult::error("Missing or empty 'urls' array"),
         };
 
-        if urls.is_empty() {
-            return McpToolCallResult::error(
-                "'urls' array must contain at least one valid URL string",
+        if urls.is_empty() || urls.iter().any(String::is_empty) {
+            return McpToolCallResult::invalid_argument(
+                "'urls' entries must be non-empty URL strings",
             );
         }
 
@@ -1573,82 +1526,99 @@ impl McpServer {
             selector,
             remove_selector,
             schema,
+            schema_strict: args
+                .get("schema_strict")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
             cdp_endpoint,
             cdp_wait_ms,
             ..Default::default()
         };
 
-        let total_urls = urls.len();
-        let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(concurrency));
-        let mut join_set = tokio::task::JoinSet::new();
-
-        for (idx, url) in urls.into_iter().enumerate() {
-            let sem = semaphore.clone();
-            let eng = engine_ref.clone();
-            let opts = base_options.clone();
-
-            join_set.spawn(async move {
-                let _permit = sem.acquire().await.unwrap();
-                if delay_ms > 0 && idx > 0 {
-                    tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
-                }
-                let res = eng.process_url(&url, &opts).await;
-                (idx, url, res)
-            });
-        }
-
-        let mut completed = 0;
-        let mut results = Vec::new();
-        while let Some(res) = join_set.join_next().await {
-            if let Ok(item) = res {
-                results.push(item);
-            }
-            completed += 1;
-            if let (Some(tx), Some(token)) = (notifier, progress_token) {
-                let notif = serde_json::json!({
-                    "jsonrpc": "2.0",
-                    "method": "notifications/progress",
-                    "params": {
-                        "progressToken": token,
-                        "progress": completed,
-                        "total": total_urls
-                    }
-                });
-                let _ = tx.send(notif);
-            }
-        }
-        results.sort_by_key(|(idx, _, _)| *idx);
-
-        let mut docs = Vec::new();
-        let mut errors = Vec::new();
-
-        for (_, url, res) in results {
-            match res {
-                Ok(doc) => docs.push(doc),
-                Err(e) => errors.push(format!("- `{url}`: {e}")),
-            }
-        }
-
-        match format {
-            OutputFormat::Json => match serde_json::to_string_pretty(&docs) {
-                Ok(json_str) => McpToolCallResult::success(json_str),
-                Err(e) => {
-                    McpToolCallResult::error(format!("Failed to serialize documents to JSON: {e}"))
-                }
+        let job = crate::batch::BatchOptions {
+            concurrency,
+            delay_ms,
+            per_host_concurrency: args
+                .get("per_host_concurrency")
+                .and_then(Value::as_u64)
+                .unwrap_or(2) as usize,
+            per_host_delay_ms: args
+                .get("per_host_delay_ms")
+                .and_then(Value::as_u64)
+                .unwrap_or(0),
+            order: if args.get("order").and_then(Value::as_str) == Some("completion") {
+                crate::batch::BatchOrder::Completion
+            } else {
+                crate::batch::BatchOrder::Input
             },
-            _ => {
-                let mut out = docs
-                    .iter()
-                    .map(|d| d.content.as_str())
-                    .collect::<Vec<_>>()
-                    .join("\n\n---\n\n");
-                if !errors.is_empty() {
-                    out.push_str("\n\n### 部分 URL 获取失败 (Failed URLs)\n\n");
-                    out.push_str(&errors.join("\n"));
-                }
-                McpToolCallResult::success(out)
-            }
+            checkpoint: args
+                .get("checkpoint")
+                .and_then(Value::as_str)
+                .map(std::path::PathBuf::from),
+            resume: args.get("resume").and_then(Value::as_bool).unwrap_or(false),
+            retry_failed: args
+                .get("retry_failed")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+        };
+        let stream_results = args
+            .get("stream_results")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        if stream_results && (notifier.is_none() || progress_token.is_none()) {
+            return McpToolCallResult::invalid_argument(
+                "stream_results requires an active notification receiver and _meta.progressToken",
+            );
         }
+        let mut completed = 0usize;
+        let total = urls.len();
+        let mut results = Vec::new();
+        let summary = crate::batch::run_batch(&engine_ref, &urls, &base_options, &job, |item| {
+            completed += 1;
+            let notification = if stream_results || completed == total || completed.is_multiple_of(total.div_ceil(10).max(1)) {
+                progress_token.map(|token| {
+                    let mut params = serde_json::json!({"progressToken":token,"progress":completed,"total":total,"message":item.url});
+                    if stream_results { params["_meta"] = serde_json::json!({"tkless/batch_item":item}); }
+                    serde_json::json!({"jsonrpc":"2.0","method":"notifications/progress","params":params})
+                })
+            } else { None };
+            if !stream_results { results.push(item); }
+            let tx = notifier.cloned();
+            async move {
+                if let (Some(tx), Some(notification)) = (tx, notification) {
+                    tx.send(notification).await.map_err(|_| TklessError::McpError { code: INTERNAL_ERROR, message: "Batch notification receiver disconnected".into() })?;
+                }
+                Ok(())
+            }
+        }).await;
+        let summary = match summary {
+            Ok(summary) => summary,
+            Err(error) => return McpToolCallResult::from_error(&error),
+        };
+        let failed = summary.failed > 0 && summary.succeeded == 0;
+        let (structured, markdown) = if stream_results {
+            let mut value = serde_json::to_value(&summary).expect("BatchSummary is serializable");
+            value["streamed"] = serde_json::json!(true);
+            let markdown = format!("Batch finished: {} total, {} succeeded, {} failed, {} restored, {} fetched. Results were streamed through progress notifications.", summary.total, summary.succeeded, summary.failed, summary.resumed, summary.fetched);
+            (value, markdown)
+        } else {
+            let report = crate::batch::BatchReport { summary, results };
+            (
+                serde_json::to_value(&report).expect("BatchReport is serializable"),
+                report.markdown(),
+            )
+        };
+        let text = if format == OutputFormat::Json {
+            serde_json::to_string_pretty(&structured).unwrap_or_default()
+        } else {
+            markdown
+        };
+        let response = if failed {
+            McpToolCallResult::error(text)
+        } else {
+            McpToolCallResult::success(text)
+        };
+        response.with_structured(structured)
     }
 
     async fn call_clean_html(&self, args: &Value) -> McpToolCallResult {
@@ -1739,6 +1709,10 @@ impl McpServer {
             format,
             selector,
             schema,
+            schema_strict: args
+                .get("schema_strict")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
             max_tokens,
             strip_images,
             strip_links,
@@ -1756,7 +1730,7 @@ impl McpServer {
 
         match self.engine.process_html(html, base_url, &options) {
             Ok(doc) => format_doc_result(&doc, format),
-            Err(e) => McpToolCallResult::error(format!("Failed to clean HTML: {e}")),
+            Err(e) => McpToolCallResult::from_error(&e),
         }
     }
 
@@ -1898,7 +1872,7 @@ impl McpServer {
             .unwrap_or("stats");
         match action {
             "clear" => match self.cache.clear() {
-                Ok(_) => McpToolCallResult::success("✅ TkLess 本地响应缓存已成功清空。"),
+                Ok(_) => McpToolCallResult::success("TkLess 本地响应缓存已成功清空。"),
                 Err(e) => McpToolCallResult::error(format!("Failed to clear cache: {e}")),
             },
             "prune_expired" => {
@@ -2132,7 +2106,7 @@ impl McpServer {
             }
         } else {
             let mut md = String::new();
-            md.push_str("# 🔗 链接健康度与状态巡检报告 (Link Health Inspection)\n\n");
+            md.push_str("# 链接健康度与状态巡检报告 (Link Health Inspection)\n\n");
             md.push_str("| # | 目标链接 (URL) | 状态码 (Status) | 耗时 (Latency) | 重定向跳转 (Redirect) | 结果 (Health) |\n");
             md.push_str("|---|---|---|---|---|---|\n");
 
@@ -2150,11 +2124,11 @@ impl McpServer {
                 };
 
                 let health_str = if (200..400).contains(&status) {
-                    "✅ 可访问 (OK)".to_string()
+                    "可访问 (OK)".to_string()
                 } else if let Some(e) = err {
-                    format!("❌ 异常 ({e})")
+                    format!("异常 ({e})")
                 } else {
-                    format!("⚠️ 异常 ({status})")
+                    format!("异常 ({status})")
                 };
 
                 md.push_str(&format!(
@@ -2210,7 +2184,7 @@ impl McpServer {
             Some(c) if !c.trim().is_empty() => c,
             _ => {
                 return McpToolCallResult::success(format!(
-                    "# ⚠️ [{}] 未检测到有效登录凭据 (No Credentials Found)\n\n\
+                    "# [{}] 未检测到有效登录凭据 (No Credentials Found)\n\n\
                     - 凭据文件: `{cookie_file}`\n\
                     - 说明: 未在此文件中找到带 `{platform}:` 前缀的凭据记录。\n\
                     - 建议操作: 执行登录提取指令以生成凭据，例如在 CLI 运行 `tkless login {platform}`，或手动将凭据按 `{platform}: key=val; ...` 写入 `{cookie_file}`。",
@@ -2243,7 +2217,7 @@ impl McpServer {
                                 let vip_str = if vip_type > 0 { "大会员 (Active)" } else { "普通用户 (Standard)" };
 
                                 McpToolCallResult::success(format!(
-                                    "# ✅ [BILIBILI] 身份凭据鉴权成功 (Authenticated)\n\n\
+                                    "# [BILIBILI] 身份凭据鉴权成功 (Authenticated)\n\n\
                                     - **用户昵称**: {uname}\n\
                                     - **UID (mid)**: `{mid}`\n\
                                     - **账号等级**: Lv{level}\n\
@@ -2252,7 +2226,7 @@ impl McpServer {
                                 ))
                             } else {
                                 McpToolCallResult::success(
-                                    "# ⚠️ [BILIBILI] 凭据已失效或已过期 (Cookie Expired)\n\n\
+                                    "# [BILIBILI] 凭据已失效或已过期 (Cookie Expired)\n\n\
                                     - Bilibili 鉴权接口返回 `isLogin: false`。\n\
                                     - 建议操作: 运行 `tkless login bilibili` 重新扫码更新凭据。"
                                         .to_string(),
@@ -2266,37 +2240,16 @@ impl McpServer {
                     Err(e) => McpToolCallResult::error(format!("Bilibili 鉴权检查请求失败: {e}")),
                 }
             }
-            "zhihu" => {
-                let has_dc0 = cookie_str.contains("d_c0=");
-                let has_zc0 = cookie_str.contains("z_c0=");
-                let status_msg = if has_zc0 {
-                    "包含核心登录态凭据 `z_c0` 与设备指纹 `d_c0` (完整登录态)"
-                } else if has_dc0 {
-                    "包含游客设备指纹 `d_c0` (基础访问态)"
-                } else {
-                    "已配置自定义凭据字符串"
-                };
-
-                McpToolCallResult::success(format!(
-                    "# ✅ [ZHIHU] 知乎凭据有效性检测 (Configured)\n\n\
-                    - **凭据长度**: {} 字符\n\
-                    - **状态判定**: {status_msg}\n\
-                    - **作用域隔离**: 严格限定于 `*.zhihu.com`",
-                    cookie_str.len()
-                ))
+            "zhihu" | "github" | "wechat" => {
+                match crate::auth::verify_web_session(self.engine.client(), &platform, &cookie_str)
+                    .await
+                {
+                    Ok(status) => McpToolCallResult::success(status.to_string()),
+                    Err(error) => McpToolCallResult::error(format!(
+                        "Session verification failed; validity is unknown: {error}"
+                    )),
+                }
             }
-            "github" => McpToolCallResult::success(format!(
-                "# ✅ [GITHUB] GitHub 凭据已配置 (Configured)\n\n\
-                    - **凭据长度**: {} 字符\n\
-                    - **作用域隔离**: 严格限定于 `github.com`",
-                cookie_str.len()
-            )),
-            "wechat" => McpToolCallResult::success(format!(
-                "# ✅ [WECHAT] 微信公众号凭据已配置 (Configured)\n\n\
-                    - **凭据长度**: {} 字符\n\
-                    - **作用域隔离**: 严格限定于 `*.qq.com`",
-                cookie_str.len()
-            )),
             _ => McpToolCallResult::error(format!("Unsupported platform '{platform}'")),
         }
     }
@@ -2347,7 +2300,7 @@ impl McpServer {
             },
             _ => {
                 let mut md = String::new();
-                md.push_str("### 💡 核心要点速览 (Key Takeaways)\n\n");
+                md.push_str("### 核心要点速览 (Key Takeaways)\n\n");
                 for bullet in bullets {
                     md.push_str(&format!("- {}\n", bullet.trim()));
                 }
@@ -2402,7 +2355,7 @@ impl McpServer {
 
         if format == "markdown" {
             let mut out = String::new();
-            out.push_str(&format!("# ✂️ 语义切块结果 (共 {} 块)\n\n", chunks.len()));
+            out.push_str(&format!("# 语义切块结果 (共 {} 块)\n\n", chunks.len()));
             for chunk in &chunks {
                 let breadcrumbs = if chunk.heading_path.is_empty() {
                     "正文".to_string()
@@ -2410,7 +2363,7 @@ impl McpServer {
                     chunk.heading_path.join(" > ")
                 };
                 out.push_str(&format!(
-                    "### 📦 切块 #{}: {} ({} Tokens / {} 字符)\n\n{}\n\n---\n\n",
+                    "### 切块 #{}: {} ({} Tokens / {} 字符)\n\n{}\n\n---\n\n",
                     chunk.index + 1,
                     breadcrumbs,
                     chunk.token_count,
@@ -2471,7 +2424,7 @@ impl McpServer {
             }
         } else {
             let mut md = String::new();
-            md.push_str("# 🔄 文档版本差异与变更分析 (Content Diff Report)\n\n");
+            md.push_str("# 文档版本差异与变更分析 (Content Diff Report)\n\n");
             md.push_str(&format!(
                 "> 新增行数: `+{}` | 删除行数: `-{}` | 未变行数: `{}` | 变更比例: `{:.1}%`\n\n",
                 report.added_lines,
@@ -2532,7 +2485,7 @@ impl McpServer {
                         ));
                     }
                     McpToolCallResult::success(format!(
-                        "✅ 页面高清快照截图成功！已保存至 `{dest}` (容量: {})",
+                        "页面高清快照截图成功！已保存至 `{dest}` (容量: {})",
                         crate::downloader::format_bytes(bytes.len() as u64)
                     ))
                 } else {
@@ -2646,7 +2599,7 @@ impl McpServer {
 }
 
 fn format_doc_result(doc: &crate::model::PageDocument, format: OutputFormat) -> McpToolCallResult {
-    match format {
+    let result = match format {
         OutputFormat::Json => match serde_json::to_string_pretty(doc) {
             Ok(json_str) => McpToolCallResult::success(json_str),
             Err(e) => McpToolCallResult::error(format!("Failed to serialize JSON: {e}")),
@@ -2655,7 +2608,7 @@ fn format_doc_result(doc: &crate::model::PageDocument, format: OutputFormat) -> 
             if let Some(ref chunks) = doc.chunks {
                 let mut out = String::new();
                 out.push_str(&format!(
-                    "# ✂️ 语义切块输出: {} (共 {} 块)\n\n",
+                    "# 语义切块输出: {} (共 {} 块)\n\n",
                     doc.title.as_deref().unwrap_or(&doc.url),
                     chunks.len()
                 ));
@@ -2680,5 +2633,20 @@ fn format_doc_result(doc: &crate::model::PageDocument, format: OutputFormat) -> 
                 McpToolCallResult::success(&doc.content)
             }
         }
-    }
+    };
+    result.with_structured(serde_json::json!({"document":doc}))
+}
+
+async fn write_rpc<W: tokio::io::AsyncWrite + Unpin, T: serde::Serialize>(
+    output: &mut W,
+    value: &T,
+) -> Result<(), TklessError> {
+    let mut line = serde_json::to_vec(value).map_err(|e| TklessError::McpError {
+        code: INTERNAL_ERROR,
+        message: e.to_string(),
+    })?;
+    line.push(b'\n');
+    output.write_all(&line).await?;
+    output.flush().await?;
+    Ok(())
 }

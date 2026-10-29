@@ -884,6 +884,8 @@ impl BilibiliAdapter {
         };
 
         Ok(PageDocument {
+            extraction: Default::default(),
+            warnings: Vec::new(),
             url: url.to_string(),
             final_url: format!("https://www.bilibili.com/video/{bvid}"),
             status: 200,
@@ -1165,6 +1167,8 @@ impl BilibiliAdapter {
         content.push_str(&render_search_table(&items));
 
         Ok(PageDocument {
+            extraction: Default::default(),
+            warnings: Vec::new(),
             url: url.to_string(),
             final_url: url.to_string(),
             status: 200,
@@ -1242,6 +1246,8 @@ impl BilibiliAdapter {
         }
 
         Ok(PageDocument {
+            extraction: Default::default(),
+            warnings: Vec::new(),
             url: url.to_string(),
             final_url: url.to_string(),
             status: 200,
@@ -1863,7 +1869,6 @@ pub fn sign_wbi_params(params: &[(String, String)], mixin_key: &str) -> String {
 // -----------------------------------------------------------------------------
 
 #[derive(Deserialize)]
-#[allow(dead_code)]
 struct BiliResponse<T> {
     code: i32,
     #[serde(default)]
@@ -1872,7 +1877,6 @@ struct BiliResponse<T> {
 }
 
 #[derive(Deserialize, Clone)]
-#[allow(dead_code)]
 pub struct VideoViewData {
     #[serde(default)]
     pub aid: u64,
@@ -1893,14 +1897,12 @@ pub struct VideoViewData {
 }
 
 #[derive(Deserialize, Clone, Debug)]
-#[allow(dead_code)]
 pub struct BiliSubtitleViewWrapper {
     #[serde(default)]
     pub list: Vec<BiliSubtitleItem>,
 }
 
 #[derive(Deserialize, Clone, Debug)]
-#[allow(dead_code)]
 pub struct BiliSubtitleItem {
     #[serde(default)]
     pub id: Option<u64>,
@@ -1968,7 +1970,6 @@ struct ReplyContent {
 }
 
 #[derive(Deserialize, Clone)]
-#[allow(dead_code)]
 pub struct VideoPageItem {
     pub cid: u64,
     pub page: u32,
@@ -1979,7 +1980,6 @@ pub struct VideoPageItem {
 }
 
 #[derive(Deserialize)]
-#[allow(dead_code)]
 pub struct PlayUrlData {
     #[serde(default)]
     pub quality: u32,
@@ -1990,7 +1990,6 @@ pub struct PlayUrlData {
 }
 
 #[derive(Deserialize)]
-#[allow(dead_code)]
 pub struct PlayDurlItem {
     #[serde(default)]
     pub order: u32,
@@ -2032,10 +2031,7 @@ struct ConclusionApiData {
 }
 
 #[derive(Deserialize, Debug)]
-#[allow(dead_code)]
 struct ConclusionModelResult {
-    #[serde(default)]
-    result_type: i32,
     #[serde(default)]
     summary: String,
     #[serde(default)]
@@ -2061,13 +2057,11 @@ struct ConclusionPartOutline {
 }
 
 #[derive(Deserialize)]
-#[allow(dead_code)]
 struct RankingData {
     list: Vec<RankingItem>,
 }
 
 #[derive(Deserialize)]
-#[allow(dead_code)]
 struct RankingItem {
     bvid: String,
     title: String,
@@ -2077,13 +2071,11 @@ struct RankingItem {
 }
 
 #[derive(Deserialize)]
-#[allow(dead_code)]
 struct PopularData {
     list: Vec<PopularItem>,
 }
 
 #[derive(Deserialize)]
-#[allow(dead_code)]
 struct PopularItem {
     bvid: String,
     title: String,
@@ -2093,13 +2085,11 @@ struct PopularItem {
 }
 
 #[derive(Deserialize)]
-#[allow(dead_code)]
 struct RcmdData {
     item: Vec<RcmdItem>,
 }
 
 #[derive(Deserialize)]
-#[allow(dead_code)]
 struct RcmdItem {
     bvid: String,
     title: String,
@@ -2109,14 +2099,12 @@ struct RcmdItem {
 }
 
 #[derive(Deserialize, Clone)]
-#[allow(dead_code)]
 pub struct OwnerData {
     pub mid: u64,
     pub name: String,
 }
 
 #[derive(Deserialize, Clone)]
-#[allow(dead_code)]
 pub struct StatData {
     view: u64,
     #[serde(default)]
@@ -2132,20 +2120,12 @@ pub struct StatData {
 }
 
 #[derive(Deserialize)]
-#[allow(dead_code)]
 struct SearchData {
     #[serde(default)]
     result: Option<Vec<SearchVideoItem>>,
-    #[serde(default)]
-    num_results: Option<u64>,
-    #[serde(default)]
-    num_pages: Option<u64>,
-    #[serde(default)]
-    page: Option<u32>,
 }
 
 #[derive(Deserialize, Clone, Debug)]
-#[allow(dead_code)]
 pub struct SearchVideoItem {
     #[serde(default)]
     pub r#type: Option<String>,

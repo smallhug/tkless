@@ -233,6 +233,8 @@ impl ArxivAdapter {
         let token_count = count_tokens(&content, options.tokenizer);
 
         Ok(PageDocument {
+            extraction: Default::default(),
+            warnings: Vec::new(),
             url: original_url.to_string(),
             final_url: format!("https://arxiv.org/abs/{arxiv_id}"),
             status: 200,

@@ -74,43 +74,10 @@ impl WechatAdapter {
     ) -> Result<Url, TklessError> {
         debug!(sogou_url = %sogou_url, "正在逆向解析搜狗微信重定向中间跳转页");
 
-        // 1. Warm up session cookies by hitting the search endpoint for the query
-        let query_val = sogou_url
-            .query_pairs()
-            .find(|(k, _)| k == "query")
-            .map(|(_, v)| v.to_string())
-            .unwrap_or_else(|| "news".to_string());
-        let encoded_q =
-            url::form_urlencoded::byte_serialize(query_val.as_bytes()).collect::<String>();
-        let search_ref = format!("https://weixin.sogou.com/weixin?type=2&query={encoded_q}");
-
-        let mut cookie_header = String::new();
-        if let Ok(warmup_resp) = fetcher
-            .get_str(&search_ref)
-            .header(
-                "User-Agent",
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36 Edg/133.0.0.0",
-            )
-            .send()
-            .await
-        {
-            let mut cookies = Vec::new();
-            for (name, value) in warmup_resp.headers() {
-                if name == reqwest::header::SET_COOKIE {
-                    if let Ok(v_str) = value.to_str() {
-                        let c_part = v_str.split(';').next().unwrap_or("").trim();
-                        if !c_part.is_empty() {
-                            cookies.push(c_part);
-                        }
-                    }
-                }
-            }
-            cookie_header = cookies.join("; ");
-        }
-
-        let mut req = fetcher
+        // Resolve existing redirect URLs without issuing a Sogou search or warming its session.
+        let req = fetcher
             .get(sogou_url)
-            .header("Referer", &search_ref)
+            .header("Referer", "https://weixin.sogou.com/")
             .header(
                 "User-Agent",
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36 Edg/133.0.0.0",
@@ -119,10 +86,6 @@ impl WechatAdapter {
                 "Accept",
                 "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             );
-        if !cookie_header.is_empty() {
-            req = req.header("Cookie", cookie_header);
-        }
-
         let resp = req.send().await?;
         let status_u16 = resp.status().as_u16();
         let html = resp.text().await?;
@@ -302,6 +265,8 @@ impl WechatAdapter {
         let token_count = count_tokens(&content, options.tokenizer);
 
         Ok(PageDocument {
+            extraction: Default::default(),
+            warnings: Vec::new(),
             url: url.to_string(),
             final_url: url.to_string(),
             status: 200,

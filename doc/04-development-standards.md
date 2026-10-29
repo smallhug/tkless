@@ -92,7 +92,7 @@ tkless/
    ```rust
    pub trait PlatformAdapter: Send + Sync {
        fn name(&self) -> &'static str;
-       fn can_handle(&self, url: &Url) -> bool;
+       fn matches(&self, url: &Url) -> bool;
        fn extract<'a>(
            &'a self,
            fetcher: &'a Fetcher,
@@ -135,7 +135,7 @@ TkLess 作为兼具人类开发者直接交互与 AI Agent 自动探索（Comman
 
 ### 3. 信息密度与文案标准
 - **首行摘要简明扼要**：用于 `-h` 快速展示，首行不得超过 40 字；
-- **显式标注默认值与取值范围**：凡存在默认值或枚举范围的参数，必须在帮助文本中明确提示（如 `[默认: 500]`、`[默认: markdown]`、`[范围: 1-10]`）；
+- **默认值与取值范围**：优先使用 Clap 的 default_value、value_parser 和 value_enum 自动展示默认值及允许值；不要在描述中重复手写默认值。依赖参数用 requires 或执行前校验明确限制，CLI 与 MCP 同步维护。
 - **版本号与品牌 Banner**：帮助信息 Banner 必须完整嵌入产品定位与口号：
   ```rust
   version = concat!(env!("CARGO_PKG_VERSION"), " (built ", env!("TKLESS_BUILD_DATE"), ")"),
@@ -165,7 +165,7 @@ TkLess 原生实现了基于标准 stdio 的 JSON-RPC 2.0 MCP 协议，为确保
     - 反爬阻断时：`"❌ 遭遇目标站点反爬挑战。建议操作: 在参数中配置 cdp_endpoint (如 'http://127.0.0.1:9222') 启用无头浏览器渲染绕过。"`
     - SSRF 拦截时：明确提示目标地址属于私有保留网段，严禁内网嗅探。
 
-### 3. 流式进度通知规范 (`$/progress`)
+### 3. 流式进度通知规范 (`notifications/progress`)
 - **Token 关联性**：仅当客户端在请求的 `_meta.progressToken` 中提供了标记时，服务端才触发进度通知。通知必须携带对应的 `progressToken`。
 - **推流频次节流 (Throttle)**：
   - 对于整站爬虫（`crawl_site`）或大批量并发抓取（`batch_fetch_webpages`），必须进行进度推流频率控制（节流间隔不低于 `100ms` 或按完成条数步进）；
@@ -174,14 +174,15 @@ TkLess 原生实现了基于标准 stdio 的 JSON-RPC 2.0 MCP 协议，为确保
   - 必须提供明确的数值指标：`progress: 当前已完成数`, `total: 目标总数`；
   - `message` 必须具备上下文含义，例如 `"Crawling page 15/50: https://example.com/docs/api"`。
 
-### 4. 前缀自适应与兼容性保障 (Prefix-Agnostic)
-- 客户端调用工具时，无论传入原生原子名（如 `export_tables`）还是带前缀名（如 `tkless_export_tables` 或历史前缀 `pageclaw_export_tables`），服务端必须自动执行前缀剥离与归一化路由，对客户端命名习惯保持最大容忍度。
+### 4. 规范工具名与当前协议
+- 调度器仅接受目录中的规范名称（如 `export_tables`），直接调用、动态执行、Schema 查询和激活使用相同名称。不得恢复旧工具别名或前缀转换。
+- MCP 只实现 `2025-11-25`；初始化始终声明该版本，不剥离输出 Schema 或结构化结果。CLI 参数只保留一个规范长名称及必要的短参数。
 
 ### 5. 两阶段动态工具发现规范 (Two-Stage Dynamic Tool Discovery)
 针对 MCP 客户端默认将所有工具定义注入 System Prompt 导致上下文过度消耗的问题，TkLess 提供了两阶段动态工具发现架构（`--dynamic` 或 `--profile dynamic` 或环境变量 `TKLESS_MCP_DYNAMIC=1`）：
 
 - **第一阶段：轻量常驻核心集 (Stage 1: Resident Core + Meta Discovery Tools)**
-  - **初次暴露工具数**：从全量 22 个工具大幅精简为 **6 个常驻工具**；
+  - **初次暴露工具数**：从全量 23 个业务工具大幅精简为 **6 个常驻工具**；
   - **核心基础工具 (Core Tools)**：`fetch_webpage`（多格式抓取与清洗）、`web_search`（免 Key 全网搜索）；
   - **发现元工具 (Meta-Tools)**：
     1. `discover_tools(query, category)`：按关键词或分类（`content`, `search`, `media`, `analysis`, `system`, `all`）检索专门工具目录及简述；
@@ -190,9 +191,8 @@ TkLess 原生实现了基于标准 stdio 的 JSON-RPC 2.0 MCP 协议，为确保
     4. `activate_tools(tool_names)`：将会话所需工具动态载入当前激活列表，并通过 `notifications/tools/list_changed` 通知 MCP 宿主重新获取工具列表。
 - **第二阶段：按需探查与执行 (Stage 2: On-Demand Discovery & Execution)**
   - Agent 在识别出特殊需求（如提取数据表格并转为 SQL、音视频字幕抓取、文档比对、语义切块）时，先调用 `discover_tools` / `get_tool_schema` 确定工具签名，随后既可直接通过 `execute_tool` 单次即时运行，也可调用 `activate_tools` 动态入库；
-  - **服务端全容忍兼容**：服务端底层始终保留对所有 22 个工具的直接响应能力，即使客户端在动态模式下直接发送了未在列表中的工具名称（如直接调用 `export_tables`），服务端亦能正确识别并执行。
-- **Token 经济性收益指标**：
-  - 常驻上下文提示词从 **4,368 tokens (Compact)** / **7,239 tokens (Pretty)** 进一步骤降至 **1,700 tokens (Compact)** / **2,734 tokens (Pretty)**，常驻上下文 Token 净降 **>60%**（相比轻量化前基准净降 **>74%**）。
+  - **直接调用**：动态模式也允许直接调用未激活的规范业务工具名称（如 `export_tables`），参数与输出仍经过同样的校验。
+- **Token 开销**：以当前 Schema、分词器和宿主注入策略实测，不将历史固定比例作为验收保证。
 
 ---
 

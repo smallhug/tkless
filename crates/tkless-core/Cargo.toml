@@ -24,6 +24,9 @@ regex.workspace = true
 chrono.workspace = true
 flate2.workspace = true
 qrcode.workspace = true
+sha2.workspace = true
+similar.workspace = true
+tower = { version = "0.5", default-features = false }
 tokio-tungstenite = "0.30.0"
 futures-util = { version = "0.3.34", features = ["sink"] }
 pdf-extract = "0.8"

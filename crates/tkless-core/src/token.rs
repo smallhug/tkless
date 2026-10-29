@@ -35,6 +35,9 @@ pub fn count_tokens(text: &str, kind: TokenizerKind) -> usize {
 
 /// Fallback token estimator: accounts for ASCII / English words vs CJK multibyte characters.
 pub fn estimate_tokens_heuristic(text: &str) -> usize {
+    if text.is_empty() {
+        return 0;
+    }
     let mut tokens = 0;
     let mut in_word = false;
 
@@ -72,16 +75,30 @@ pub fn truncate_to_tokens(text: &str, max_tokens: usize, kind: TokenizerKind) ->
         return (String::new(), true);
     }
 
-    // Rough target char count based on current token density
-    let ratio = max_tokens as f64 / current_tokens as f64;
-    let target_char_count = ((text.chars().count() as f64) * ratio * 0.95) as usize;
-
-    let char_indices: Vec<(usize, char)> = text.char_indices().collect();
-    if target_char_count >= char_indices.len() {
-        return (text.to_string(), false);
+    const NOTICE: &str = "\n\n[Content truncated by TkLess: token limit reached]";
+    // Very small budgets cannot fit a notice; callers still have the truncated flag.
+    let notice = if count_tokens(NOTICE, kind) <= max_tokens {
+        NOTICE
+    } else {
+        ""
+    };
+    let boundaries: Vec<usize> = text
+        .char_indices()
+        .map(|(i, _)| i)
+        .chain(std::iter::once(text.len()))
+        .collect();
+    let mut low = 0;
+    let mut high = boundaries.len() - 1;
+    while low < high {
+        let mid = low + (high - low).div_ceil(2);
+        let candidate = finish_truncated(&text[..boundaries[mid]], notice);
+        if count_tokens(&candidate, kind) <= max_tokens {
+            low = mid;
+        } else {
+            high = mid - 1;
+        }
     }
-
-    let cut_byte_idx = char_indices[target_char_count].0;
+    let cut_byte_idx = boundaries[low];
     let slice = &text[..cut_byte_idx];
 
     // Find the best boundary: paragraph break (\n\n) > sentence end > newline > whitespace
@@ -95,17 +112,51 @@ pub fn truncate_to_tokens(text: &str, max_tokens: usize, kind: TokenizerKind) ->
         find_sentence_or_line_boundary(slice, cut_byte_idx)
     };
 
-    let mut truncated = text[..best_cut].trim_end().to_string();
-
-    // Check for unclosed Markdown code fences (```)
-    let fence_count = truncated.matches("```").count();
-    if !fence_count.is_multiple_of(2) {
-        truncated.push_str("\n```");
+    let mut cut = best_cut;
+    loop {
+        let truncated = finish_truncated(&text[..cut], notice);
+        // BPE token counts are not strictly monotonic across prefix boundaries.
+        if count_tokens(&truncated, kind) <= max_tokens {
+            return (truncated, true);
+        }
+        cut = text[..cut]
+            .char_indices()
+            .next_back()
+            .map(|(i, _)| i)
+            .unwrap_or(0);
     }
+}
 
-    truncated.push_str("\n\n[Content truncated by TkLess: token limit reached]");
-
-    (truncated, true)
+fn finish_truncated(prefix: &str, notice: &str) -> String {
+    let mut result = prefix.trim_end().to_string();
+    let mut open: Option<(char, usize)> = None;
+    for line in result.lines() {
+        if line.starts_with('\t') || line.len() - line.trim_start_matches(' ').len() > 3 {
+            continue;
+        }
+        let line = line.trim_start();
+        let marker = line.chars().next().unwrap_or(' ');
+        if marker != '`' && marker != '~' {
+            continue;
+        }
+        let length = line.chars().take_while(|c| *c == marker).count();
+        if length < 3 {
+            continue;
+        }
+        match open {
+            Some((c, n)) if c == marker && length >= n && line[length..].trim().is_empty() => {
+                open = None
+            }
+            None => open = Some((marker, length)),
+            _ => {}
+        }
+    }
+    if let Some((marker, length)) = open {
+        result.push('\n');
+        result.extend(std::iter::repeat_n(marker, length));
+    }
+    result.push_str(notice);
+    result
 }
 
 fn find_sentence_or_line_boundary(slice: &str, fallback_idx: usize) -> usize {
@@ -140,10 +191,33 @@ mod tests {
         let (truncated, is_truncated) = truncate_to_tokens(text, 10, TokenizerKind::default());
 
         assert!(is_truncated);
-        assert!(truncated.contains("[Content truncated by TkLess"));
+        assert!(count_tokens(&truncated, TokenizerKind::default()) <= 10);
 
         // If a code block was started, it must be closed
         let fence_count = truncated.matches("```").count();
         assert_eq!(fence_count % 2, 0);
+    }
+
+    #[test]
+    fn strict_budget_includes_notices_and_fences() {
+        for kind in [
+            TokenizerKind::O200k,
+            TokenizerKind::Cl100k,
+            TokenizerKind::Heuristic,
+        ] {
+            for source in [
+                "中文测试与 emoji 🦀 repeated words ".repeat(20),
+                "Intro\n\n````rust\nlet text = \"```\";\n".repeat(10),
+                "~~~text\ncode line\n".repeat(20),
+            ] {
+                for limit in 0..80 {
+                    let (out, _) = truncate_to_tokens(&source, limit, kind);
+                    assert!(
+                        count_tokens(&out, kind) <= limit,
+                        "{kind:?}, {limit}: {out}"
+                    );
+                }
+            }
+        }
     }
 }

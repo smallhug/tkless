@@ -217,6 +217,7 @@ impl MathPlaceholderProtector {
 }
 
 /// Preprocesses HTML to normalize KaTeX and MathJax math formulas into standard Markdown `$math$` and `$$math$$` blocks.
+/// Standalone library helper; full conversion protects formulas until after HTML-to-Markdown conversion.
 pub fn normalize_math_formulas(html: &str) -> String {
     let mut protector = MathPlaceholderProtector::new();
     let protected = protector.protect(html);
