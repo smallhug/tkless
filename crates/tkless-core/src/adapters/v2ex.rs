@@ -218,7 +218,7 @@ impl V2exAdapter {
                 }
 
                 if !replies.is_empty() {
-                    md.push_str("---\n\n### 💬 社区精选回帖 (Replies):\n\n");
+                    md.push_str("---\n\n### 社区精选回帖 (Replies):\n\n");
                     for rep in replies {
                         md.push_str(&rep);
                         md.push('\n');
@@ -232,6 +232,8 @@ impl V2exAdapter {
         let token_count = count_tokens(&content, options.tokenizer);
 
         Ok(PageDocument {
+            extraction: Default::default(),
+            warnings: Vec::new(),
             url: url.to_string(),
             final_url: url.to_string(),
             status: 200,

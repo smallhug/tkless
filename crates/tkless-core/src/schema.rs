@@ -270,7 +270,7 @@ pub fn extract_entities(
             items.push(item_obj);
         }
 
-        if items.is_empty() {
+        if items.is_empty() || !items.iter().any(has_extracted_value) {
             return Err(TklessError::SchemaError(format!(
                 "未匹配到任何列表条目 (items_selector: '{items_sel}' 未在页面中命中任何 DOM 元素)。请运行 `tkless <URL> --scaffold` 重新探测页面骨架。"
             )));
@@ -283,7 +283,7 @@ pub fn extract_entities(
     let root_element = doc.root_element();
     let res = extract_fields_from_element(&root_element, &schema.fields, parsed_base.as_ref())?;
     if let Value::Object(ref map) = res {
-        let all_null = map.values().all(|v| v.is_null());
+        let all_null = !map.values().any(has_extracted_value);
         if all_null && !map.is_empty() {
             let field_names: Vec<&str> = map.keys().map(|k| k.as_str()).collect();
             return Err(TklessError::SchemaError(format!(
@@ -293,6 +293,16 @@ pub fn extract_entities(
         }
     }
     Ok(res)
+}
+
+fn has_extracted_value(value: &Value) -> bool {
+    match value {
+        Value::Null => false,
+        Value::String(text) => !text.trim().is_empty(),
+        Value::Array(items) => items.iter().any(has_extracted_value),
+        Value::Object(fields) => fields.values().any(has_extracted_value),
+        Value::Bool(_) | Value::Number(_) => true,
+    }
 }
 
 /// Extracts fields from a DOM element container according to field definitions.
@@ -808,7 +818,7 @@ pub fn scaffold_dom_skeleton(html: &str) -> ScaffoldReport {
 
     summary.push_str("\n#### 建议使用的 Schema 模版 (Ready-to-use JSON Schema):\n\n```json\n");
     summary.push_str(&schema_json);
-    summary.push_str("\n```\n\n> 💡 提示: 可直接通过 `tkless <URL> --schema '<JSON>'` 或 MCP `fetch_webpage(..., schema=...)` 极速抽取纯净结构化数据。");
+    summary.push_str("\n```\n\n> 提示: 可直接通过 `tkless <URL> --schema '<JSON>'` 或 MCP `fetch_webpage(..., schema=...)` 极速抽取纯净结构化数据。");
 
     ScaffoldReport {
         suggested_items_selector,

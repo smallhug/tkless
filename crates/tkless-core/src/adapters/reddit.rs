@@ -83,6 +83,8 @@ impl RedditAdapter {
 
         let token_count = count_tokens(&md, options.tokenizer);
         Ok(PageDocument {
+            extraction: Default::default(),
+            warnings: Vec::new(),
             url: url.to_string(),
             final_url: url.to_string(),
             status: 200,
@@ -198,7 +200,7 @@ impl RedditAdapter {
                 }
 
                 if !comment_lines.is_empty() {
-                    md.push_str("---\n\n### 💬 社区精选评论 (Top Discussion):\n\n");
+                    md.push_str("---\n\n### 社区精选评论 (Top Discussion):\n\n");
                     for line in comment_lines {
                         md.push_str(&line);
                         md.push('\n');
@@ -212,6 +214,8 @@ impl RedditAdapter {
         let token_count = count_tokens(&content, options.tokenizer);
 
         Some(PageDocument {
+            extraction: Default::default(),
+            warnings: Vec::new(),
             url: original_url.to_string(),
             final_url: original_url.to_string(),
             status: 200,

@@ -51,7 +51,7 @@ pub async fn run_shell(engine: &TklessEngine, base_options: &ExtractionOptions) 
                 println!("  summarize <url>     - 本地启发式提取页面核心观点要点速览");
                 println!("  chunk <url>         - 将长文档按标题与 Token 预算语义感知切块");
                 println!("  diff <url1> <url2>  - 对比两个网页或文档版本的版本差异与变更比例");
-                println!("  adapters            - 列出支持的全部 16+ 平台原生适配器矩阵与能力");
+                println!("  adapters            - 列出支持的全部 22 个平台适配器与能力");
                 println!("  help                - 显示此帮助信息");
                 println!("  exit / quit         - 退出交互式会话\n");
             }
@@ -62,7 +62,7 @@ pub async fn run_shell(engine: &TklessEngine, base_options: &ExtractionOptions) 
                             println!("\n{}\n", doc.content);
                         }
                         Err(e) => {
-                            eprintln!("❌ 抓取失败: {e}");
+                            eprintln!("抓取失败: {e}");
                         }
                     }
                 } else {
@@ -74,21 +74,32 @@ pub async fn run_shell(engine: &TklessEngine, base_options: &ExtractionOptions) 
                 if query.is_empty() {
                     eprintln!("用法: search <query>");
                 } else {
-                    match tkless_core::search::web_search_with_engine(
-                        engine.client(),
+                    let cdp = base_options.cdp_endpoint.as_ref().map(|endpoint| {
+                        tkless_core::CdpOptions {
+                            endpoint: endpoint.clone(),
+                            wait_ms: base_options.cdp_wait_ms,
+                            ..Default::default()
+                        }
+                    });
+                    match tkless_core::web_search(
+                        engine,
                         &query,
-                        5,
-                        tkless_core::model::SearchEngineKind::All,
+                        &tkless_core::SearchOptions {
+                            cdp,
+                            auto_cdp: base_options.auto_cdp,
+                            ..Default::default()
+                        },
                     )
                     .await
                     {
-                        Ok(results) => {
+                        Ok(report) => {
                             let md = tkless_core::search::format_search_results_markdown(
-                                &query, &results,
+                                &query,
+                                &report.results,
                             );
                             println!("\n{md}\n");
                         }
-                        Err(e) => eprintln!("❌ 搜索失败: {e}"),
+                        Err(e) => eprintln!("搜索失败: {e}"),
                     }
                 }
             }
@@ -102,9 +113,9 @@ pub async fn run_shell(engine: &TklessEngine, base_options: &ExtractionOptions) 
                                     tkless_core::feed::format_feed_markdown(&channel)
                                 );
                             }
-                            Err(e) => eprintln!("❌ 解析订阅源失败: {e}"),
+                            Err(e) => eprintln!("解析订阅源失败: {e}"),
                         },
-                        Err(e) => eprintln!("❌ 获取订阅源失败: {e}"),
+                        Err(e) => eprintln!("获取订阅源失败: {e}"),
                     }
                 } else {
                     eprintln!("用法: feed <url>");
@@ -117,7 +128,7 @@ pub async fn run_shell(engine: &TklessEngine, base_options: &ExtractionOptions) 
                             let doc = scraper::Html::parse_document(&resp.html);
                             let tables = tkless_core::extractor::extract_tables(&doc);
                             if tables.is_empty() {
-                                eprintln!("⚠️ 未在页面中检测到 <table> 表格元素");
+                                eprintln!("未在页面中检测到 <table> 表格元素");
                             } else {
                                 let formatted = tkless_core::model::ExtractedTable::format_tables(
                                     &tables,
@@ -126,7 +137,7 @@ pub async fn run_shell(engine: &TklessEngine, base_options: &ExtractionOptions) 
                                 println!("\n{formatted}\n");
                             }
                         }
-                        Err(e) => eprintln!("❌ 获取网页失败: {e}"),
+                        Err(e) => eprintln!("获取网页失败: {e}"),
                     }
                 } else {
                     eprintln!("用法: tables <url>");
@@ -144,12 +155,12 @@ pub async fn run_shell(engine: &TklessEngine, base_options: &ExtractionOptions) 
                 let cache = tkless_core::DocumentCache::new(None, 900);
                 if sub == "clear" || sub == "clean" {
                     match cache.clear() {
-                        Ok(_) => println!("✅ 已成功清空本地响应缓存磁盘目录。\n"),
-                        Err(e) => eprintln!("❌ 清空缓存失败: {e}"),
+                        Ok(_) => println!("已成功清空本地响应缓存磁盘目录。\n"),
+                        Err(e) => eprintln!("清空缓存失败: {e}"),
                     }
                 } else {
                     let stats = cache.stats();
-                    println!("\n📦 [TkLess 本地响应缓存状态]");
+                    println!("\n[TkLess 本地响应缓存状态]");
                     println!("--------------------------------------");
                     if let Some(ref dir) = stats.cache_dir {
                         println!("磁盘缓存目录 : {}", dir);
@@ -170,7 +181,7 @@ pub async fn run_shell(engine: &TklessEngine, base_options: &ExtractionOptions) 
                             let doc = scraper::Html::parse_document(&resp.html);
                             let links =
                                 tkless_core::extractor::extract_links(&doc, Some(target_url));
-                            println!("\n🔗 页面超链接清单 (共提取 {} 项):\n", links.len());
+                            println!("\n页面超链接清单 (共提取 {} 项):\n", links.len());
                             for (i, l) in links.iter().take(20).enumerate() {
                                 println!("{}. [{}]({})", i + 1, l.text.trim(), l.url);
                             }
@@ -180,7 +191,7 @@ pub async fn run_shell(engine: &TklessEngine, base_options: &ExtractionOptions) 
                                 println!();
                             }
                         }
-                        Err(e) => eprintln!("❌ 提取链接失败: {e}"),
+                        Err(e) => eprintln!("提取链接失败: {e}"),
                     }
                 } else {
                     eprintln!("用法: links <url>");
@@ -202,7 +213,7 @@ pub async fn run_shell(engine: &TklessEngine, base_options: &ExtractionOptions) 
                             let md = tkless_core::format_deep_research_markdown(&report);
                             println!("\n{md}\n");
                         }
-                        Err(e) => eprintln!("❌ 深度调研失败: {e}"),
+                        Err(e) => eprintln!("深度调研失败: {e}"),
                     }
                 }
             }
@@ -212,13 +223,13 @@ pub async fn run_shell(engine: &TklessEngine, base_options: &ExtractionOptions) 
                         Ok(doc) => {
                             let bullets =
                                 tkless_core::summarizer::extract_key_takeaways(&doc.content, 4);
-                            println!("\n### 💡 核心要点速览 (Key Takeaways):\n");
+                            println!("\n### 核心要点速览 (Key Takeaways):\n");
                             for b in bullets {
                                 println!("- {}", b.trim());
                             }
                             println!();
                         }
-                        Err(e) => eprintln!("❌ 提取失败: {e}"),
+                        Err(e) => eprintln!("提取失败: {e}"),
                     }
                 } else {
                     eprintln!("用法: summarize <url>");
@@ -234,7 +245,7 @@ pub async fn run_shell(engine: &TklessEngine, base_options: &ExtractionOptions) 
                                 50,
                                 tkless_core::model::TokenizerKind::O200k,
                             );
-                            println!("\n# ✂️ 语义分块输出 (共 {} 块):\n", chunks.len());
+                            println!("\n# 语义分块输出 (共 {} 块):\n", chunks.len());
                             for c in chunks {
                                 let path = if c.heading_path.is_empty() {
                                     "正文".to_string()
@@ -242,7 +253,7 @@ pub async fn run_shell(engine: &TklessEngine, base_options: &ExtractionOptions) 
                                     c.heading_path.join(" > ")
                                 };
                                 println!(
-                                    "### 📦 [Chunk {}] Tokens: {} | 标题: {}\n\n{}\n",
+                                    "### [Chunk {}] Tokens: {} | 标题: {}\n\n{}\n",
                                     c.index + 1,
                                     c.token_count,
                                     path,
@@ -250,7 +261,7 @@ pub async fn run_shell(engine: &TklessEngine, base_options: &ExtractionOptions) 
                                 );
                             }
                         }
-                        Err(e) => eprintln!("❌ 提取切块失败: {e}"),
+                        Err(e) => eprintln!("提取切块失败: {e}"),
                     }
                 } else {
                     eprintln!("用法: chunk <url>");
@@ -265,15 +276,15 @@ pub async fn run_shell(engine: &TklessEngine, base_options: &ExtractionOptions) 
                     match (doc1, doc2) {
                         (Ok(d1), Ok(d2)) => {
                             let rep = tkless_core::diff::compute_diff(&d1.content, &d2.content);
-                            println!("\n# 🔄 页面差异比对结果:\n");
+                            println!("\n# 页面差异比对结果:\n");
                             println!(
                                 "> 新增: +{} | 删除: -{} | 变更比例: {:.1}%\n",
                                 rep.added_lines, rep.removed_lines, rep.change_ratio
                             );
                             println!("```diff\n{}\n```\n", rep.unified_diff);
                         }
-                        (Err(e), _) => eprintln!("❌ 抓取第一篇失败: {e}"),
-                        (_, Err(e)) => eprintln!("❌ 抓取第二篇失败: {e}"),
+                        (Err(e), _) => eprintln!("抓取第一篇失败: {e}"),
+                        (_, Err(e)) => eprintln!("抓取第二篇失败: {e}"),
                     }
                 } else {
                     eprintln!("用法: diff <url1> <url2>");

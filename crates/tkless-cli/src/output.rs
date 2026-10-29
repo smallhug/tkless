@@ -1,27 +1,31 @@
+use crate::cli::CliFormat;
 use anyhow::{Context, Result};
 use std::fs::File;
 use std::io::{self, Write};
 use std::path::Path;
-use tkless_core::model::{OutputFormat, PageDocument};
+use tkless_core::model::PageDocument;
 
 /// Renders the extracted document according to the requested format and flags,
 /// writing the payload to stdout or a designated output file.
 pub fn render_output(
     doc: &PageDocument,
-    format: OutputFormat,
+    format: CliFormat,
     json_ld_only: bool,
     output_path: Option<&Path>,
     stream: bool,
+    options: &tkless_core::ExtractionOptions,
 ) -> Result<()> {
-    let payload = if json_ld_only {
-        serde_json::to_string_pretty(&doc.json_ld)
-            .context("Failed to serialize JSON-LD structured data")?
+    let mut payload = if json_ld_only {
+        serialize_json(&doc.json_ld, format)?
     } else {
         match format {
-            OutputFormat::Json => {
+            CliFormat::Jsonl => {
+                serde_json::to_string(doc).context("Failed to serialize JSONL document")?
+            }
+            CliFormat::Json => {
                 serde_json::to_string_pretty(doc).context("Failed to serialize document to JSON")?
             }
-            OutputFormat::Markdown => {
+            CliFormat::Markdown => {
                 let mut text = if let Some(ref chunks) = doc.chunks {
                     format_chunks_markdown(doc, chunks)
                 } else {
@@ -42,9 +46,15 @@ pub fn render_output(
 
                 text
             }
-            OutputFormat::Text | OutputFormat::Raw | OutputFormat::Html => doc.content.clone(),
+            CliFormat::Text | CliFormat::Raw | CliFormat::Html => doc.content.clone(),
         }
     };
+
+    if !json_ld_only && matches!(format, CliFormat::Markdown | CliFormat::Text) {
+        if let Some(limit) = options.max_tokens {
+            payload = tkless_core::token::truncate_to_tokens(&payload, limit, options.tokenizer).0;
+        }
+    }
 
     write_payload_streaming(&payload, output_path, stream)
 }
@@ -100,7 +110,7 @@ fn format_chunks_markdown(
 ) -> String {
     let mut out = String::new();
     out.push_str(&format!(
-        "# ✂️ 语义切块输出: {} (共 {} 块)\n\n",
+        "# 语义切块输出: {} (共 {} 块)\n\n",
         doc.title.as_deref().unwrap_or(&doc.url),
         chunks.len()
     ));
@@ -124,4 +134,71 @@ fn format_chunks_markdown(
     }
 
     out
+}
+
+pub fn serialize_json<T: serde::Serialize>(value: &T, format: CliFormat) -> Result<String> {
+    Ok(if matches!(format, CliFormat::Jsonl) {
+        serde_json::to_string(value)?
+    } else {
+        serde_json::to_string_pretty(value)?
+    })
+}
+
+pub fn serialize_rows<T: serde::Serialize>(values: &[T], format: CliFormat) -> Result<String> {
+    if matches!(format, CliFormat::Jsonl) {
+        Ok(values
+            .iter()
+            .map(serde_json::to_string)
+            .collect::<std::result::Result<Vec<_>, _>>()?
+            .join("\n"))
+    } else {
+        Ok(serde_json::to_string_pretty(values)?)
+    }
+}
+
+pub fn apply_budget(
+    payload: String,
+    format: CliFormat,
+    limit: Option<usize>,
+    tokenizer: tkless_core::TokenizerKind,
+) -> Result<String> {
+    let Some(limit) = limit else {
+        return Ok(payload);
+    };
+    if tkless_core::token::count_tokens(&payload, tokenizer) <= limit {
+        return Ok(payload);
+    }
+    if matches!(format, CliFormat::Json | CliFormat::Jsonl) {
+        return Err(tkless_core::TklessError::InvalidArgument("Serialized JSON exceeds the total token budget; increase the budget or reduce the page/result limit".into()).into());
+    }
+    Ok(tkless_core::token::truncate_to_tokens(&payload, limit, tokenizer).0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn jsonl_has_one_valid_object_per_line() {
+        let items = vec![
+            serde_json::json!({"text":"line one\nline two"}),
+            serde_json::json!({"ok":true}),
+        ];
+        let output = serialize_rows(&items, CliFormat::Jsonl).unwrap();
+        let decoded: Vec<serde_json::Value> = output
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(decoded, items);
+    }
+
+    #[test]
+    fn structured_budget_never_returns_corrupted_json() {
+        assert!(apply_budget(
+            "{\"text\":\"too long\"}".into(),
+            CliFormat::Json,
+            Some(1),
+            tkless_core::TokenizerKind::O200k
+        )
+        .is_err());
+    }
 }

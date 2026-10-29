@@ -86,19 +86,17 @@ impl PapersWithCodeAdapter {
         };
 
         let mut out = String::new();
-        out.push_str(&format!("# 📄 {title}\n\n"));
-        out.push_str(&format!("> 👥 **作者**: {authors_line}\n"));
+        out.push_str(&format!("# {title}\n\n"));
+        out.push_str(&format!("> **作者**: {authors_line}\n"));
         if !arxiv_url.is_empty() {
-            out.push_str(&format!(
-                "> 📚 **ArXiv 原文**: [{arxiv_url}]({arxiv_url})\n"
-            ));
+            out.push_str(&format!("> **ArXiv 原文**: [{arxiv_url}]({arxiv_url})\n"));
         }
         out.push_str(&format!(
-            "> 🔗 **PWC 页面**: [{page_url}]({page_url})\n\n---\n\n"
+            "> **PWC 页面**: [{page_url}]({page_url})\n\n---\n\n"
         ));
 
         if !abstract_text.is_empty() {
-            out.push_str("### 📋 论文摘要 (Abstract)\n\n");
+            out.push_str("### 论文摘要 (Abstract)\n\n");
             out.push_str(&abstract_text);
             out.push_str("\n\n---\n\n");
         }
@@ -127,11 +125,11 @@ impl PapersWithCodeAdapter {
         }
 
         if !code_repos.is_empty() {
-            out.push_str("### 💻 开源代码实现 (Official / Community Implementations)\n\n");
+            out.push_str("### 开源代码实现 (Official / Community Implementations)\n\n");
             out.push_str("| 代码仓库 (GitHub) | Stars 关注度 |\n");
             out.push_str("|:---|:---|\n");
             for (name, href, stars) in &code_repos {
-                out.push_str(&format!("| [{name}]({href}) | ⭐ {stars} |\n"));
+                out.push_str(&format!("| [{name}]({href}) | {stars} |\n"));
             }
             out.push_str("\n---\n\n");
         }
@@ -139,7 +137,7 @@ impl PapersWithCodeAdapter {
         // Benchmark Evaluation tables
         let tables = crate::extractor::extract_tables(&doc);
         if !tables.is_empty() {
-            out.push_str("### 📊 基准评测表现 (Benchmark Evaluation Results)\n\n");
+            out.push_str("### 基准评测表现 (Benchmark Evaluation Results)\n\n");
             for t in &tables {
                 out.push_str(&t.to_markdown());
                 out.push('\n');
@@ -172,6 +170,8 @@ impl PapersWithCodeAdapter {
         let token_count = count_tokens(&content, options.tokenizer);
 
         Ok(PageDocument {
+            extraction: Default::default(),
+            warnings: Vec::new(),
             url: url.to_string(),
             final_url: url.to_string(),
             status: 200,

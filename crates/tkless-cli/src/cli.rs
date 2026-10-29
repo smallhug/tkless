@@ -1,3 +1,4 @@
+use clap::builder::TypedValueParser;
 use clap::{Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 use tkless_core::model::{ExtractionMode, OutputFormat};
@@ -115,42 +116,236 @@ impl From<CliTokenizer> for tkless_core::model::TokenizerKind {
     }
 }
 
-/// Search engine provider choices.
-#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq, Default)]
-pub enum CliSearchEngine {
-    /// Concurrent multi-engine search across enabled engines with deduplication & merged ranking
-    #[default]
+/// Platform restriction for Bing search. Explicit site: filters in the query take priority.
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CliSearchScope {
     All,
-    /// Microsoft Bing search only
-    Bing,
-    /// DuckDuckGo search only
-    #[value(name = "duckduckgo", alias = "ddg", alias = "duck-duck-go")]
-    DuckDuckGo,
-    /// Brave Search (Web scraping or official REST API)
-    #[value(name = "brave", alias = "brave-search")]
-    Brave,
-    /// Yandex Search (Web scraping)
-    #[value(name = "yandex")]
-    Yandex,
-    /// SearXNG metasearch engine (REST JSON API)
-    #[value(name = "searxng", alias = "searx")]
-    Searxng,
-    /// Google Search (Web scraping)
-    #[value(name = "google")]
-    Google,
+    Wechat,
+    Zhihu,
+    Github,
+    Juejin,
+    Csdn,
+    Medium,
+    Substack,
+    Arxiv,
+    Huggingface,
+    Wikipedia,
+    Reddit,
+    Stackoverflow,
+    V2ex,
+    Baike,
+}
+impl CliSearchScope {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::All => "all",
+            Self::Wechat => "wechat",
+            Self::Zhihu => "zhihu",
+            Self::Github => "github",
+            Self::Juejin => "juejin",
+            Self::Csdn => "csdn",
+            Self::Medium => "medium",
+            Self::Substack => "substack",
+            Self::Arxiv => "arxiv",
+            Self::Huggingface => "huggingface",
+            Self::Wikipedia => "wikipedia",
+            Self::Reddit => "reddit",
+            Self::Stackoverflow => "stackoverflow",
+            Self::V2ex => "v2ex",
+            Self::Baike => "baike",
+        }
+    }
 }
 
-impl From<CliSearchEngine> for tkless_core::model::SearchEngineKind {
-    fn from(e: CliSearchEngine) -> Self {
-        match e {
-            CliSearchEngine::All => tkless_core::model::SearchEngineKind::All,
-            CliSearchEngine::Bing => tkless_core::model::SearchEngineKind::Bing,
-            CliSearchEngine::DuckDuckGo => tkless_core::model::SearchEngineKind::DuckDuckGo,
-            CliSearchEngine::Brave => tkless_core::model::SearchEngineKind::Brave,
-            CliSearchEngine::Yandex => tkless_core::model::SearchEngineKind::Yandex,
-            CliSearchEngine::Searxng => tkless_core::model::SearchEngineKind::Searxng,
-            CliSearchEngine::Google => tkless_core::model::SearchEngineKind::Google,
+fn positive_search_count(raw: &str) -> Result<usize, String> {
+    raw.parse::<usize>()
+        .ok()
+        .filter(|value| *value > 0)
+        .ok_or_else(|| "value must be a positive integer".into())
+}
+
+#[cfg(test)]
+mod skills_argument_tests {
+    use super::*;
+
+    #[test]
+    fn skills_catalog_defaults_and_bounds_are_explicit() {
+        let args = CliArgs::try_parse_from(["tkless", "https://skills.sh/"]).unwrap();
+        assert_eq!(args.skills_pages, 3);
+        assert_eq!(args.skills_limit, 1000);
+        for (flag, value) in [
+            ("--skills-pages", "0"),
+            ("--skills-pages", "51"),
+            ("--skills-limit", "0"),
+            ("--skills-limit", "10001"),
+        ] {
+            assert!(
+                CliArgs::try_parse_from(["tkless", "https://skills.sh/", flag, value]).is_err()
+            );
         }
+        let args = CliArgs::try_parse_from([
+            "tkless",
+            "https://skills.sh/trending",
+            "--skills-pages",
+            "5",
+            "--skills-limit",
+            "800",
+        ])
+        .unwrap();
+        assert_eq!(args.skills_pages, 5);
+        assert_eq!(args.skills_limit, 800);
+    }
+}
+
+fn search_output_formats(jsonl: bool) -> clap::builder::ValueParser {
+    let formats = if jsonl {
+        vec!["markdown", "json", "jsonl"]
+    } else {
+        vec!["markdown", "json"]
+    };
+    clap::builder::PossibleValuesParser::new(formats)
+        .map(|format| match format.as_str() {
+            "json" => CliFormat::Json,
+            "jsonl" => CliFormat::Jsonl,
+            _ => CliFormat::Markdown,
+        })
+        .into()
+}
+
+#[cfg(test)]
+mod search_argument_tests {
+    use super::*;
+    use clap::Parser;
+    #[test]
+    fn defaults_and_platform_scope_are_unambiguous() {
+        let args =
+            CliArgs::try_parse_from(["tkless", "search", "Rust", "--scope", "github"]).unwrap();
+        let Some(SubCommand::Search(search)) = args.command else {
+            panic!("Expected search");
+        };
+        assert_eq!(search.limit, 10);
+        assert_eq!(search.scope.unwrap().as_str(), "github");
+        assert!(
+            CliArgs::try_parse_from(["tkless", "search", "Rust", "--scope", "unknown"]).is_err()
+        );
+        assert!(CliArgs::try_parse_from(["tkless", "search", "Rust", "--limit", "0"]).is_err());
+        assert!(CliArgs::try_parse_from(["tkless", "search", "Rust", "--dedup"]).is_err());
+        assert!(CliArgs::try_parse_from([
+            "tkless",
+            "search",
+            "Rust",
+            "--max-tokens-per-page",
+            "100"
+        ])
+        .is_err());
+        assert!(CliArgs::try_parse_from([
+            "tkless",
+            "search",
+            "Rust",
+            "--fetch-content",
+            "--dedup"
+        ])
+        .is_ok());
+        assert!(CliArgs::try_parse_from(["tkless", "search", "Rust", "-f", "text"]).is_err());
+        assert!(CliArgs::try_parse_from(["tkless", "research", "Rust", "-f", "jsonl"]).is_err());
+    }
+    #[test]
+    fn removed_engine_options_fail_before_network_access() {
+        for command in ["search", "research"] {
+            assert!(
+                CliArgs::try_parse_from(["tkless", command, "Rust", "--engine", "bing"]).is_err()
+            );
+        }
+        for flag in [
+            "--yandex-region",
+            "--searxng-url",
+            "--brave-api-key",
+            "--wechat",
+        ] {
+            assert!(CliArgs::try_parse_from(["tkless", "search", "Rust", flag, "1"]).is_err());
+        }
+    }
+
+    #[test]
+    fn strict_schema_requires_a_schema_and_search_diagnostics_are_opt_in() {
+        assert!(CliArgs::try_parse_from(["tkless", "page.html", "--schema-strict"]).is_err());
+        let args = CliArgs::try_parse_from([
+            "tkless",
+            "page.html",
+            "--schema",
+            "schema.json",
+            "--schema-strict",
+        ])
+        .unwrap();
+        assert!(args.schema_strict);
+        let args = CliArgs::try_parse_from([
+            "tkless",
+            "batch",
+            "urls.txt",
+            "--schema",
+            "schema.json",
+            "--schema-strict",
+        ])
+        .unwrap();
+        assert!(matches!(
+            args.command,
+            Some(SubCommand::Batch(BatchArgs {
+                schema_strict: true,
+                ..
+            }))
+        ));
+        let args = CliArgs::try_parse_from(["tkless", "search", "Rust", "--diagnostics"]).unwrap();
+        assert!(matches!(
+            args.command,
+            Some(SubCommand::Search(SearchSubArgs {
+                diagnostics: true,
+                ..
+            }))
+        ));
+    }
+
+    #[test]
+    fn batch_resume_requirements_and_canonical_names_are_enforced() {
+        for args in [
+            vec!["tkless", "batch", "urls.txt", "--resume"],
+            vec!["tkless", "batch", "urls.txt", "--retry-failed"],
+            vec!["tkless", "batch", "urls.txt", "--concurrency", "0"],
+            vec![
+                "tkless",
+                "batch",
+                "urls.txt",
+                "--per-host-concurrency",
+                "65",
+            ],
+            vec!["tkless", "update", "--check"],
+            vec!["tkless", "mcp", "--dynamic-tools"],
+            vec!["tkless", "page.html", "--exclude-selector", ".ad"],
+            vec!["tkless", "page.html", "--bili-sub"],
+        ] {
+            assert!(CliArgs::try_parse_from(args.clone()).is_err(), "{args:?}");
+        }
+        assert!(CliArgs::try_parse_from([
+            "tkless",
+            "batch",
+            "urls.txt",
+            "--checkpoint",
+            "job.jsonl",
+            "--resume",
+            "--retry-failed",
+            "--order",
+            "completion"
+        ])
+        .is_ok());
+        let args = CliArgs::try_parse_from([
+            "tkless",
+            "BV1xx411c7mD",
+            "--subtitles",
+            "--comments",
+            "--download-video",
+            "video.mp4",
+        ])
+        .unwrap();
+        assert!(args.bili_sub && args.bili_cm && args.bili_dl.is_some());
     }
 }
 
@@ -190,9 +385,9 @@ impl From<CliTableFormat> for tkless_core::model::TableExportFormat {
     long_about = "TkLess — Spend less tokens, perceive more web.\n\
 专为大语言模型与 AI Agent 量身定制的高性能网页抓取、降噪清洗与搜索提取引擎。\n\
 自动剥离导航、脚本与广告噪音，将正文转化为 LLM 友好的 Markdown 或结构化 JSON，支持段落断句平滑截断与 Token 预算控制。\n\n\
-【已深度原生适配的 16+ 主流平台 (Built-in Adapters)】\n\
+【已深度原生适配的 22 主流平台 (Built-in Adapters)】\n\
 • 视频与图文社区: B站 (字幕/AI大纲/弹幕/评论/封面)、小红书 (无水印图集/标签)\n\
-• 技术与开源生态: GitHub (README/Issue/Trending热榜)、Hugging Face (模型卡/论文)、Stack Overflow (采纳答案/得分)、V2EX (主楼/附言/楼层)、掘金/CSDN (外链解包/代码提纯)\n\
+• 技术与开源生态: GitHub (README/Issue/Trending热榜)、Skills.sh (技能正文/仓库列表/榜单)、Hugging Face (模型卡/论文)、Stack Overflow (采纳答案/得分)、V2EX (主楼/附言/楼层)、掘金/CSDN (外链解包/代码提纯)\n\
 • 学术与知识百科: 维基百科/百度百科 (信息盒/表格/去引用)、ArXiv (论文/PDF/Atom订阅)\n\
 • 深度专栏与讨论: 微信公众号 (懒加载图片/防封)、Medium/Substack (去付费遮罩)、Reddit (帖子/评论树)\n\n\
 运行 'tkless adapters' 可查看各平台完整能力矩阵与匹配域名清单。",
@@ -243,7 +438,6 @@ pub struct CliArgs {
     #[arg(
         short = 'R',
         long = "remove-selector",
-        alias = "exclude-selector",
         value_name = "CSS_SELECTOR",
         help_heading = "通用提取选项 (General Options)"
     )]
@@ -286,6 +480,14 @@ pub struct CliArgs {
     #[arg(long = "no-adapter", help_heading = "通用提取选项 (General Options)")]
     pub no_adapter: bool,
 
+    /// Skills.sh 榜单自动翻页上限（包含首页）
+    #[arg(long = "skills-pages", default_value_t = 3, value_parser = clap::value_parser!(u32).range(1..=50), help_heading = "Skills.sh")]
+    pub skills_pages: u32,
+
+    /// Skills.sh 去重结果上限；站内搜索的上游上限为 200
+    #[arg(long = "skills-limit", default_value_t = 1000, value_parser = clap::value_parser!(u32).range(1..=10000), help_heading = "Skills.sh")]
+    pub skills_limit: u32,
+
     /// 结构化实体提取 Schema (支持内联 JSON 或 JSON 模式文件路径，直接抽取所需字段并削减 Token)
     #[arg(
         long = "schema",
@@ -293,6 +495,10 @@ pub struct CliArgs {
         help_heading = "通用提取选项 (General Options)"
     )]
     pub schema: Option<String>,
+
+    /// Fail when Schema parsing or extraction fails; requires --schema
+    #[arg(long = "schema-strict", requires = "schema")]
+    pub schema_strict: bool,
 
     /// 分析目标页面 DOM 结构骨架，自动探测重复列表容器并生成建议的 Schema 抽取模版 (节省 Agent Token)
     #[arg(long = "scaffold", help_heading = "通用提取选项 (General Options)")]
@@ -337,7 +543,6 @@ pub struct CliArgs {
     #[arg(
         short = 'T',
         long = "tables-only",
-        alias = "table-only",
         help_heading = "通用提取选项 (General Options)"
     )]
     pub tables_only: bool,
@@ -370,79 +575,45 @@ pub struct CliArgs {
     // =========================================================================
     // 哔哩哔哩专属选项 (Bilibili Options)
     // =========================================================================
-    /// 提取 B站 视频官方/AI 生成的 CC 字幕轨
-    #[arg(
-        long = "bili-sub",
-        alias = "bili-subtitles",
-        alias = "subtitles",
-        alias = "sub",
-        help_heading = "哔哩哔哩专属 (Bilibili)"
-    )]
+    /// 提取 B站或 YouTube 提供的可访问字幕轨
+    #[arg(long = "subtitles", help_heading = "通用提取选项 (General Options)")]
     pub bili_sub: bool,
 
     /// 提取 B站 官方 AI 视频总结核心摘要与章节大纲
-    #[arg(
-        long = "bili-sum",
-        alias = "bili-summary",
-        alias = "summary",
-        alias = "bili-conclusion",
-        alias = "conclusion",
-        help_heading = "哔哩哔哩专属 (Bilibili)"
-    )]
+    #[arg(long = "bili-sum", help_heading = "哔哩哔哩专属 (Bilibili)")]
     pub bili_sum: bool,
 
     /// 提取 B站 视频时间轴高能弹幕 (按出现时间升序排序为 GFM 表格)
-    #[arg(
-        long = "bili-dm",
-        alias = "bili-danmaku",
-        alias = "danmaku",
-        alias = "dm",
-        help_heading = "哔哩哔哩专属 (Bilibili)"
-    )]
+    #[arg(long = "danmaku", help_heading = "哔哩哔哩专属 (Bilibili)")]
     pub bili_dm: bool,
 
     /// 限制提取的时间轴弹幕最大条数
     #[arg(
-        long = "bili-dm-limit",
-        alias = "bili-danmaku-limit",
-        alias = "danmaku-limit",
+        long = "danmaku-limit",
         value_name = "N",
         help_heading = "哔哩哔哩专属 (Bilibili)"
     )]
     pub bili_dm_limit: Option<usize>,
 
     /// 提取 B站 视频高赞精选热评 (包含用户名、点赞数、评论内容与发布时间)
-    #[arg(
-        long = "bili-cm",
-        alias = "bili-comments",
-        alias = "comments",
-        alias = "cm",
-        help_heading = "哔哩哔哩专属 (Bilibili)"
-    )]
+    #[arg(long = "comments", help_heading = "哔哩哔哩专属 (Bilibili)")]
     pub bili_cm: bool,
 
     /// 限制提取的高赞热评最大条数 [默认: 20] (支持自动跨页获取)
     #[arg(
-        long = "bili-cm-limit",
-        alias = "bili-comments-limit",
-        alias = "comments-limit",
+        long = "comments-limit",
         value_name = "N",
         help_heading = "哔哩哔哩专属 (Bilibili)"
     )]
     pub bili_cm_limit: Option<usize>,
 
     /// 拉取 B站 首页推荐视频流表格
-    #[arg(
-        long = "bili-feed",
-        alias = "feed",
-        help_heading = "哔哩哔哩专属 (Bilibili)"
-    )]
+    #[arg(long = "feed", help_heading = "哔哩哔哩专属 (Bilibili)")]
     pub bili_feed: bool,
 
     /// 按关键词搜索 B站 视频
     #[arg(
         long = "bili-search",
-        alias = "search",
         value_name = "KEYWORD",
         help_heading = "哔哩哔哩专属 (Bilibili)"
     )]
@@ -451,7 +622,6 @@ pub struct CliArgs {
     /// 搜索结果页码或多 P 视频分 P 编号 (1-indexed)
     #[arg(
         long = "bili-page",
-        alias = "page",
         value_name = "PAGE",
         help_heading = "哔哩哔哩专属 (Bilibili)"
     )]
@@ -460,25 +630,18 @@ pub struct CliArgs {
     /// 搜索排序规则: totalrank (默认), click (播放), pubdate (最新), dm (弹幕), stow (收藏)
     #[arg(
         long = "bili-order",
-        alias = "order",
         value_name = "ORDER",
         help_heading = "哔哩哔哩专属 (Bilibili)"
     )]
     pub bili_order: Option<String>,
 
     /// 仅输出 B站 视频高清封面图片 URL
-    #[arg(
-        long = "bili-cover",
-        alias = "cover",
-        help_heading = "哔哩哔哩专属 (Bilibili)"
-    )]
+    #[arg(long = "cover", help_heading = "哔哩哔哩专属 (Bilibili)")]
     pub bili_cover: bool,
 
     /// 下载 B站 视频封面图片到本地 (默认: {bvid}_cover.jpg)
     #[arg(
-        long = "bili-dl-cover",
-        alias = "bili-download-cover",
-        alias = "download-cover",
+        long = "download-cover",
         value_name = "PATH",
         num_args = 0..=1,
         default_missing_value = "",
@@ -488,12 +651,7 @@ pub struct CliArgs {
 
     /// 下载 B站 渐进式 MP4 视频流 (默认: {title}.mp4)
     #[arg(
-        long = "bili-dl",
-        alias = "bili-dl-video",
-        alias = "bili-download",
-        alias = "bili-download-video",
-        alias = "download-video",
-        alias = "download",
+        long = "download-video",
         value_name = "PATH",
         num_args = 0..=1,
         default_missing_value = "",
@@ -503,9 +661,7 @@ pub struct CliArgs {
 
     /// B站 视频清晰度选择: 720p (默认), 480p, 360p
     #[arg(
-        long = "bili-quality",
-        alias = "bili-qn",
-        alias = "quality",
+        long = "quality",
         value_enum,
         default_value_t = CliQuality::Q720p,
         help_heading = "哔哩哔哩专属 (Bilibili)"
@@ -613,7 +769,7 @@ pub struct CliArgs {
     )]
     pub cdp_wait_ms: Option<u64>,
 
-    /// 自动探测 Cloudflare / 验证码等反爬挑战，受阻时自动降级到 CDP 无头浏览器渲染
+    /// 自动探测反爬挑战并使用 CDP 浏览器渲染
     #[arg(
         long = "auto-cdp",
         global = true,
@@ -629,7 +785,7 @@ pub struct CliArgs {
     )]
     pub cdp_auto_scroll: bool,
 
-    /// 禁用 CDP 静态重资产拦截 (默认开启拦截以提速 3-5x；开启此开关将恢复加载图片、字体与媒体)
+    /// 禁用 CDP 静态重资产拦截 (默认开启拦截以减少资源加载；开启此开关将恢复加载图片、字体与媒体)
     #[arg(
         long = "cdp-no-block-resources",
         global = true,
@@ -648,7 +804,6 @@ pub struct CliArgs {
     /// Do not fail with non-zero exit code on HTTP 4xx or 5xx error responses (returns body with exit 0)
     #[arg(
         long = "allow-http-errors",
-        alias = "no-fail",
         help_heading = "网络与身份认证 (Network & Auth)"
     )]
     pub allow_http_errors: bool,
@@ -681,7 +836,7 @@ pub struct CliArgs {
     #[arg(long = "mcp", help_heading = "缓存与运行诊断 (Cache & Diagnostics)")]
     pub mcp: bool,
 
-    /// 启用 MCP 两阶段动态工具发现模式 (极简常驻上下文，节省 >80% 初始提示词 Token)
+    /// 启用 MCP 两阶段动态工具发现模式 (极简常驻上下文，减少初始工具声明)
     #[arg(
         long = "mcp-dynamic",
         help_heading = "缓存与运行诊断 (Cache & Diagnostics)"
@@ -730,7 +885,7 @@ pub struct CliArgs {
     )]
     pub output_file: Option<std::path::PathBuf>,
 
-    /// Verbose diagnostic output on stderr (-v for debug, -vv for trace)
+    /// Verbose diagnostics on stderr (-v warnings, -vv connection info, -vvv debug, -vvvv trace)
     #[arg(short = 'v', long = "verbose", action = clap::ArgAction::Count, global = true, help_heading = "缓存与运行诊断 (Cache & Diagnostics)")]
     pub verbose: u8,
 
@@ -813,7 +968,6 @@ pub enum SubCommand {
     /// 提取网页或 HTML 文件中的全部表格，并导出为 SQL、CSV、TSV、JSON 或 Markdown
     #[command(
         name = "tables",
-        alias = "table",
         about = "提取网页或 HTML 中的全部数据表格，并直接导出为 SQL DDL/INSERT、CSV、TSV 或 JSON"
     )]
     Tables(TablesArgs),
@@ -825,34 +979,30 @@ pub enum SubCommand {
     )]
     Completions(CompletionsArgs),
 
-    /// 列出支持的全部 16+ 平台原生适配器、匹配域名与专属优化能力
+    /// 列出支持的全部 22 平台原生适配器、匹配域名与专属优化能力
     #[command(
         name = "adapters",
-        alias = "platforms",
-        about = "列出支持的全部 16+ 平台原生适配器、匹配域名与专属优化能力"
+        about = "列出支持的全部 22 平台原生适配器、匹配域名与专属优化能力"
     )]
     Adapters(AdaptersArgs),
 
     /// 检查并自动升级 TkLess 二进制至 GitHub 最新版本 (类似 bun upgrade / rustup update)
     #[command(
         name = "upgrade",
-        alias = "update",
         about = "检查并自动升级 TkLess 二进制至 GitHub 最新版本 (类似 bun upgrade)"
     )]
     Upgrade(UpgradeArgs),
 
-    /// 多跳自主深度网络调研流水线 (自动拆解维度、跨引擎并发检索、跟踪权威引链、汇编综述报告)
+    /// 多跳网络调研流水线 (拆解维度、Bing 检索、跟踪引链、汇编摘录报告)
     #[command(
         name = "research",
-        alias = "deep-research",
-        about = "多跳自主深度网络调研流水线 (自动拆解维度、跨引擎并发检索、跟踪权威引链、汇编综述报告)"
+        about = "多跳网络调研流水线 (拆解维度、Bing 检索、跟踪引链、汇编摘录报告)"
     )]
     Research(ResearchSubArgs),
 
     /// 诊断并自检当前运行环境 (CDP 浏览器就绪、网络核心服务连通性、缓存读写权限)
     #[command(
         name = "doctor",
-        alias = "selftest",
         about = "诊断并自检当前运行环境 (CDP 浏览器就绪、网络核心服务连通性、缓存读写权限)"
     )]
     Doctor(DoctorArgs),
@@ -902,19 +1052,19 @@ pub struct ResearchSubArgs {
     #[arg(value_name = "TOPIC")]
     pub topic: String,
 
-    /// Research hop depth (1: single-hop broad search, 2: two-hop citation tracking) [default: 2]
+    /// Research hop depth (1: single-hop broad search, 2: two-hop citation tracking)
     #[arg(short = 'd', long = "depth", default_value_t = 2, value_name = "HOPS")]
     pub depth: usize,
 
-    /// Number of research dimensions/sub-queries to explore (2-5) [default: 3]
+    /// Number of research dimensions/sub-queries to explore (2-5)
     #[arg(short = 'b', long = "breadth", default_value_t = 3, value_name = "N")]
     pub breadth: usize,
 
-    /// Maximum number of total pages to analyze (3-20) [default: 8]
+    /// Maximum number of total pages to analyze (3-20)
     #[arg(short = 'm', long = "max-pages", default_value_t = 8, value_name = "N")]
     pub max_pages: usize,
 
-    /// Maximum tokens extracted per webpage [default: 1500]
+    /// Maximum tokens extracted per webpage
     #[arg(
         long = "max-tokens-per-page",
         default_value_t = 1500,
@@ -922,7 +1072,7 @@ pub struct ResearchSubArgs {
     )]
     pub max_tokens_per_page: usize,
 
-    /// Overall token budget for the compiled research report [default: 8000]
+    /// Overall token budget for the compiled research report
     #[arg(
         short = 't',
         long = "max-tokens",
@@ -931,18 +1081,8 @@ pub struct ResearchSubArgs {
     )]
     pub max_tokens: usize,
 
-    /// Search engine provider: all (default), bing, duckduckgo (ddg), brave, yandex, searxng, google
-    #[arg(
-        short = 'e',
-        long = "engine",
-        value_enum,
-        default_value_t = CliSearchEngine::All,
-        help = "Search engine provider: all (default), bing, duckduckgo, brave, yandex, searxng, google"
-    )]
-    pub engine: CliSearchEngine,
-
-    /// Output presentation format [default: markdown]
-    #[arg(short = 'f', long = "format", value_enum, default_value_t = CliFormat::Markdown)]
+    /// Output presentation format
+    #[arg(short = 'f', long = "format", default_value = "markdown", value_parser = search_output_formats(false))]
     pub format: CliFormat,
 
     /// Write compiled research report to file instead of stdout
@@ -997,7 +1137,6 @@ pub struct TablesArgs {
     #[arg(
         short = 'f',
         long = "format",
-        alias = "table-format",
         value_enum,
         default_value_t = CliTableFormat::Sql
     )]
@@ -1033,154 +1172,28 @@ pub struct CacheSubArgs {
 
 #[derive(clap::Args, Debug, Clone)]
 pub struct SearchSubArgs {
+    /// Show detailed diagnostics in Markdown; JSON/JSONL always contain a report
+    #[arg(long = "diagnostics")]
+    pub diagnostics: bool,
     /// Search query keyword or question
     #[arg(value_name = "QUERY")]
     pub query: String,
 
-    /// Maximum number of search results to return [default: 5]
-    #[arg(short = 'l', long = "limit", default_value_t = 5, value_name = "N")]
+    /// Maximum number of search results to return
+    #[arg(short = 'l', long = "limit", default_value_t = 10, value_name = "N", value_parser = positive_search_count)]
     pub limit: usize,
 
-    /// Output presentation format [default: markdown]
-    #[arg(short = 'f', long = "format", value_enum, default_value_t = CliFormat::Markdown)]
+    /// Output presentation format
+    #[arg(short = 'f', long = "format", default_value = "markdown", value_parser = search_output_formats(true))]
     pub format: CliFormat,
 
     /// Write search results to file instead of stdout
     #[arg(short = 'o', long = "output", value_name = "FILE")]
     pub output: Option<PathBuf>,
 
-    /// Scope search to WeChat Official Accounts (mp.weixin.qq.com)
-    #[arg(
-        long = "wechat",
-        help = "Scope search to WeChat Official Accounts (mp.weixin.qq.com)",
-        help_heading = "定向生态检索选项 (Platform Scopes)"
-    )]
-    pub wechat: bool,
-
-    /// Scope search to Zhihu (zhihu.com)
-    #[arg(
-        long = "zhihu",
-        help = "Scope search to Zhihu questions and articles (zhihu.com)",
-        help_heading = "定向生态检索选项 (Platform Scopes)"
-    )]
-    pub zhihu: bool,
-
-    /// Scope search to GitHub repositories, issues, and discussions (github.com)
-    #[arg(
-        long = "github",
-        help = "Scope search to GitHub repositories, issues, and discussions (github.com)",
-        help_heading = "定向生态检索选项 (Platform Scopes)"
-    )]
-    pub github: bool,
-
-    /// Scope search to Juejin technical articles (juejin.cn)
-    #[arg(
-        long = "juejin",
-        help = "Scope search to Juejin technical articles (juejin.cn)",
-        help_heading = "定向生态检索选项 (Platform Scopes)"
-    )]
-    pub juejin: bool,
-
-    /// Scope search to CSDN blog posts (blog.csdn.net)
-    #[arg(
-        long = "csdn",
-        help = "Scope search to CSDN blog posts (blog.csdn.net)",
-        help_heading = "定向生态检索选项 (Platform Scopes)"
-    )]
-    pub csdn: bool,
-
-    /// Scope search to Medium technical articles (medium.com)
-    #[arg(
-        long = "medium",
-        help = "Scope search to Medium technical articles (medium.com)",
-        help_heading = "定向生态检索选项 (Platform Scopes)"
-    )]
-    pub medium: bool,
-
-    /// Scope search to Substack newsletters and tech blogs (substack.com)
-    #[arg(
-        long = "substack",
-        help = "Scope search to Substack newsletters and tech blogs (substack.com)",
-        help_heading = "定向生态检索选项 (Platform Scopes)"
-    )]
-    pub substack: bool,
-
-    /// Scope search to arXiv research papers and preprints (arxiv.org)
-    #[arg(
-        long = "arxiv",
-        help = "Scope search to arXiv research papers and preprints (arxiv.org)",
-        help_heading = "定向生态检索选项 (Platform Scopes)"
-    )]
-    pub arxiv: bool,
-
-    /// Scope search to Hugging Face models, datasets, papers, and blogs (huggingface.co)
-    #[arg(
-        long = "hf",
-        alias = "huggingface",
-        help = "Scope search to Hugging Face models, datasets, papers, and blogs (huggingface.co)",
-        help_heading = "定向生态检索选项 (Platform Scopes)"
-    )]
-    pub hf: bool,
-
-    /// Scope search to Wikipedia encyclopedic articles (wikipedia.org)
-    #[arg(
-        long = "wiki",
-        alias = "wikipedia",
-        help = "Scope search to Wikipedia encyclopedic articles (wikipedia.org)",
-        help_heading = "定向生态检索选项 (Platform Scopes)"
-    )]
-    pub wiki: bool,
-
-    /// Scope search to Reddit community discussions and comments (reddit.com)
-    #[arg(
-        long = "reddit",
-        help = "Scope search to Reddit community discussions and comments (reddit.com)",
-        help_heading = "定向生态检索选项 (Platform Scopes)"
-    )]
-    pub reddit: bool,
-
-    /// Scope search to Stack Overflow and Stack Exchange developer Q&A (stackoverflow.com)
-    #[arg(
-        long = "so",
-        alias = "stackoverflow",
-        help = "Scope search to Stack Overflow and Stack Exchange developer Q&A (stackoverflow.com)",
-        help_heading = "定向生态检索选项 (Platform Scopes)"
-    )]
-    pub so: bool,
-
-    /// Scope search to V2EX developer community discussions (v2ex.com)
-    #[arg(
-        long = "v2ex",
-        help = "Scope search to V2EX developer community discussions (v2ex.com)",
-        help_heading = "定向生态检索选项 (Platform Scopes)"
-    )]
-    pub v2ex: bool,
-
-    /// Scope search to Baidu Baike Chinese encyclopedia (baike.baidu.com)
-    #[arg(
-        long = "baike",
-        help = "Scope search to Baidu Baike Chinese encyclopedia (baike.baidu.com)",
-        help_heading = "定向生态检索选项 (Platform Scopes)"
-    )]
-    pub baike: bool,
-
-    /// Search engine provider: all (default), bing, duckduckgo (ddg), brave, yandex, searxng, google
-    #[arg(
-        short = 'e',
-        long = "engine",
-        value_enum,
-        default_value_t = CliSearchEngine::All,
-        help = "Search engine provider: all (default), bing, duckduckgo, brave, yandex, searxng, google"
-    )]
-    pub engine: CliSearchEngine,
-
-    /// 自定义 SearXNG 聚合搜索引擎实例 URL (例如 https://searx.be 或私有部署端点)
-    #[arg(long = "searxng-url", value_name = "URL")]
-    pub searxng_url: Option<String>,
-
-    /// Brave Search 官方 API Key (亦可读取环境变量 BRAVE_API_KEY)
-    #[arg(long = "brave-api-key", value_name = "KEY")]
-    pub brave_api_key: Option<String>,
+    /// Restrict Bing search to a platform (for example github, zhihu, arxiv)
+    #[arg(long = "scope", value_enum, value_name = "PLATFORM")]
+    pub scope: Option<CliSearchScope>,
 
     /// Fetch and extract full cleaned content for each search result in parallel
     #[arg(
@@ -1192,14 +1205,17 @@ pub struct SearchSubArgs {
     /// 启用 64-bit SimHash 汉明距离去重，自动过滤高度雷同的转载/镜像文章 (仅当 fetch-content 时生效)
     #[arg(
         long = "dedup",
-        help = "Filter near-duplicate pages via 64-bit SimHash when fetching search results"
+        requires = "fetch_content",
+        help = "Filter near-duplicate pages via 64-bit SimHash; requires --fetch-content"
     )]
     pub dedup: bool,
 
-    /// Maximum tokens extracted per webpage during search & fetch [default: 1500]
+    /// Maximum tokens extracted per webpage during search & fetch
     #[arg(
         long = "max-tokens-per-page",
         value_name = "N",
+        requires = "fetch_content",
+        value_parser = positive_search_count,
         help = "Maximum tokens extracted per webpage during search & fetch [default: 1500]"
     )]
     pub max_tokens_per_page: Option<usize>,
@@ -1208,7 +1224,7 @@ pub struct SearchSubArgs {
     #[arg(long = "cdp", value_name = "ENDPOINT")]
     pub cdp: Option<String>,
 
-    /// CDP 页面加载后额外等待 DOM 动态渲染完成的时间 (毫秒)
+    /// CDP DOM 加载额外等待时间 (毫秒)，要求显式 --cdp 端点
     #[arg(long = "cdp-wait", value_name = "MS")]
     pub cdp_wait_ms: Option<u64>,
 
@@ -1223,6 +1239,27 @@ pub struct SearchSubArgs {
 
 #[derive(clap::Args, Debug, Clone)]
 pub struct BatchArgs {
+    /// Output order for per-item results
+    #[arg(long = "order", value_enum, default_value_t = CliBatchOrder::Input)]
+    pub order: CliBatchOrder,
+    /// Durable checkpoint file for this batch (must not already exist)
+    #[arg(long = "checkpoint", value_name = "FILE")]
+    pub checkpoint: Option<PathBuf>,
+    /// Resume an existing checkpoint; completed results are replayed
+    #[arg(long = "resume", requires = "checkpoint")]
+    pub resume: bool,
+    /// Re-fetch failed items when resuming; successful items remain saved
+    #[arg(long = "retry-failed", requires = "resume")]
+    pub retry_failed: bool,
+    /// Maximum simultaneous page tasks for a single host
+    #[arg(long = "per-host-concurrency", default_value_t = 2, value_parser = batch_concurrency)]
+    pub per_host_concurrency: usize,
+    /// Minimum interval between page-task starts for a single host
+    #[arg(long = "per-host-delay-ms", default_value_t = 0)]
+    pub per_host_delay_ms: u64,
+    /// Return success when some URLs fail; per-URL errors remain in the output
+    #[arg(long = "allow-partial")]
+    pub allow_partial: bool,
     /// Path to file containing URLs (one per line) or '-' to read from standard input
     #[arg(value_name = "FILE")]
     pub file: String,
@@ -1232,7 +1269,8 @@ pub struct BatchArgs {
         short = 'c',
         long = "concurrency",
         default_value_t = 5,
-        value_name = "N"
+        value_name = "N",
+        value_parser = batch_concurrency
     )]
     pub concurrency: usize,
 
@@ -1255,6 +1293,10 @@ pub struct BatchArgs {
     /// 结构化实体提取 Schema (支持内联 JSON 或 JSON 模式文件路径)
     #[arg(long = "schema", value_name = "JSON_OR_PATH")]
     pub schema: Option<String>,
+
+    /// Fail when Schema parsing or extraction fails; requires --schema
+    #[arg(long = "schema-strict", requires = "schema")]
+    pub schema_strict: bool,
 
     /// Chrome DevTools Protocol (CDP) 远程调试端点 (如 http://127.0.0.1:9222)
     #[arg(long = "cdp", value_name = "ENDPOINT")]
@@ -1288,9 +1330,32 @@ pub struct BatchArgs {
     #[arg(long = "mobile")]
     pub mobile: bool,
 
-    /// 批量抓取单任务间歇延迟等待时间 (毫秒)，防止触发服务端 429 速率限制
+    /// 全局页面任务最小启动间隔 (毫秒)
     #[arg(long = "delay-ms", default_value_t = 0, value_name = "MS")]
     pub delay_ms: u64,
+}
+
+fn batch_concurrency(raw: &str) -> Result<usize, String> {
+    raw.parse::<usize>()
+        .ok()
+        .filter(|value| (1..=64).contains(value))
+        .ok_or_else(|| "value must be between 1 and 64".into())
+}
+
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum CliBatchOrder {
+    #[default]
+    Input,
+    Completion,
+}
+
+impl From<CliBatchOrder> for tkless_core::batch::BatchOrder {
+    fn from(value: CliBatchOrder) -> Self {
+        match value {
+            CliBatchOrder::Input => Self::Input,
+            CliBatchOrder::Completion => Self::Completion,
+        }
+    }
 }
 
 #[derive(clap::Args, Debug, Clone)]
@@ -1320,10 +1385,10 @@ pub struct LoginArgs {
 #[derive(clap::Args, Debug, Clone, Default)]
 pub struct McpArgs {
     /// 启用两阶段动态工具发现 (仅暴露 2 核心工具 + 4 发现元工具，大幅降低 Token 开销)
-    #[arg(long = "dynamic", visible_alias = "dynamic-tools")]
+    #[arg(long = "dynamic")]
     pub dynamic: bool,
 
-    /// MCP 工具配置模式: 'full' (全量 22 工具) 或 'dynamic' (两阶段动态发现)
+    /// MCP 工具配置模式: 'full' (全量 23 工具) 或 'dynamic' (两阶段动态发现)
     #[arg(long = "profile", default_value = "full", value_name = "PROFILE")]
     pub profile: String,
 
@@ -1342,6 +1407,9 @@ pub struct McpArgs {
 
 #[derive(clap::Args, Debug, Clone)]
 pub struct CrawlArgs {
+    /// Return success despite failed pages; errors remain in the report
+    #[arg(long = "allow-partial")]
+    pub allow_partial: bool,
     /// Seed URL to start deep site crawling
     #[arg(value_name = "URL")]
     pub url: String,

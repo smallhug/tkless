@@ -129,10 +129,13 @@ panic = "abort"         # 移除 unwind 表，大幅缩减体积
 strip = true            # 自动剥离全部调试符号
 ```
 
-### 推荐产物体积基线：
-- Linux (x86_64): `< 12 MB`
-- macOS (Apple Silicon): `< 10 MB`
-- Windows (x86_64): `< 11 MB`
+### 产物体积与校验
+
+体积随目标平台、依赖、feature 和工具链变化，应记录对应构建产物的实际大小，不使用固定体积作为已达成的跨平台保证。
+
+发布工作流为每个二进制或 DMG 生成同名 `.sha256` 文件，并与产物一起上传。Release 正文来自根目录 [RELEASE_NOTES.md](../RELEASE_NOTES.md)。自升级在替换前验证 GitHub Release 提供的 SHA-256 digest 或配套校验文件；缺少校验信息或校验失败时拒绝替换。
+
+工作区更新说明不代表已经发布；版本标签、版本号与 Release 正文应在发版时共同核对。
 
 ---
 
@@ -150,6 +153,8 @@ strip = true            # 自动剥离全部调试符号
    - 确保 `git status` 干净，无未追踪文件。
 4. **生成版本 Tag 并推送**：
    ```bash
-   git tag -a v0.1.0 -m "Release v0.1.0: Support 15+ adapters, MCP streaming, and SQL table export"
-   git push origin main --tags
+   git tag -a vX.Y.Z -m "Release vX.Y.Z"
+   git push origin vX.Y.Z
    ```
+
+   `X.Y.Z` 是模板，须替换为实际待发布版本，并先确认标签不存在。发布前同时运行格式、Clippy 与 release 构建检查；当前命令见 [开发规范](04-development-standards.md)。

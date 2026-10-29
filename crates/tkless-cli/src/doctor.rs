@@ -18,10 +18,11 @@ pub async fn run_doctor(
     out.push_str("╚════════════════════════════════════════════════════════════════╝\n\n");
 
     // 1. System & Architecture
-    out.push_str("[1/4] 🖥️ 系统环境与架构 (System & Runtime):\n");
+    out.push_str("[1/4] 系统环境与架构 (System & Runtime):\n");
     out.push_str(&format!(
-        "  - 产品版本 : tkless v{} (build 2026-10-18)\n",
-        env!("CARGO_PKG_VERSION")
+        "  - 产品版本 : tkless v{} (build {})\n",
+        env!("CARGO_PKG_VERSION"),
+        env!("TKLESS_BUILD_DATE")
     ));
     out.push_str(&format!(
         "  - 操作系统 : {} ({})\n",
@@ -34,30 +35,28 @@ pub async fn run_doctor(
     ));
 
     // 2. CDP Headless Browser Detection
-    out.push_str("\n[2/4] 🌐 无头浏览器 (CDP Headless Browser):\n");
+    out.push_str("\n[2/4] 无头浏览器 (CDP Headless Browser):\n");
     let browser = tkless_core::cdp::locate_system_browser();
     match browser {
         Some(ref path) => {
-            out.push_str("  - 状态     : ✅ 已检测到本地可用浏览器\n");
+            out.push_str("  - 状态     : 已检测到本地可用浏览器\n");
             out.push_str(&format!("  - 执行路径 : {}\n", path.display()));
             out.push_str("  - 能力提示 : 支持通过 --cdp-auto-scroll、--auto-cdp 及无头守护进程快速渲染动态页面与绕过反爬\n");
         }
         None => {
-            out.push_str(
-                "  - 状态     : ⚠️ 未在系统标准路径检测到 Chrome、Edge 或 Chromium 安装\n",
-            );
+            out.push_str("  - 状态     : 未在系统标准路径检测到 Chrome、Edge 或 Chromium 安装\n");
             out.push_str("  - 建议操作 : 安装 Chrome 或 Edge 浏览器后，即可自动启用无感知 --auto-cdp 渲染加速\n");
         }
     }
 
     // 3. Local Storage & Response Cache
-    out.push_str("\n[3/4] 📦 本地响应缓存 (Response Cache):\n");
+    out.push_str("\n[3/4] 本地响应缓存 (Response Cache):\n");
     let cache = DocumentCache::new(None, 900);
     let stats = cache.stats();
     let cache_dir_disp = stats
         .cache_dir
         .unwrap_or_else(|| "系统标准缓存目录".to_string());
-    out.push_str("  - 读写状态 : ✅ 缓存存储读写正常\n");
+    out.push_str("  - 读写状态 : 缓存存储读写正常\n");
     out.push_str(&format!("  - 缓存目录 : {}\n", cache_dir_disp));
     out.push_str(&format!(
         "  - 活跃容量 : {} 项内存条目, {} 项磁盘条目 (总占用: {})\n",
@@ -67,7 +66,7 @@ pub async fn run_doctor(
     ));
 
     // 4. Network Connectivity Probes
-    out.push_str("\n[4/4] 🌍 核心网络服务连通性探测 (Network Probes):\n");
+    out.push_str("\n[4/4] 核心网络服务连通性探测 (Network Probes):\n");
     let effective_proxy = doc_args.proxy.as_ref().or(fetch_options.proxy.as_ref());
     if let Some(p) = effective_proxy {
         out.push_str(&format!("  - 配置代理 : {}\n", p));
@@ -90,48 +89,20 @@ pub async fn run_doctor(
     match probe_client.get("https://www.bing.com").send().await {
         Ok(resp) if resp.status().is_success() => {
             out.push_str(&format!(
-                "  - Microsoft Bing 搜索  : ✅ 可达 ({} ms, Status: {})\n",
+                "  - Microsoft Bing 搜索  : 可达 ({} ms, Status: {})\n",
                 t_bing.elapsed().as_millis(),
                 resp.status()
             ));
         }
         Ok(resp) => {
             out.push_str(&format!(
-                "  - Microsoft Bing 搜索  : ⚠️ 响应非 200 ({} ms, Status: {})\n",
+                "  - Microsoft Bing 搜索  : 响应非 200 ({} ms, Status: {})\n",
                 t_bing.elapsed().as_millis(),
                 resp.status()
             ));
         }
         Err(e) => {
-            out.push_str(&format!("  - Microsoft Bing 搜索  : ❌ 连接失败 ({})\n", e));
-        }
-    }
-
-    // Probe 2: DuckDuckGo
-    let t_ddg = Instant::now();
-    match probe_client.get("https://html.duckduckgo.com").send().await {
-        Ok(resp) if resp.status().is_success() => {
-            out.push_str(&format!(
-                "  - DuckDuckGo 搜索      : ✅ 可达 ({} ms, Status: {})\n",
-                t_ddg.elapsed().as_millis(),
-                resp.status()
-            ));
-        }
-        Ok(resp) if resp.status() == reqwest::StatusCode::ACCEPTED => {
-            out.push_str("  - DuckDuckGo 搜索      : ⚠️ 遭遇 SRE 202 反爬校验 (建议配置 -p http://127.0.0.1:7897 代理节点)\n");
-        }
-        Ok(resp) => {
-            out.push_str(&format!(
-                "  - DuckDuckGo 搜索      : ⚠️ 响应非 200 ({} ms, Status: {})\n",
-                t_ddg.elapsed().as_millis(),
-                resp.status()
-            ));
-        }
-        Err(e) => {
-            out.push_str(&format!(
-                "  - DuckDuckGo 搜索      : ⚠️ 直连受限 ({}) (建议配置 -p 代理)\n",
-                e
-            ));
+            out.push_str(&format!("  - Microsoft Bing 搜索  : 连接失败 ({})\n", e));
         }
     }
 
@@ -144,22 +115,19 @@ pub async fn run_doctor(
     {
         Ok(resp) if resp.status().is_success() => {
             out.push_str(&format!(
-                "  - Bilibili 开放接口     : ✅ 可达 ({} ms, Status: {})\n",
+                "  - Bilibili 开放接口     : 可达 ({} ms, Status: {})\n",
                 t_bili.elapsed().as_millis(),
                 resp.status()
             ));
         }
         Ok(resp) => {
             out.push_str(&format!(
-                "  - Bilibili 开放接口     : ⚠️ 响应非 200 (Status: {})\n",
+                "  - Bilibili 开放接口     : 响应非 200 (Status: {})\n",
                 resp.status()
             ));
         }
         Err(e) => {
-            out.push_str(&format!(
-                "  - Bilibili 开放接口     : ❌ 连接失败 ({})\n",
-                e
-            ));
+            out.push_str(&format!("  - Bilibili 开放接口     : 连接失败 ({})\n", e));
         }
     }
 

@@ -19,6 +19,11 @@ use url::Url;
 
 use crate::error::TklessError;
 
+mod browser;
+mod preflight;
+
+pub(crate) use preflight::check as preflight_search;
+
 /// Globally managed headless browser daemon child process.
 static MANAGED_BROWSER_PROCESS: LazyLock<Mutex<Option<Child>>> = LazyLock::new(|| Mutex::new(None));
 
@@ -222,6 +227,8 @@ pub struct CdpOptions {
     pub timeout_ms: Option<u64>,
     /// Custom User-Agent to emulate in the browser session.
     pub user_agent: Option<String>,
+    /// Explicit Accept-Language header; native browser defaults are retained when omitted.
+    pub accept_language: Option<String>,
     /// Cookie header string or platform cookies to inject into the browser target.
     pub cookie: Option<String>,
     /// Whether to block heavy resources (images, media, fonts, tracker scripts) to boost speed by 3-5x. Default: true for HTML extraction.
@@ -239,6 +246,7 @@ impl Default for CdpOptions {
             wait_ms: Some(1000),
             timeout_ms: Some(30_000),
             user_agent: None,
+            accept_language: None,
             cookie: None,
             block_resources: Some(true),
             auto_scroll: Some(false),
@@ -271,6 +279,13 @@ fn normalize_cdp_endpoint(endpoint: &str) -> (String, bool) {
 
 /// Fetches rendered HTML for a given URL via Chrome DevTools Protocol.
 pub async fn fetch_html_via_cdp(url: &str, options: &CdpOptions) -> Result<String, TklessError> {
+    fetch_html_with_interaction(url, options).await
+}
+
+async fn fetch_html_with_interaction(
+    url: &str,
+    options: &CdpOptions,
+) -> Result<String, TklessError> {
     let (raw_base_endpoint, is_direct_ws) = normalize_cdp_endpoint(&options.endpoint);
     let base_endpoint = if !is_direct_ws {
         ensure_cdp_daemon_ready(&raw_base_endpoint).await?
@@ -279,9 +294,10 @@ pub async fn fetch_html_via_cdp(url: &str, options: &CdpOptions) -> Result<Strin
     };
     let total_timeout = Duration::from_millis(options.timeout_ms.unwrap_or(30_000));
 
-    timeout(total_timeout, async {
+    let started = std::time::Instant::now();
+    timeout(total_timeout + Duration::from_secs(3), async {
         if is_direct_ws {
-            connect_and_extract_html(&base_endpoint, url, options, None).await
+            connect_and_extract_html(&base_endpoint, url, options).await
         } else {
             // 1. Create a new target tab via Chrome DevTools HTTP API
             let req_timeout = Duration::from_millis(options.timeout_ms.unwrap_or(30_000).min(2000));
@@ -291,7 +307,7 @@ pub async fn fetch_html_via_cdp(url: &str, options: &CdpOptions) -> Result<Strin
                 .build()
                 .map_err(|e| TklessError::CdpError(format!("创建 HTTP 客户端失败: {e}")))?;
 
-            let new_target_url = format!("{}/json/new?{}", base_endpoint, urlencoding(url));
+            let new_target_url = format!("{}/json/new?{}", base_endpoint, urlencoding("about:blank"));
             debug!(endpoint = %new_target_url, "通过 CDP HTTP 接口创建新页面 Tab");
 
             let resp = match client.put(&new_target_url).send().await {
@@ -321,7 +337,10 @@ pub async fn fetch_html_via_cdp(url: &str, options: &CdpOptions) -> Result<Strin
             })?;
 
             let target_id = target.id.clone();
-            let result = connect_and_extract_html(&ws_url, url, options, Some(&base_endpoint)).await;
+            // Keep cleanup outside the extraction timeout so challenge failures do not leak tabs.
+            let remaining = total_timeout.saturating_sub(started.elapsed()).saturating_sub(Duration::from_millis(250));
+            let result = timeout(remaining, connect_and_extract_html(&ws_url, url, options)).await
+                .unwrap_or_else(|_| Err(TklessError::ConnectionTimeout("CDP page extraction timed out".into())));
 
             // Close tab after extraction to prevent tab leak
             let close_url = format!("{}/json/close/{}", base_endpoint, target_id);
@@ -344,7 +363,6 @@ async fn connect_and_extract_html(
     ws_url: &str,
     target_url: &str,
     options: &CdpOptions,
-    _http_base: Option<&str>,
 ) -> Result<String, TklessError> {
     debug!(ws_url = %ws_url, "连接 CDP WebSocket 调试会话");
 
@@ -393,6 +411,17 @@ async fn connect_and_extract_html(
             message_id,
             "Network.setUserAgentOverride",
             json!({ "userAgent": ua }),
+        )
+        .await?;
+        message_id += 1;
+    }
+
+    if let Some(language) = &options.accept_language {
+        send_cdp_cmd(
+            &mut ws_stream,
+            message_id,
+            "Network.setExtraHTTPHeaders",
+            json!({"headers": {"Accept-Language": language}}),
         )
         .await?;
         message_id += 1;

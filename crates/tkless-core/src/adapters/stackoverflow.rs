@@ -194,9 +194,9 @@ impl StackoverflowAdapter {
             }));
 
             let badge = if is_accepted {
-                "✅ **采纳答案 (Accepted Answer)**"
+                "**采纳答案 (Accepted Answer)**"
             } else {
-                "💬 **社区回答**"
+                "**社区回答**"
             };
 
             answers_output.push(format!(
@@ -246,9 +246,9 @@ impl StackoverflowAdapter {
                 if !tags.is_empty() {
                     md.push_str(&format!(" | **标签**: `{}`", tags.join("`, `")));
                 }
-                md.push_str("\n\n## ❓ 问题描述\n\n");
+                md.push_str("\n\n## 问题描述\n\n");
                 md.push_str(q_body_md.trim());
-                md.push_str("\n\n---\n\n## 💡 解决方案与回答 (Answers)\n\n");
+                md.push_str("\n\n---\n\n## 解决方案与回答 (Answers)\n\n");
 
                 if answers_output.is_empty() {
                     md.push_str("> *[当前暂无社区回答]*\n\n");
@@ -266,6 +266,8 @@ impl StackoverflowAdapter {
         let token_count = count_tokens(&content, options.tokenizer);
 
         Ok(PageDocument {
+            extraction: Default::default(),
+            warnings: Vec::new(),
             url: url.to_string(),
             final_url: url.to_string(),
             status: 200,

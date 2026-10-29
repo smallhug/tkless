@@ -70,22 +70,22 @@ impl TwitterAdapter {
             .and_then(|c| c.as_u64())
             .unwrap_or(0);
 
-        let verified_badge = if verified { " ✅" } else { "" };
+        let verified_badge = if verified { " (已认证)" } else { "" };
 
         let mut out = String::new();
-        out.push_str(&format!("# 🐦 @{screen_name} ({name}{verified_badge})\n\n"));
+        out.push_str(&format!("# @{screen_name} ({name}{verified_badge})\n\n"));
         out.push_str(&format!(
-            "> 🔗 **推文链接**: [https://x.com/{screen_name}/status/{tweet_id}](https://x.com/{screen_name}/status/{tweet_id}) | 🕒 **发布时间**: `{created_at}` | ❤️ **点赞**: {likes} | 💬 **回复**: {replies}\n\n"
+            "> **推文链接**: [https://x.com/{screen_name}/status/{tweet_id}](https://x.com/{screen_name}/status/{tweet_id}) | **发布时间**: `{created_at}` | **点赞**: {likes} | **回复**: {replies}\n\n"
         ));
 
-        out.push_str("### 📄 推文正文\n\n");
+        out.push_str("### 推文正文\n\n");
         out.push_str(text);
         out.push_str("\n\n");
 
         // Media attachments (photos / videos)
         if let Some(media) = val.get("mediaDetails").and_then(|m| m.as_array()) {
             if !media.is_empty() {
-                out.push_str("### 🖼️ 附带多媒体\n\n");
+                out.push_str("### 附带多媒体\n\n");
                 for (idx, item) in media.iter().enumerate() {
                     let media_type = item.get("type").and_then(|t| t.as_str()).unwrap_or("image");
                     let media_url = item
@@ -113,8 +113,8 @@ impl TwitterAdapter {
                 .unwrap_or("user");
             let q_text = quote.get("text").and_then(|t| t.as_str()).unwrap_or("");
 
-            out.push_str("### 💬 引用推文 (Quoted Tweet)\n\n");
-            out.push_str(&format!("> 👤 **@{q_screen} ({q_name})**:\n"));
+            out.push_str("### 引用推文 (Quoted Tweet)\n\n");
+            out.push_str(&format!("> **@{q_screen} ({q_name})**:\n"));
             for line in q_text.lines() {
                 out.push_str(&format!("> {line}\n"));
             }
@@ -160,6 +160,8 @@ impl TwitterAdapter {
                     let token_count = count_tokens(&content, options.tokenizer);
 
                     return Ok(PageDocument {
+                        extraction: Default::default(),
+                        warnings: Vec::new(),
                         url: format!("https://x.com/i/status/{tweet_id}"),
                         final_url: format!("https://x.com/i/status/{tweet_id}"),
                         status: 200,
@@ -201,6 +203,8 @@ impl TwitterAdapter {
         let token_count = count_tokens(&content, options.tokenizer);
 
         Ok(PageDocument {
+            extraction: Default::default(),
+            warnings: Vec::new(),
             url: url.to_string(),
             final_url: url.to_string(),
             status: 200,

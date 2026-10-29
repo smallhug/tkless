@@ -1,6 +1,41 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+/// A stable diagnostic code with a human-readable explanation.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DiagnosticWarning {
+    pub code: String,
+    pub message: String,
+}
+
+impl DiagnosticWarning {
+    pub fn new(code: &str, message: impl Into<String>) -> Self {
+        Self {
+            code: code.into(),
+            message: message.into(),
+        }
+    }
+}
+
+/// Provenance is descriptive; it does not assert the accuracy of upstream content.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ExtractionProvenance {
+    pub method: String,
+    pub transport: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub adapter: Option<String>,
+}
+
+impl Default for ExtractionProvenance {
+    fn default() -> Self {
+        Self {
+            method: "html".into(),
+            transport: "local".into(),
+            adapter: None,
+        }
+    }
+}
+
 /// Mode of content extraction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -40,41 +75,6 @@ pub enum OnTooLarge {
     Error,
     /// Truncate body at limit, continue extraction, and mark document as truncated.
     Truncate,
-}
-
-/// Search engine provider for web searching.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum SearchEngineKind {
-    /// Concurrent multi-engine search across enabled engines with deduplication & merged ranking
-    #[default]
-    All,
-    /// Microsoft Bing search only
-    Bing,
-    /// DuckDuckGo search only
-    DuckDuckGo,
-    /// Brave Search (Web scraping or official REST API)
-    Brave,
-    /// Yandex Search (Web scraping)
-    Yandex,
-    /// SearXNG metasearch engine (REST JSON API)
-    Searxng,
-    /// Google Search (Web scraping)
-    Google,
-}
-
-impl SearchEngineKind {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            SearchEngineKind::All => "all",
-            SearchEngineKind::Bing => "bing",
-            SearchEngineKind::DuckDuckGo => "duckduckgo",
-            SearchEngineKind::Brave => "brave",
-            SearchEngineKind::Yandex => "yandex",
-            SearchEngineKind::Searxng => "searxng",
-            SearchEngineKind::Google => "google",
-        }
-    }
 }
 
 /// Tokenizer model encoding scheme.
@@ -137,7 +137,7 @@ impl Default for FetchOptions {
     fn default() -> Self {
         Self {
             user_agent: Some(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36 TkLess/0.1"
+                concat!("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36 TkLess/", env!("CARGO_PKG_VERSION"))
                     .to_string(),
             ),
             timeout_secs: 15,
@@ -210,6 +210,9 @@ pub struct ExtractionOptions {
     pub cdp_wait_ms: Option<u64>,
     /// Optional schema definition (JSON string or file path) for structured entity extraction.
     pub schema: Option<String>,
+    /// Fail rather than falling back when the requested Schema cannot extract data.
+    #[serde(default)]
+    pub schema_strict: bool,
     /// Whether to segment the output Markdown into semantic chunks for RAG and vector database ingestion.
     pub chunk: bool,
     /// Target maximum token size per chunk (default: 500).
@@ -228,12 +231,25 @@ pub struct ExtractionOptions {
     pub stats: bool,
     /// Whether to automatically detect anti-scraping challenges (Cloudflare, captcha) and fallback to CDP headless rendering.
     pub auto_cdp: bool,
-    /// Whether to block heavy static resources (images, fonts, media, analytics) in CDP rendering to accelerate page loads by 3-5x. Default: true.
+    /// Whether to block heavy static resources (images, fonts, media, analytics) in CDP rendering to reduce resource loading. Default: true.
     pub cdp_block_resources: bool,
     /// Whether to automatically scroll down dynamic / infinite scroll pages in CDP to trigger lazy loading. Default: false.
     pub cdp_auto_scroll: bool,
     /// Whether to compute and prepend local heuristic key takeaways / summary bullets.
     pub summarize: bool,
+    /// Maximum Skills.sh leaderboard API pages to fetch (1..=50).
+    #[serde(default = "default_skills_pages")]
+    pub skills_pages: usize,
+    /// Maximum distinct Skills.sh catalog results (1..=10000).
+    #[serde(default = "default_skills_limit")]
+    pub skills_limit: usize,
+}
+
+fn default_skills_pages() -> usize {
+    3
+}
+fn default_skills_limit() -> usize {
+    1000
 }
 
 impl Default for ExtractionOptions {
@@ -264,6 +280,7 @@ impl Default for ExtractionOptions {
             cdp_endpoint: None,
             cdp_wait_ms: None,
             schema: None,
+            schema_strict: false,
             chunk: false,
             chunk_size: None,
             chunk_overlap: None,
@@ -276,7 +293,27 @@ impl Default for ExtractionOptions {
             cdp_block_resources: true,
             cdp_auto_scroll: false,
             summarize: false,
+            skills_pages: default_skills_pages(),
+            skills_limit: default_skills_limit(),
         }
+    }
+}
+
+impl ExtractionOptions {
+    /// Validate shared extraction requirements before fetching or reading cached data.
+    pub fn validate(&self) -> Result<(), crate::TklessError> {
+        if !(1..=50).contains(&self.skills_pages) || !(1..=10000).contains(&self.skills_limit) {
+            return Err(crate::TklessError::InvalidArgument(
+                "skills_pages must be 1..=50 and skills_limit must be 1..=10000".into(),
+            ));
+        }
+        if self.schema_strict {
+            let schema = self.schema.as_deref().ok_or_else(|| {
+                crate::TklessError::InvalidArgument("schema_strict requires schema".into())
+            })?;
+            crate::schema::ExtractionSchema::parse(schema)?;
+        }
+        Ok(())
     }
 }
 
@@ -829,6 +866,11 @@ pub struct ExtractionMetrics {
 /// The complete structured result of fetching and extracting a webpage.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PageDocument {
+    /// Extraction path actually used, independent of requested settings.
+    pub extraction: ExtractionProvenance,
+    /// Machine-readable warnings about fallback and incomplete extraction.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<DiagnosticWarning>,
     /// Requested URL.
     pub url: String,
     /// Final resolved URL after HTTP redirects.

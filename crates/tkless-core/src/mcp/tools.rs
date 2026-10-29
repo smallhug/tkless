@@ -19,14 +19,14 @@ pub fn get_tool_catalog() -> Vec<ToolCatalogEntry> {
             name: "fetch_webpage",
             category: "content",
             summary: "Fetches webpage/article, strips noise, converts to Markdown/JSON with native adapters.",
-            keywords: &["fetch", "webpage", "article", "html", "markdown", "bilibili", "scrape"],
+            keywords: &["fetch", "webpage", "article", "html", "markdown", "bilibili", "scrape", "skills", "skills.sh"],
             is_core: true,
         },
         ToolCatalogEntry {
             name: "web_search",
             category: "search",
-            summary: "Performs full-web search via multi-engine (Bing + DuckDuckGo) without API keys, with optional fetch-content.",
-            keywords: &["search", "bing", "duckduckgo", "ddg", "query", "find", "web"],
+            summary: "Performs full-web search via Bing without API keys, with optional fetch-content.",
+            keywords: &["search", "bing", "query", "find", "web"],
             is_core: true,
         },
         // Specialized Content tools
@@ -40,8 +40,8 @@ pub fn get_tool_catalog() -> Vec<ToolCatalogEntry> {
         ToolCatalogEntry {
             name: "batch_fetch_webpages",
             category: "content",
-            summary: "Concurrent batch fetcher for multiple URLs with worker pool.",
-            keywords: &["batch", "concurrency", "parallel", "bulk", "urls"],
+            summary: "Bounded batch fetcher with streamed results, durable checkpoints and failed-item retry.",
+            keywords: &["batch", "concurrency", "parallel", "bulk", "urls", "stream", "checkpoint", "resume", "retry"],
             is_core: false,
         },
         ToolCatalogEntry {
@@ -83,8 +83,8 @@ pub fn get_tool_catalog() -> Vec<ToolCatalogEntry> {
         ToolCatalogEntry {
             name: "list_adapters",
             category: "search",
-            summary: "Lists all 16+ native platform adapters, domain patterns, and capabilities.",
-            keywords: &["adapters", "platforms", "bilibili", "zhihu", "wechat", "github"],
+            summary: "Lists all 22 native platform adapters, domain patterns, and capabilities.",
+            keywords: &["adapters", "platforms", "bilibili", "zhihu", "wechat", "github", "skills.sh"],
             is_core: false,
         },
         ToolCatalogEntry {
@@ -188,6 +188,7 @@ pub fn get_tool_catalog() -> Vec<ToolCatalogEntry> {
 pub fn get_dynamic_discovery_tools() -> Vec<McpTool> {
     vec![
         McpTool {
+            output_schema: None,
             name: "discover_tools".to_string(),
             description: "Discovers specialized TkLess tools by keyword or category (content, search, media, analysis, system, all).".to_string(),
             input_schema: serde_json::json!({
@@ -204,6 +205,7 @@ pub fn get_dynamic_discovery_tools() -> Vec<McpTool> {
             }),
         },
         McpTool {
+            output_schema: None,
             name: "get_tool_schema".to_string(),
             description: "Retrieves complete inputSchema and parameter definitions for a specific tool on demand.".to_string(),
             input_schema: serde_json::json!({
@@ -215,6 +217,7 @@ pub fn get_dynamic_discovery_tools() -> Vec<McpTool> {
             }),
         },
         McpTool {
+            output_schema: None,
             name: "execute_tool".to_string(),
             description: "Executes any specialized TkLess tool by name and arguments on demand without requiring it in tools/list.".to_string(),
             input_schema: serde_json::json!({
@@ -227,6 +230,7 @@ pub fn get_dynamic_discovery_tools() -> Vec<McpTool> {
             }),
         },
         McpTool {
+            output_schema: None,
             name: "activate_tools".to_string(),
             description: "Dynamically activates tools into active tools/list and notifies the MCP client (list_changed).".to_string(),
             input_schema: serde_json::json!({
@@ -261,8 +265,9 @@ pub fn get_initial_dynamic_tools() -> Vec<McpTool> {
 
 /// Returns the complete registry of MCP tools exposed by TkLess.
 pub fn get_available_tools() -> Vec<McpTool> {
-    vec![
+    let mut tools = vec![
         McpTool {
+            output_schema: None,
             name: "fetch_webpage".to_string(),
             description: "Fetches a webpage or video URL, strips DOM noise, and converts content to Markdown or JSON.".to_string(),
             input_schema: serde_json::json!({
@@ -293,6 +298,8 @@ pub fn get_available_tools() -> Vec<McpTool> {
                     "no_links": { "type": "boolean", "default": false, "description": "Strip hyperlinks, keeping only anchor text" },
                     "no_metadata": { "type": "boolean", "default": false, "description": "Skip metadata extraction" },
                     "no_adapter": { "type": "boolean", "default": false, "description": "Force raw HTML scraping without platform adapters" },
+                    "skills_pages": { "type": "integer", "minimum": 1, "maximum": 50, "default": 3, "description": "Skills.sh leaderboard page cap, including first page; auto-pagination is enabled by default" },
+                    "skills_limit": { "type": "integer", "minimum": 1, "maximum": 10000, "default": 1000, "description": "Skills.sh distinct result cap; upstream site search supports at most 200 results without a cursor" },
                     "timeout": { "type": "integer", "default": 15, "description": "Request timeout in seconds" },
                     "connect_timeout": { "type": "integer", "default": 10, "description": "Connection handshake timeout in seconds" },
                     "retries": { "type": "integer", "default": 0, "description": "Retry attempts with exponential backoff" },
@@ -320,9 +327,10 @@ pub fn get_available_tools() -> Vec<McpTool> {
                     "cookie_file": { "type": "string", "description": "Path to cookie file" },
                     "cdp_endpoint": { "type": "string", "description": "CDP endpoint for JS rendering (e.g. http://127.0.0.1:9222)" },
                     "cdp_wait_ms": { "type": "integer", "description": "CDP wait time in ms for DOM hydration" },
-                    "cdp_block_resources": { "type": "boolean", "default": true, "description": "Block heavy static resources (images, fonts, media, analytics) in CDP rendering to accelerate page loads by 3-5x" },
+                    "cdp_block_resources": { "type": "boolean", "default": true, "description": "Block heavy static resources (images, fonts, media, analytics) in CDP rendering to reduce resource loading" },
                     "cdp_auto_scroll": { "type": "boolean", "default": false, "description": "Automatically scroll down dynamic / infinite scroll pages in CDP to trigger lazy loading" },
                     "schema": { "type": "string", "description": "Extraction schema JSON or path for structured entity extraction" },
+                    "schema_strict": { "type": "boolean", "default": false, "description": "Fail on Schema parsing or extraction errors instead of returning fallback content; requires schema" },
                     "chunk": { "type": "boolean", "default": false, "description": "Segment Markdown into semantic chunks for RAG" },
                     "chunk_size": { "type": "integer", "default": 500, "description": "Target token size per chunk" },
                     "chunk_overlap": { "type": "integer", "default": 50, "description": "Token overlap between chunks" },
@@ -345,6 +353,7 @@ pub fn get_available_tools() -> Vec<McpTool> {
             }),
         },
         McpTool {
+            output_schema: None,
             name: "fetch_bilibili_feed".to_string(),
             description: "Fetches Bilibili recommendation, popular, or ranking video streams.".to_string(),
             input_schema: serde_json::json!({
@@ -373,6 +382,7 @@ pub fn get_available_tools() -> Vec<McpTool> {
             }),
         },
         McpTool {
+            output_schema: None,
             name: "download_media".to_string(),
             description: "Downloads Bilibili video stream or cover image to local disk.".to_string(),
             input_schema: serde_json::json!({
@@ -388,6 +398,7 @@ pub fn get_available_tools() -> Vec<McpTool> {
             }),
         },
         McpTool {
+            output_schema: None,
             name: "search_bilibili".to_string(),
             description: "Searches Bilibili videos by keyword, returning table or JSON.".to_string(),
             input_schema: serde_json::json!({
@@ -408,19 +419,16 @@ pub fn get_available_tools() -> Vec<McpTool> {
             }),
         },
         McpTool {
+            output_schema: None,
             name: "web_search".to_string(),
-            description: "Web search via multi-engine (Bing + DuckDuckGo concurrent with deduplication) with optional instant content fetching.".to_string(),
+            description: "Web search via Bing with optional instant content fetching.".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
+                "additionalProperties": false,
                 "properties": {
                     "query": { "type": "string", "description": "Search query" },
-                    "limit": { "type": "integer", "default": 5, "description": "Max results count (1-20)" },
-                    "engine": {
-                        "type": "string",
-                        "enum": ["all", "bing", "duckduckgo", "brave", "yandex", "searxng", "google"],
-                        "default": "all",
-                        "description": "Search engine provider: all (concurrent multi-engine with deduplication), bing, duckduckgo, brave, yandex, searxng, google"
-                    },
+                    "limit": { "type": "integer", "minimum": 1, "maximum": 20, "default": 10, "description": "Max Bing results count (1-20)" },
+                    "allow_private_addresses": { "type": "boolean", "description": "Explicitly allow private/local result addresses" },
                     "scope": {
                         "type": "string",
                         "enum": ["all", "wechat", "zhihu", "github", "juejin", "csdn", "medium", "substack", "arxiv", "huggingface", "wikipedia", "reddit", "stackoverflow", "v2ex", "baike"],
@@ -429,11 +437,12 @@ pub fn get_available_tools() -> Vec<McpTool> {
                     },
                     "dedup": { "type": "boolean", "default": false, "description": "Filter near-duplicates via SimHash during fetch_content" },
                     "fetch_content": { "type": "boolean", "default": false, "description": "Concurrently fetch and clean content for each search result" },
-                    "max_tokens_per_page": { "type": "integer", "default": 1500, "description": "Max tokens per webpage during fetch_content" },
-                    "cdp_endpoint": { "type": "string", "description": "CDP endpoint for JS rendering" },
+                    "max_tokens_per_page": { "type": "integer", "minimum": 1, "description": "Max tokens per webpage; requires fetch_content=true (default: 1500)" },
+                    "cdp_endpoint": { "type": "string", "description": "CDP endpoint for Bing browser search" },
                     "cdp_wait_ms": { "type": "integer", "description": "CDP wait time in ms" },
-                    "auto_cdp": { "type": "boolean", "default": false, "description": "Auto-fallback to CDP headless browser on anti-bot challenges" },
+                    "auto_cdp": { "type": "boolean", "default": false, "description": "Use CDP rendering when Bing is blocked or its HTTP connection fails" },
                     "schema": { "type": "string", "description": "Extraction schema for entity extraction during fetch" },
+                    "schema_strict": { "type": "boolean", "default": false, "description": "Fail on Schema parsing or extraction errors instead of returning fallback content; requires schema" },
                     "proxy": { "type": "string", "description": "HTTP/HTTPS proxy URL" },
                     "mobile": { "type": "boolean", "default": false, "description": "Emulate mobile browser during fetch" },
                     "format": { "type": "string", "enum": ["markdown", "json"], "default": "markdown", "description": "Output format" }
@@ -442,10 +451,12 @@ pub fn get_available_tools() -> Vec<McpTool> {
             }),
         },
         McpTool {
+            output_schema: None,
             name: "deep_research".to_string(),
-            description: "Autonomous multi-hop deep web research loop. Decomposes complex topics into sub-queries, executes concurrent multi-engine search, tracks citations, and synthesizes a publication-grade research report.".to_string(),
+            description: "Autonomous multi-hop deep web research loop. Decomposes complex topics into sub-queries, executes Bing searches, tracks citations, and compiles evidence-linked extractive findings without LLM synthesis.".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
+                "additionalProperties": false,
                 "properties": {
                     "topic": { "type": "string", "description": "Research question, thesis, or technical topic" },
                     "depth": { "type": "integer", "default": 2, "description": "Research hop depth (1: single-hop broad search, 2: two-hop citation tracking)" },
@@ -453,12 +464,6 @@ pub fn get_available_tools() -> Vec<McpTool> {
                     "max_pages": { "type": "integer", "default": 8, "description": "Maximum number of total pages to analyze (3-20)" },
                     "max_tokens_per_page": { "type": "integer", "default": 1500, "description": "Max tokens per webpage during deep analysis" },
                     "max_tokens": { "type": "integer", "default": 8000, "description": "Overall token budget for the compiled research report" },
-                    "engine": {
-                        "type": "string",
-                        "enum": ["all", "bing", "duckduckgo", "brave", "yandex", "searxng", "google"],
-                        "default": "all",
-                        "description": "Search engine backend: all (default), bing, duckduckgo, brave, yandex, searxng, google"
-                    },
                     "dedup": { "type": "boolean", "default": true, "description": "Filter near-duplicate pages via SimHash" },
                     "format": { "type": "string", "enum": ["markdown", "json"], "default": "markdown", "description": "Output presentation format" }
                 },
@@ -466,12 +471,14 @@ pub fn get_available_tools() -> Vec<McpTool> {
             }),
         },
         McpTool {
+            output_schema: None,
             name: "crawl_site".to_string(),
             description: "Recursively crawls site from seed URL into Markdown knowledge base with TOC.".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
                     "seed_url": { "type": "string", "description": "Seed webpage URL" },
+                    "concurrency": { "type": "integer", "minimum": 1, "maximum": 32, "default": 5 },
                     "max_depth": { "type": "integer", "default": 2, "description": "Max crawl depth" },
                     "max_pages": { "type": "integer", "default": 20, "description": "Max pages limit" },
                     "same_path_prefix": { "type": "boolean", "default": false, "description": "Restrict crawl to same path prefix" },
@@ -480,6 +487,7 @@ pub fn get_available_tools() -> Vec<McpTool> {
                     "cdp_endpoint": { "type": "string", "description": "CDP endpoint for JS-rendered crawling" },
                     "cdp_wait_ms": { "type": "integer", "description": "CDP wait time in ms" },
                     "schema": { "type": "string", "description": "Extraction schema for entity extraction per page" },
+                    "schema_strict": { "type": "boolean", "default": false, "description": "Fail on Schema parsing or extraction errors instead of returning fallback content; requires schema" },
                     "dedup": { "type": "boolean", "default": false, "description": "Skip near-duplicate pages via SimHash" },
                     "proxy": { "type": "string", "description": "HTTP/HTTPS proxy URL" },
                     "mobile": { "type": "boolean", "default": false, "description": "Emulate mobile browser" },
@@ -495,28 +503,38 @@ pub fn get_available_tools() -> Vec<McpTool> {
             }),
         },
         McpTool {
+            output_schema: None,
             name: "batch_fetch_webpages".to_string(),
             description: "Concurrently fetches and cleans multiple URLs in a single request.".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
-                    "urls": { "type": "array", "items": { "type": "string" }, "description": "List of webpage URLs to fetch" },
-                    "concurrency": { "type": "integer", "default": 5, "description": "Max concurrent network requests" },
+                    "urls": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 }, "description": "Ordered webpage URL list; each entry retains its zero-based index" },
+                    "concurrency": { "type": "integer", "minimum": 1, "maximum": 20, "default": 5, "description": "Max concurrent page tasks" },
+                    "per_host_concurrency": { "type": "integer", "minimum": 1, "maximum": 20, "default": 2, "description": "Max simultaneous page tasks per host" },
+                    "per_host_delay_ms": { "type": "integer", "minimum": 0, "maximum": 3600000, "default": 0, "description": "Minimum start interval per host" },
+                    "order": { "type": "string", "enum": ["input", "completion"], "default": "input", "description": "Result delivery order" },
+                    "checkpoint": { "type": "string", "minLength": 1, "description": "Local durable checkpoint path; a new job requires a new file" },
+                    "resume": { "type": "boolean", "default": false, "description": "Resume the checkpoint; requires checkpoint" },
+                    "retry_failed": { "type": "boolean", "default": false, "description": "Re-fetch failed entries on resume; successful entries are reused" },
+                    "stream_results": { "type": "boolean", "default": false, "description": "Send each item in notifications/progress params._meta['tkless/batch_item']; requires _meta.progressToken; final response is summary only" },
                     "format": { "type": "string", "enum": ["markdown", "json"], "default": "markdown", "description": "Output format" },
                     "max_tokens_per_page": { "type": "integer", "description": "Max token budget per webpage" },
                     "selector": { "type": "string", "description": "CSS selector to extract across all pages" },
                     "remove_selector": { "type": "string", "description": "CSS selector to exclude/prune across all pages" },
                     "schema": { "type": "string", "description": "Extraction schema for structured entities" },
+                    "schema_strict": { "type": "boolean", "default": false, "description": "Fail on Schema parsing or extraction errors instead of returning fallback content; requires schema" },
                     "cdp_endpoint": { "type": "string", "description": "CDP endpoint for JS rendering" },
                     "cdp_wait_ms": { "type": "integer", "description": "CDP wait time in ms" },
                     "proxy": { "type": "string", "description": "HTTP/HTTPS proxy URL" },
                     "mobile": { "type": "boolean", "default": false, "description": "Emulate mobile browser" },
-                    "delay_ms": { "type": "integer", "default": 0, "description": "Inter-request delay in ms" }
+                    "delay_ms": { "type": "integer", "minimum": 0, "maximum": 3600000, "default": 0, "description": "Global page-task start interval in ms" }
                 },
                 "required": ["urls"]
             }),
         },
         McpTool {
+            output_schema: None,
             name: "clean_html".to_string(),
             description: "Sanitizes raw HTML string into clean Markdown or structured entities.".to_string(),
             input_schema: serde_json::json!({
@@ -529,6 +547,7 @@ pub fn get_available_tools() -> Vec<McpTool> {
                     "selector": { "type": "string", "description": "CSS selector to extract" },
                     "remove_selector": { "type": "string", "description": "CSS selector to exclude/prune" },
                     "schema": { "type": "string", "description": "Extraction schema for entity extraction" },
+                    "schema_strict": { "type": "boolean", "default": false, "description": "Fail on Schema parsing or extraction errors instead of returning fallback content; requires schema" },
                     "max_tokens": { "type": "integer", "description": "Max token budget with safe truncation" },
                     "strip_images": { "type": "boolean", "default": false, "description": "Strip images from Markdown" },
                     "strip_links": { "type": "boolean", "default": false, "description": "Strip hyperlinks, keeping only anchor text" },
@@ -545,6 +564,7 @@ pub fn get_available_tools() -> Vec<McpTool> {
             }),
         },
         McpTool {
+            output_schema: None,
             name: "login_platform".to_string(),
             description: "Interactive QR code login flow to extract and save platform cookies.".to_string(),
             input_schema: serde_json::json!({
@@ -559,6 +579,7 @@ pub fn get_available_tools() -> Vec<McpTool> {
             }),
         },
         McpTool {
+            output_schema: None,
             name: "scaffold_schema".to_string(),
             description: "Detects repeating DOM containers and recommends extraction schema.".to_string(),
             input_schema: serde_json::json!({
@@ -571,6 +592,7 @@ pub fn get_available_tools() -> Vec<McpTool> {
             }),
         },
         McpTool {
+            output_schema: None,
             name: "compare_similarity".to_string(),
             description: "Computes 64-bit SimHash and Hamming distance between two texts.".to_string(),
             input_schema: serde_json::json!({
@@ -584,6 +606,7 @@ pub fn get_available_tools() -> Vec<McpTool> {
             }),
         },
         McpTool {
+            output_schema: None,
             name: "manage_cache".to_string(),
             description: "Inspects cache statistics or purges cached responses.".to_string(),
             input_schema: serde_json::json!({
@@ -600,6 +623,7 @@ pub fn get_available_tools() -> Vec<McpTool> {
             }),
         },
         McpTool {
+            output_schema: None,
             name: "fetch_feed".to_string(),
             description: "Parses RSS 2.0 or Atom 1.0 XML feed into Markdown or JSON.".to_string(),
             input_schema: serde_json::json!({
@@ -613,6 +637,7 @@ pub fn get_available_tools() -> Vec<McpTool> {
             }),
         },
         McpTool {
+            output_schema: None,
             name: "inspect_links".to_string(),
             description: "Checks reachability, status codes, and latency for a list of URLs.".to_string(),
             input_schema: serde_json::json!({
@@ -627,6 +652,7 @@ pub fn get_available_tools() -> Vec<McpTool> {
             }),
         },
         McpTool {
+            output_schema: None,
             name: "check_auth".to_string(),
             description: "Checks if platform session cookies are valid and authenticated.".to_string(),
             input_schema: serde_json::json!({
@@ -640,6 +666,7 @@ pub fn get_available_tools() -> Vec<McpTool> {
             }),
         },
         McpTool {
+            output_schema: None,
             name: "summarize_content".to_string(),
             description: "Extracts key takeaway bullet points (TL;DR) without LLM API calls.".to_string(),
             input_schema: serde_json::json!({
@@ -653,6 +680,7 @@ pub fn get_available_tools() -> Vec<McpTool> {
             }),
         },
         McpTool {
+            output_schema: None,
             name: "split_document".to_string(),
             description: "Splits Markdown document into sections by heading hierarchy.".to_string(),
             input_schema: serde_json::json!({
@@ -665,6 +693,7 @@ pub fn get_available_tools() -> Vec<McpTool> {
             }),
         },
         McpTool {
+            output_schema: None,
             name: "chunk_markdown".to_string(),
             description: "Splits Markdown into semantic heading-aware chunks for RAG vector DBs.".to_string(),
             input_schema: serde_json::json!({
@@ -680,6 +709,7 @@ pub fn get_available_tools() -> Vec<McpTool> {
             }),
         },
         McpTool {
+            output_schema: None,
             name: "diff_documents".to_string(),
             description: "Computes unified diff and change metrics between two document versions.".to_string(),
             input_schema: serde_json::json!({
@@ -693,6 +723,7 @@ pub fn get_available_tools() -> Vec<McpTool> {
             }),
         },
         McpTool {
+            output_schema: None,
             name: "take_screenshot".to_string(),
             description: "Captures high-res webpage screenshot via Chrome DevTools Protocol (CDP).".to_string(),
             input_schema: serde_json::json!({
@@ -709,6 +740,7 @@ pub fn get_available_tools() -> Vec<McpTool> {
             }),
         },
         McpTool {
+            output_schema: None,
             name: "export_tables".to_string(),
             description: "Extracts HTML tables into SQL DDL/INSERT, CSV, TSV, JSON, or Markdown.".to_string(),
             input_schema: serde_json::json!({
@@ -728,6 +760,7 @@ pub fn get_available_tools() -> Vec<McpTool> {
             }),
         },
         McpTool {
+            output_schema: None,
             name: "list_adapters".to_string(),
             description: "Lists supported platform adapters, domain patterns, and capabilities.".to_string(),
             input_schema: serde_json::json!({
@@ -737,5 +770,18 @@ pub fn get_available_tools() -> Vec<McpTool> {
                 }
             }),
         }
-    ]
+    ];
+    for tool in &mut tools {
+        tool.output_schema = super::contracts::output_schema(&tool.name);
+        if matches!(
+            tool.name.as_str(),
+            "fetch_webpage" | "clean_html" | "batch_fetch_webpages"
+        ) {
+            tool.input_schema["additionalProperties"] = serde_json::json!(false);
+        }
+        if tool.name == "web_search" {
+            tool.input_schema["properties"]["diagnostics"] = serde_json::json!({"type":"boolean","default":false,"description":"Include query and filtering diagnostics in Markdown output; JSON and structuredContent always include them"});
+        }
+    }
+    tools
 }

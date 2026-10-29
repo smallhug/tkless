@@ -136,7 +136,7 @@ pub fn export_sections_to_dir(
         "> 本文档已自动拆分为 {} 个独立章节文件。\n\n",
         sections.len()
     ));
-    index_md.push_str("## 📑 章节目录导航 (Table of Contents)\n\n");
+    index_md.push_str("## 章节目录导航 (Table of Contents)\n\n");
 
     for (idx, sec) in sections.iter().enumerate() {
         let filename = &written_files[idx];
