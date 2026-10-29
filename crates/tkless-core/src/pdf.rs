@@ -208,6 +208,12 @@ pub fn extract_pdf_to_document(
     source_url: Option<&str>,
     options: &ExtractionOptions,
 ) -> Result<PageDocument, TklessError> {
+    options.validate()?;
+    if options.schema_strict {
+        return Err(TklessError::SchemaError(
+            "CSS Schema extraction is unavailable for PDF input".into(),
+        ));
+    }
     debug!(len = bytes.len(), url = ?source_url, "Executing native PDF extraction pipeline");
 
     let pdf_meta = extract_pdf_metadata(bytes);
@@ -235,6 +241,14 @@ pub fn extract_pdf_to_document(
         options,
     );
 
+    if options.summarize
+        && matches!(
+            options.format,
+            crate::model::OutputFormat::Markdown | crate::model::OutputFormat::Json
+        )
+    {
+        content = crate::summarizer::summarize_markdown(&content, 3);
+    }
     // Apply token truncation if budget is set
     let initial_tokens = count_tokens(&content, options.tokenizer);
     let mut truncated = false;
@@ -267,7 +281,27 @@ pub fn extract_pdf_to_document(
         ..Default::default()
     };
 
+    let chunks = options.chunk.then(|| {
+        crate::chunker::chunk_markdown(
+            &content,
+            options.chunk_size.unwrap_or(500),
+            options.chunk_overlap.unwrap_or(50),
+            options.tokenizer,
+        )
+    });
     Ok(PageDocument {
+        extraction: crate::model::ExtractionProvenance {
+            method: "pdf".into(),
+            ..Default::default()
+        },
+        warnings: if options.schema.is_some() {
+            vec![crate::model::DiagnosticWarning::new(
+                "schema_unsupported",
+                "CSS Schema extraction is unavailable for PDF input",
+            )]
+        } else {
+            Vec::new()
+        },
         url: source_url.unwrap_or("").to_string(),
         final_url: source_url.unwrap_or("").to_string(),
         status: 200,
@@ -287,7 +321,7 @@ pub fn extract_pdf_to_document(
         images: None,
         tables: None,
         entity: None,
-        chunks: None,
+        chunks,
         content_hash: Some(format!("{:016x}", crate::dedup::simhash(&raw_text))),
         metrics: None,
     })

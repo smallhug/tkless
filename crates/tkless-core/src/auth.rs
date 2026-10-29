@@ -2,7 +2,7 @@ use crate::error::TklessError;
 use qrcode::render::svg;
 use qrcode::QrCode;
 use serde::Deserialize;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
@@ -475,14 +475,6 @@ pub async fn execute_login_flow(
     Ok(final_cookies)
 }
 
-/// Saves cookie header string to disk.
-pub fn save_cookies_to_file(path: &Path, cookies: &str) -> Result<(), TklessError> {
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    std::fs::write(path, cookies.trim()).map_err(TklessError::Io)
-}
-
 fn extract_set_cookie_headers(headers: &reqwest::header::HeaderMap) -> String {
     let mut pairs = Vec::new();
     for header in headers.get_all(reqwest::header::SET_COOKIE) {
@@ -518,6 +510,57 @@ fn extract_cookies_from_url(url_str: &str) -> String {
     } else {
         String::new()
     }
+}
+
+/// Verify a session using an authenticated endpoint; never infer validity from cookie names.
+pub async fn verify_web_session(
+    client: &reqwest::Client,
+    platform: &str,
+    cookie: &str,
+) -> Result<serde_json::Value, crate::error::TklessError> {
+    let url = match platform {
+        "zhihu" => "https://www.zhihu.com/api/v4/me",
+        "github" => "https://github.com/settings/profile",
+        _ => {
+            return Ok(
+                serde_json::json!({"platform":platform,"status":"configured","verified":false,"message":"No supported remote session verification endpoint"}),
+            )
+        }
+    };
+    let response = client
+        .get(url)
+        .header(reqwest::header::COOKIE, cookie)
+        .send()
+        .await?;
+    let status = response.status();
+    let login_redirect = response
+        .headers()
+        .get(reqwest::header::LOCATION)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|location| location.contains("login") || location.contains("signin"));
+    if status == reqwest::StatusCode::UNAUTHORIZED || login_redirect {
+        return Ok(
+            serde_json::json!({"platform":platform,"status":"unauthenticated","verified":true}),
+        );
+    }
+    if !status.is_success() {
+        return Ok(
+            serde_json::json!({"platform":platform,"status":"unknown","verified":false,"http_status":status.as_u16(),"message":"Remote endpoint blocked or unavailable; session validity is unknown"}),
+        );
+    }
+    let body = response.text().await?;
+    let authenticated = if platform == "zhihu" {
+        serde_json::from_str::<serde_json::Value>(&body)
+            .ok()
+            .is_some_and(|v| v.get("id").is_some() && v.get("error").is_none())
+    } else {
+        body.contains("action=\"/settings/profile\"")
+            || body.contains("action=\"/users/\"")
+            || body.contains("name=\"user[profile_name]\"")
+    };
+    Ok(
+        serde_json::json!({"platform":platform,"status":if authenticated {"authenticated"} else {"unknown"},"verified":authenticated}),
+    )
 }
 
 #[cfg(test)]

@@ -1,3 +1,4 @@
+mod batch;
 mod cli;
 mod doctor;
 mod output;
@@ -33,6 +34,23 @@ async fn main() {
 }
 
 async fn run(args: CliArgs) -> Result<()> {
+    let structured_command_format = match &args.command {
+        Some(SubCommand::Search(a)) => Some(a.format),
+        Some(SubCommand::Batch(a)) => Some(a.format),
+        Some(SubCommand::Crawl(a)) => Some(a.format),
+        Some(SubCommand::Research(a)) => Some(a.format),
+        Some(SubCommand::Diff(a)) => Some(a.format),
+        Some(SubCommand::Adapters(a)) => Some(a.format),
+        _ => None,
+    };
+    if structured_command_format
+        .is_some_and(|f| !matches!(f, CliFormat::Markdown | CliFormat::Json | CliFormat::Jsonl))
+    {
+        return Err(TklessError::InvalidArgument(
+            "This subcommand supports markdown, json, or jsonl".into(),
+        )
+        .into());
+    }
     // Configure tracing logger to output strictly to stderr
     if !args.quiet {
         let filter_str = match args.verbose {
@@ -183,7 +201,8 @@ async fn run(args: CliArgs) -> Result<()> {
         max_tokens: args.max_tokens,
         tokenizer: args.tokenizer.into(),
         include_metadata: !args.no_metadata,
-        include_json_ld: args.json_ld_only || matches!(args.format, CliFormat::Json),
+        include_json_ld: args.json_ld_only
+            || matches!(args.format, CliFormat::Json | CliFormat::Jsonl),
         strip_images: args.no_images,
         strip_links: args.no_links,
         frontmatter: args.frontmatter,
@@ -202,6 +221,7 @@ async fn run(args: CliArgs) -> Result<()> {
         cdp_endpoint: args.cdp.clone(),
         cdp_wait_ms: args.cdp_wait_ms,
         schema: args.schema.clone(),
+        schema_strict: args.schema_strict,
         chunk: args.chunk,
         chunk_size: args.chunk_size,
         chunk_overlap: args.chunk_overlap,
@@ -215,6 +235,8 @@ async fn run(args: CliArgs) -> Result<()> {
         cdp_block_resources: !args.cdp_no_block_resources,
         cdp_auto_scroll: args.cdp_auto_scroll,
         summarize: args.summarize,
+        skills_pages: args.skills_pages as usize,
+        skills_limit: args.skills_limit as usize,
     };
 
     // -------------------------------------------------------------------------
@@ -228,12 +250,12 @@ async fn run(args: CliArgs) -> Result<()> {
         let cache = DocumentCache::new(dir, args.cache_ttl);
         if cache_args.clear {
             cache.clear().context("Failed to clear cache")?;
-            println!("✅ 本地缓存已成功清空。");
+            println!("本地缓存已成功清空。");
             return Ok(());
         }
 
         let stats = cache.stats();
-        println!("# 🗄️ TkLess 本地响应缓存状态 (Cache Status)\n");
+        println!("# TkLess 本地响应缓存状态 (Cache Status)\n");
         println!(
             "- **存储路径**: {}",
             stats.cache_dir.unwrap_or_else(|| "内存缓存".to_string())
@@ -306,7 +328,7 @@ async fn run(args: CliArgs) -> Result<()> {
     if let Some(SubCommand::Adapters(ref adapters_args)) = args.command {
         let list = tkless_core::adapters::AdapterRegistry::list_adapter_metadata();
         let payload = if matches!(adapters_args.format, CliFormat::Json | CliFormat::Jsonl) {
-            serde_json::to_string_pretty(&list)?
+            output::serialize_rows(&list, adapters_args.format)?
         } else {
             tkless_core::adapters::format_adapters_markdown(&list)
         };
@@ -346,10 +368,10 @@ async fn run(args: CliArgs) -> Result<()> {
         let report = tkless_core::diff::compute_diff(&old_text, &new_text);
 
         let payload = if matches!(diff_args.format, CliFormat::Json | CliFormat::Jsonl) {
-            serde_json::to_string_pretty(&report)?
+            output::serialize_json(&report, diff_args.format)?
         } else {
             format!(
-                "# 🔄 文档版本差异与变更分析 (Content Diff Report)\n\n> 新增行数: `+{}` | 删除行数: `-{}` | 未变行数: `{}` | 变更比例: `{:.1}%`\n\n```diff\n{}\n```",
+                "# 文档版本差异与变更分析 (Content Diff Report)\n\n> 新增行数: `+{}` | 删除行数: `-{}` | 未变行数: `{}` | 变更比例: `{:.1}%`\n\n```diff\n{}\n```",
                 report.added_lines,
                 report.removed_lines,
                 report.unchanged_lines,
@@ -423,11 +445,16 @@ async fn run(args: CliArgs) -> Result<()> {
     // Execution Branch 1.5: Zero-API-Key Web Search
     // -------------------------------------------------------------------------
     if let Some(SubCommand::Search(ref search_args)) = args.command {
-        if let Some(ref url) = search_args.searxng_url {
-            std::env::set_var("SEARXNG_URL", url);
-        }
-        if let Some(ref key) = search_args.brave_api_key {
-            std::env::set_var("BRAVE_API_KEY", key);
+        let search_cdp_endpoint = tkless_core::cdp::resolve_cdp_endpoint(
+            search_args.cdp.as_deref().or(args.cdp.as_deref()),
+            false,
+        );
+        let search_cdp_wait = search_args.cdp_wait_ms.or(args.cdp_wait_ms);
+        if search_cdp_wait.is_some() && search_cdp_endpoint.is_none() {
+            return Err(TklessError::InvalidArgument(
+                "--cdp-wait requires an explicit --cdp endpoint".into(),
+            )
+            .into());
         }
         let mut search_fetch_options = fetch_options.clone();
         if search_args.proxy.is_some() {
@@ -437,182 +464,82 @@ async fn run(args: CliArgs) -> Result<()> {
         let engine = TklessEngine::with_options(search_fetch_options)
             .context("Failed to initialize TkLess engine")?;
 
-        let (effective_scope, effective_query) = if search_args.baike {
-            (Some("baike"), search_args.query.trim().to_string())
-        } else if search_args.wechat {
-            (Some("wechat"), search_args.query.trim().to_string())
-        } else if search_args.zhihu {
-            let clean = search_args.query.trim();
-            let q = if clean.starts_with("site:") {
-                clean.to_string()
-            } else {
-                format!("site:zhihu.com {clean}")
-            };
-            (Some("zhihu"), q)
-        } else if search_args.github {
-            let clean = search_args.query.trim();
-            let q = if clean.starts_with("site:") {
-                clean.to_string()
-            } else {
-                format!("site:github.com {clean}")
-            };
-            (Some("github"), q)
-        } else if search_args.juejin {
-            let clean = search_args.query.trim();
-            let q = if clean.starts_with("site:") {
-                clean.to_string()
-            } else {
-                format!("site:juejin.cn {clean}")
-            };
-            (Some("juejin"), q)
-        } else if search_args.csdn {
-            let clean = search_args.query.trim();
-            let q = if clean.starts_with("site:") {
-                clean.to_string()
-            } else {
-                format!("site:blog.csdn.net {clean}")
-            };
-            (Some("csdn"), q)
-        } else if search_args.medium {
-            let clean = search_args.query.trim();
-            let q = if clean.starts_with("site:") {
-                clean.to_string()
-            } else {
-                format!("site:medium.com {clean}")
-            };
-            (Some("medium"), q)
-        } else if search_args.substack {
-            let clean = search_args.query.trim();
-            let q = if clean.starts_with("site:") {
-                clean.to_string()
-            } else {
-                format!("site:substack.com {clean}")
-            };
-            (Some("substack"), q)
-        } else if search_args.arxiv {
-            let clean = search_args.query.trim();
-            let q = if clean.starts_with("site:") {
-                clean.to_string()
-            } else {
-                format!("site:arxiv.org {clean}")
-            };
-            (Some("arxiv"), q)
-        } else if search_args.hf {
-            let clean = search_args.query.trim();
-            let q = if clean.starts_with("site:") {
-                clean.to_string()
-            } else {
-                format!("site:huggingface.co {clean}")
-            };
-            (Some("huggingface"), q)
-        } else if search_args.wiki {
-            let clean = search_args.query.trim();
-            let q = if clean.starts_with("site:") {
-                clean.to_string()
-            } else {
-                format!("site:wikipedia.org {clean}")
-            };
-            (Some("wikipedia"), q)
-        } else if search_args.reddit {
-            let clean = search_args.query.trim();
-            let q = if clean.starts_with("site:") {
-                clean.to_string()
-            } else {
-                format!("site:reddit.com {clean}")
-            };
-            (Some("reddit"), q)
-        } else if search_args.so {
-            let clean = search_args.query.trim();
-            let q = if clean.starts_with("site:") {
-                clean.to_string()
-            } else {
-                format!("site:stackoverflow.com {clean}")
-            };
-            (Some("stackoverflow"), q)
-        } else if search_args.v2ex {
-            let clean = search_args.query.trim();
-            let q = if clean.starts_with("site:") {
-                clean.to_string()
-            } else {
-                format!("site:v2ex.com {clean}")
-            };
-            (Some("v2ex"), q)
+        let effective_scope = search_args.scope.as_ref().map(|scope| scope.as_str());
+        let effective_query = search_args.query.trim().to_string();
+
+        extraction_options.validate()?;
+
+        if !search_args.fetch_content && (args.schema.is_some() || args.schema_strict) {
+            return Err(TklessError::InvalidArgument(
+                "search --schema requires --fetch-content".into(),
+            )
+            .into());
+        }
+        let cdp_opts = search_cdp_endpoint
+            .as_ref()
+            .map(|endpoint| tkless_core::CdpOptions {
+                endpoint: endpoint.clone(),
+                wait_ms: search_cdp_wait,
+                ..Default::default()
+            });
+        let report = tkless_core::web_search(
+            &engine,
+            &effective_query,
+            &tkless_core::SearchOptions {
+                scope: effective_scope.map(str::to_owned),
+                limit: search_args.limit,
+                cdp: cdp_opts,
+                auto_cdp: args.auto_cdp,
+            },
+        )
+        .await?;
+        let diagnostic_md = if search_args.diagnostics {
+            report.markdown_diagnostics()
         } else {
-            (None, search_args.query.clone())
+            String::new()
         };
-
-        if search_args.fetch_content {
-            let mut search_opts = extraction_options.clone();
-            if search_args.cdp.is_some() {
-                search_opts.cdp_endpoint = search_args.cdp.clone();
-                search_opts.cdp_wait_ms = search_args.cdp_wait_ms;
-            }
-
-            let items = tkless_core::web_search_and_fetch_scoped(
+        let payload = if search_args.fetch_content {
+            let mut options = extraction_options.clone();
+            options.cdp_endpoint = search_cdp_endpoint;
+            options.cdp_wait_ms = search_cdp_wait;
+            let items = tkless_core::search::fetch_search_results(
                 &engine,
-                &effective_query,
-                effective_scope,
-                search_args.limit,
-                search_args.engine.into(),
-                &search_opts,
+                report.results.clone(),
+                &options,
                 search_args.max_tokens_per_page,
                 search_args.dedup,
             )
-            .await
-            .context("Failed to perform search and fetch")?;
-
-            let mut payload = match search_args.format {
-                CliFormat::Json => serde_json::to_string_pretty(&items)
-                    .context("Failed to serialize search & fetch items to JSON")?,
-                _ => tkless_core::format_search_fetch_markdown(&effective_query, &items),
-            };
-
-            // Enforce overall max-tokens limit if specified
-            if let Some(total_limit) = args.max_tokens {
-                let initial_tokens =
-                    tkless_core::token::count_tokens(&payload, args.tokenizer.into());
-                if initial_tokens > total_limit {
-                    let (truncated_payload, _) = tkless_core::token::truncate_to_tokens(
-                        &payload,
-                        total_limit,
-                        args.tokenizer.into(),
-                    );
-                    payload = truncated_payload;
+            .await?;
+            match search_args.format {
+                CliFormat::Json | CliFormat::Jsonl => {
+                    let value = serde_json::json!({"query":report.query,"effective_query":report.effective_query,
+                        "status":report.status,"results":items,"diagnostics":report.diagnostics,"warnings":report.warnings});
+                    if search_args.format == CliFormat::Jsonl {
+                        serde_json::to_string(&value)?
+                    } else {
+                        serde_json::to_string_pretty(&value)?
+                    }
+                }
+                _ => {
+                    tkless_core::format_search_fetch_markdown(&effective_query, &items)
+                        + &diagnostic_md
                 }
             }
-
-            output::write_payload(&payload, search_args.output.as_deref())?;
-            return Ok(());
-        }
-
-        let cdp_opts = search_args
-            .cdp
-            .as_ref()
-            .map(|ep| tkless_core::cdp::CdpOptions {
-                endpoint: ep.clone(),
-                wait_ms: search_args.cdp_wait_ms.or(Some(1000)),
-                timeout_ms: Some(30_000),
-                ..Default::default()
-            });
-
-        let results = tkless_core::web_search_scoped(
-            engine.client(),
-            &effective_query,
-            effective_scope,
-            search_args.limit,
-            search_args.engine.into(),
-            cdp_opts.as_ref(),
-            args.auto_cdp,
-        )
-        .await
-        .context("Failed to perform web search")?;
-
-        let payload = match search_args.format {
-            CliFormat::Json => serde_json::to_string_pretty(&results)
-                .context("Failed to serialize search results to JSON")?,
-            _ => tkless_core::format_search_results_markdown(&effective_query, &results),
+        } else {
+            match search_args.format {
+                CliFormat::Json | CliFormat::Jsonl => {
+                    if search_args.format == CliFormat::Jsonl {
+                        serde_json::to_string(&report)?
+                    } else {
+                        serde_json::to_string_pretty(&report)?
+                    }
+                }
+                _ => {
+                    tkless_core::format_search_results_markdown(&effective_query, &report.results)
+                        + &diagnostic_md
+                }
+            }
         };
-
         output::write_payload(&payload, search_args.output.as_deref())?;
         return Ok(());
     }
@@ -635,7 +562,6 @@ async fn run(args: CliArgs) -> Result<()> {
             max_pages: res_args.max_pages,
             max_tokens_per_page: res_args.max_tokens_per_page,
             max_tokens: Some(res_args.max_tokens),
-            engine: res_args.engine.into(),
             dedup: !res_args.no_dedup,
             format: res_args.format.into(),
         };
@@ -644,11 +570,7 @@ async fn run(args: CliArgs) -> Result<()> {
             .await
             .context("Failed to execute autonomous deep research")?;
 
-        let payload = match res_args.format {
-            CliFormat::Json => serde_json::to_string_pretty(&report)
-                .context("Failed to serialize deep research report to JSON")?,
-            _ => tkless_core::format_deep_research_markdown(&report),
-        };
+        let payload = tkless_core::research::render_deep_research(&report, &options)?;
 
         output::write_payload(&payload, res_args.output.as_deref())?;
         return Ok(());
@@ -696,7 +618,7 @@ async fn run(args: CliArgs) -> Result<()> {
             max_tokens: batch_args.max_tokens,
             tokenizer: args.tokenizer.into(),
             include_metadata: !args.no_metadata,
-            include_json_ld: matches!(batch_args.format, CliFormat::Json),
+            include_json_ld: matches!(batch_args.format, CliFormat::Json | CliFormat::Jsonl),
             strip_images: batch_args.no_images,
             strip_links: batch_args.no_links,
             frontmatter: args.frontmatter,
@@ -715,6 +637,7 @@ async fn run(args: CliArgs) -> Result<()> {
             cdp_endpoint: batch_args.cdp.clone().or_else(|| args.cdp.clone()),
             cdp_wait_ms: batch_args.cdp_wait_ms.or(args.cdp_wait_ms),
             schema: batch_args.schema.clone().or_else(|| args.schema.clone()),
+            schema_strict: batch_args.schema_strict || args.schema_strict,
             chunk: args.chunk,
             chunk_size: args.chunk_size,
             chunk_overlap: args.chunk_overlap,
@@ -728,71 +651,42 @@ async fn run(args: CliArgs) -> Result<()> {
             cdp_block_resources: !args.cdp_no_block_resources,
             cdp_auto_scroll: args.cdp_auto_scroll,
             summarize: args.summarize,
+            skills_pages: args.skills_pages as usize,
+            skills_limit: args.skills_limit as usize,
         });
 
-        let semaphore =
-            std::sync::Arc::new(tokio::sync::Semaphore::new(batch_args.concurrency.max(1)));
-        let total = urls.len();
-        let counter = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-
-        let mut tasks = Vec::with_capacity(total);
-
-        for url in urls {
-            let sem = semaphore.clone();
-            let eng = engine.clone();
-            let opts = batch_extraction_opts.clone();
-            let cnt = counter.clone();
-            let quiet = args.quiet;
-
-            tasks.push(tokio::spawn(async move {
-                let _permit = sem.acquire().await.unwrap();
-                let res = eng.process_url(&url, &opts).await;
-                let done = cnt.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
-                if !quiet {
-                    match &res {
-                        Ok(doc) => {
-                            let title_disp = doc.title.as_deref().unwrap_or("<no title>");
-                            eprintln!(
-                                "[TkLess Batch] [{done}/{total}] OK: \"{title_disp}\" ({url})"
-                            );
-                        }
-                        Err(e) => {
-                            eprintln!("[TkLess Batch] [{done}/{total}] FAILED ({url}): {e}");
-                        }
-                    }
-                }
-                res
-            }));
-        }
-
-        let mut docs = Vec::new();
-        for task in tasks {
-            if let Ok(Ok(doc)) = task.await {
-                docs.push(doc);
-            }
-        }
-
-        let payload = match batch_args.format {
-            CliFormat::Json => serde_json::to_string_pretty(&docs)
-                .context("Failed to serialize batch documents to JSON")?,
-            _ => docs
-                .iter()
-                .enumerate()
-                .map(|(idx, d)| {
-                    let title = d.title.as_deref().unwrap_or("Document");
-                    format!(
-                        "## [{}] {} ({})\n\n{}",
-                        idx + 1,
-                        title,
-                        d.url,
-                        d.content.trim()
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join("\n\n---\n\n"),
+        let job = tkless_core::batch::BatchOptions {
+            concurrency: batch_args.concurrency,
+            delay_ms: batch_args.delay_ms,
+            per_host_concurrency: batch_args.per_host_concurrency,
+            per_host_delay_ms: batch_args.per_host_delay_ms,
+            order: batch_args.order.into(),
+            checkpoint: batch_args.checkpoint.clone(),
+            resume: batch_args.resume,
+            retry_failed: batch_args.retry_failed,
         };
-
-        output::write_payload(&payload, batch_args.output.as_deref())?;
+        let summary = batch::execute(
+            &engine,
+            &urls,
+            &batch_extraction_opts,
+            &job,
+            batch::BatchOutput {
+                format: batch_args.format,
+                path: batch_args.output.as_deref(),
+                input: (batch_args.file != "-").then(|| Path::new(&batch_args.file)),
+                quiet: args.quiet,
+            },
+        )
+        .await?;
+        if !args.quiet {
+            eprintln!(
+                "[TkLess Batch] Completed: {} succeeded, {} failed, {} restored, {} fetched",
+                summary.succeeded, summary.failed, summary.resumed, summary.fetched
+            );
+        }
+        if summary.failed > 0 && !batch_args.allow_partial {
+            bail!("Batch completed with {} failed URL(s) out of {}. See per-URL results; use --allow-partial to accept partial failure.", summary.failed, summary.total);
+        }
         return Ok(());
     }
 
@@ -842,19 +736,22 @@ async fn run(args: CliArgs) -> Result<()> {
             _ => tkless_core::format_crawl_report_markdown(&report),
         };
 
-        if let Some(total_limit) = args.max_tokens {
-            let initial_tokens = tkless_core::token::count_tokens(&payload, args.tokenizer.into());
-            if initial_tokens > total_limit {
-                let (truncated_payload, _) = tkless_core::token::truncate_to_tokens(
-                    &payload,
-                    total_limit,
-                    args.tokenizer.into(),
-                );
-                payload = truncated_payload;
-            }
-        }
+        payload = output::apply_budget(
+            payload,
+            crawl_args.format,
+            args.max_tokens,
+            args.tokenizer.into(),
+        )?;
 
         output::write_payload(&payload, crawl_args.output.as_deref())?;
+        let failed = report
+            .pages
+            .iter()
+            .filter(|page| page.error.is_some())
+            .count();
+        if failed > 0 && !crawl_args.allow_partial {
+            bail!("Crawl completed with {failed} failed page(s). See report; use --allow-partial to accept partial failure.");
+        }
         return Ok(());
     }
 
@@ -968,6 +865,7 @@ async fn run(args: CliArgs) -> Result<()> {
             wait_ms: args.cdp_wait_ms.or(Some(1000)),
             timeout_ms: Some(30_000),
             user_agent: args.user_agent.clone(),
+            accept_language: None,
             cookie: engine.fetcher().resolve_cookie_for_url(&parsed_url),
             block_resources: Some(false),
             auto_scroll: Some(args.cdp_auto_scroll),
@@ -994,41 +892,6 @@ async fn run(args: CliArgs) -> Result<()> {
         None
     };
 
-    let cache_key = if target != "-" {
-        cache
-            .as_ref()
-            .map(|c| c.generate_key(&target, &extraction_options))
-    } else {
-        None
-    };
-
-    if let (Some(c), Some(k)) = (cache.as_ref(), cache_key.as_ref()) {
-        if let Some(cached_doc) = c.get(k) {
-            if !args.quiet && args.verbose >= 1 {
-                let title_disp = cached_doc.title.as_deref().unwrap_or("<no title>");
-                eprintln!(
-                    "[TkLess] Cache hit: \"{}\" (Tokens: {})",
-                    title_disp, cached_doc.token_count
-                );
-            }
-            if args.bili_cover {
-                if let Some(ref cover_url) = cached_doc.metadata.cover_image {
-                    output::render_cover(cover_url, args.output_file.as_deref())?;
-                    return Ok(());
-                } else {
-                    bail!("No cover image found for the specified target");
-                }
-            }
-            return output::render_output(
-                &cached_doc,
-                extraction_options.format,
-                args.json_ld_only,
-                args.output_file.as_deref(),
-                args.stream,
-            );
-        }
-    }
-
     // -------------------------------------------------------------------------
     // Execution Branch 1.8: DOM Structure Skeleton & Schema Scaffolding
     // -------------------------------------------------------------------------
@@ -1051,6 +914,7 @@ async fn run(args: CliArgs) -> Result<()> {
                 wait_ms: args.cdp_wait_ms.or(Some(1000)),
                 timeout_ms: None,
                 user_agent: args.user_agent.clone(),
+                accept_language: None,
                 cookie: engine.fetcher().resolve_cookie_for_url(&parsed_url),
                 block_resources: Some(!args.cdp_no_block_resources),
                 auto_scroll: Some(args.cdp_auto_scroll),
@@ -1116,11 +980,6 @@ async fn run(args: CliArgs) -> Result<()> {
     };
 
     let elapsed = start_time.elapsed();
-
-    // Store in cache if enabled
-    if let (Some(c), Some(k)) = (cache.as_ref(), cache_key.as_ref()) {
-        let _ = c.set(k, &doc, None);
-    }
 
     // -------------------------------------------------------------------------
     // Dedicated Media Action 3: Output Cover URL Only
@@ -1193,10 +1052,11 @@ async fn run(args: CliArgs) -> Result<()> {
     // Write final content to stdout or designated file
     output::render_output(
         &doc,
-        extraction_options.format,
+        args.format,
         args.json_ld_only,
         args.output_file.as_deref(),
         args.stream,
+        &extraction_options,
     )?;
 
     Ok(())

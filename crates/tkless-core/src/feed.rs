@@ -215,7 +215,7 @@ pub fn format_feed_markdown(channel: &FeedChannel) -> String {
     let mut out = String::new();
 
     out.push_str(&format!(
-        "# 📰 订阅源聚合 ({}): {}\n\n",
+        "# 订阅源聚合 ({}): {}\n\n",
         channel.feed_type.to_uppercase(),
         channel.title
     ));
@@ -227,7 +227,7 @@ pub fn format_feed_markdown(channel: &FeedChannel) -> String {
     }
     out.push_str(&format!("> **文章总数**: {}\n\n", channel.items.len()));
 
-    out.push_str("## 📑 文章阅读列表\n\n");
+    out.push_str("## 文章阅读列表\n\n");
     for (idx, item) in channel.items.iter().enumerate() {
         out.push_str(&format!(
             "### {}. [{}]({})\n\n",

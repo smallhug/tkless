@@ -3,6 +3,198 @@ use tkless_core::mcp::McpServer;
 use tkless_core::TklessEngine;
 
 #[tokio::test]
+async fn structured_documents_preserve_text_and_report_strict_schema_errors() {
+    let server = McpServer::new(
+        TklessEngine::new().unwrap(),
+        DocumentCache::memory_only(300),
+    );
+    let html = "<html><body><h1>Rust runtime</h1><p>Original source content.</p></body></html>";
+    let success = server
+        .dispatch_tool_execution(
+            "clean_html",
+            &serde_json::json!({"html":html,"mode":"full","format":"json"}),
+            None,
+            None,
+        )
+        .await;
+    assert!(!success.is_error);
+    let text: serde_json::Value = serde_json::from_str(&success.content[0].text).unwrap();
+    assert_eq!(success.structured_content.unwrap()["document"], text);
+
+    let soft = server
+        .dispatch_tool_execution(
+            "clean_html",
+            &serde_json::json!({"html":html,"mode":"full","schema":"{\"title\":\".missing\"}"}),
+            None,
+            None,
+        )
+        .await;
+    assert!(!soft.is_error);
+    assert_eq!(
+        soft.structured_content.unwrap()["document"]["warnings"][0]["code"],
+        "schema_fallback"
+    );
+    let strict = server.dispatch_tool_execution("execute_tool", &serde_json::json!({"tool_name":"clean_html","arguments":{"html":html,"schema":"{\"title\":\".missing\"}","schema_strict":true}}), None, None).await;
+    assert!(strict.is_error);
+    assert_eq!(
+        strict.structured_content.as_ref().unwrap()["error"]["code"],
+        "schema_error"
+    );
+    assert_eq!(
+        strict.structured_content.unwrap()["error"]["retryable"],
+        false
+    );
+}
+
+#[tokio::test]
+async fn catalog_parameter_types_and_dependencies_fail_before_network() {
+    let server = McpServer::new(
+        TklessEngine::new().unwrap(),
+        DocumentCache::memory_only(300),
+    );
+    for (name, args) in [
+        (
+            "web_search",
+            serde_json::json!({"query":"Rust","diagnostics":"true"}),
+        ),
+        (
+            "web_search",
+            serde_json::json!({"query":"Rust","diagnostics":"true"}),
+        ),
+        (
+            "web_search",
+            serde_json::json!({"query":"Rust","schema_strict":true}),
+        ),
+        (
+            "web_search",
+            serde_json::json!({"query":"Rust","fetch_content":"false"}),
+        ),
+        (
+            "batch_fetch_webpages",
+            serde_json::json!({"urls":["https://example.com",17]}),
+        ),
+        (
+            "fetch_webpage",
+            serde_json::json!({"url":"https://example.com","schema_strict":true}),
+        ),
+        (
+            "clean_html",
+            serde_json::json!({"html":"<p>x</p>","schema_strict":"false"}),
+        ),
+        (
+            "clean_html",
+            serde_json::json!({"html":"<p>x</p>","mode":"invalid"}),
+        ),
+    ] {
+        let result = server
+            .dispatch_tool_execution(name, &args, None, None)
+            .await;
+        assert!(result.is_error, "{name}: {args}");
+        assert_eq!(
+            result.structured_content.unwrap()["error"]["code"],
+            "invalid_argument"
+        );
+    }
+    for name in [
+        "fetch_webpage",
+        "clean_html",
+        "web_search",
+        "batch_fetch_webpages",
+    ] {
+        let tools = tkless_core::mcp::get_available_tools();
+        let tool = tools.iter().find(|tool| tool.name == name).unwrap();
+        assert!(tool.output_schema.is_some());
+    }
+}
+
+#[tokio::test]
+async fn only_current_protocol_is_advertised_and_outputs_never_downgrade() {
+    let server = McpServer::new(
+        TklessEngine::new().unwrap(),
+        DocumentCache::memory_only(300),
+    );
+    for version in ["2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"] {
+        let init = serde_json::json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":version}});
+        let initialized = server.handle_message(&init.to_string()).await.unwrap();
+        assert_eq!(initialized.result.unwrap()["protocolVersion"], "2025-11-25");
+        let list = server
+            .handle_message(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)
+            .await
+            .unwrap()
+            .result
+            .unwrap();
+        let tool = list["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|tool| tool["name"] == "fetch_webpage")
+            .unwrap();
+        assert!(tool.get("outputSchema").is_some());
+        let call = serde_json::json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"clean_html","arguments":{"html":"<p>Source content</p>","mode":"full"}}});
+        let result = server
+            .handle_message(&call.to_string())
+            .await
+            .unwrap()
+            .result
+            .unwrap();
+        assert!(result.get("structuredContent").is_some());
+        assert!(result["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("Source content"));
+    }
+}
+
+#[tokio::test]
+async fn bing_search_schema_and_argument_validation_stay_in_sync() {
+    let server = McpServer::new(
+        TklessEngine::new().unwrap(),
+        DocumentCache::memory_only(300),
+    );
+    let tools = tkless_core::mcp::tools::get_available_tools();
+    for name in ["web_search", "deep_research"] {
+        let tool = tools.iter().find(|tool| tool.name == name).unwrap();
+        assert!(tool.input_schema["properties"].get("engine").is_none());
+        assert_eq!(tool.input_schema["additionalProperties"], false);
+        let mut args = if name == "web_search" {
+            serde_json::json!({"query":"Rust"})
+        } else {
+            serde_json::json!({"topic":"Rust"})
+        };
+        args["engine"] = serde_json::json!("bing");
+        let request = serde_json::json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":name,"arguments":args}});
+        let response = server
+            .handle_message(&request.to_string())
+            .await
+            .unwrap()
+            .result
+            .unwrap();
+        assert_eq!(response["isError"], true);
+        assert!(response["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("Unknown argument"));
+    }
+    for args in [
+        serde_json::json!({"query":"Rust","limit":0}),
+        serde_json::json!({"query":"Rust","scope":"unknown"}),
+        serde_json::json!({"query":"Rust","dedup":true}),
+        serde_json::json!({"query":"Rust","fetch_content":true,"max_tokens_per_page":0}),
+    ] {
+        let request = serde_json::json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"web_search","arguments":args}});
+        assert_eq!(
+            server
+                .handle_message(&request.to_string())
+                .await
+                .unwrap()
+                .result
+                .unwrap()["isError"],
+            true
+        );
+    }
+}
+
+#[tokio::test]
 async fn test_mcp_protocol_lifecycle() {
     let engine = TklessEngine::new().expect("Engine should initialize");
     let cache = DocumentCache::memory_only(300);
@@ -16,7 +208,7 @@ async fn test_mcp_protocol_lifecycle() {
         .expect("Should return response");
     assert_eq!(init_res.id, serde_json::json!(1));
     let res_val = init_res.result.expect("Result should be present");
-    assert_eq!(res_val["protocolVersion"], "2024-11-05");
+    assert_eq!(res_val["protocolVersion"], "2025-11-25");
     assert_eq!(res_val["serverInfo"]["name"], "tkless");
 
     // 2. Initialized Notification (should return None)
@@ -291,8 +483,8 @@ async fn test_mcp_protocol_lifecycle() {
         "params": {
             "name": "check_auth",
             "arguments": {
-                "platform": "zhihu",
-                "cookie": "d_c0=device_sample; z_c0=session_sample"
+                "platform": "wechat",
+                "cookie": "fixture_cookie=unverified"
             }
         }
     });
@@ -302,8 +494,9 @@ async fn test_mcp_protocol_lifecycle() {
         .expect("Should return response");
     let auth_val = auth_res.result.expect("Auth result should be present");
     let auth_text = auth_val["content"][0]["text"].as_str().unwrap();
-    assert!(auth_text.contains("ZHIHU"));
-    assert!(auth_text.contains("完整登录态"));
+    let auth_status: serde_json::Value = serde_json::from_str(auth_text).unwrap();
+    assert_eq!(auth_status["status"], "configured");
+    assert_eq!(auth_status["verified"], false);
 
     // 5l. Tool Call: clean_html with summarize
     let sum_req = serde_json::json!({
@@ -333,7 +526,7 @@ async fn test_mcp_protocol_lifecycle() {
         "id": 17,
         "method": "tools/call",
         "params": {
-            "name": "summarize_text",
+            "name": "summarize_content",
             "arguments": {
                 "text": "Artificial Intelligence is transforming engineering workflows across modern development environments. TkLess provides an ultra-fast token-efficient web content extraction engine designed specifically for LLMs. By stripping aggressive advertisements and noisy navigation elements, TkLess reduces LLM context token consumption by up to 90%.",
                 "max_bullets": 2,
@@ -384,10 +577,10 @@ async fn test_mcp_protocol_lifecycle() {
         "id": 19,
         "method": "tools/call",
         "params": {
-            "name": "diff_content",
+            "name": "diff_documents",
             "arguments": {
-                "old_text": "Release 1.0\nBug fixes and stability.",
-                "new_text": "Release 2.0\nBug fixes and stability.\nNew feature added.",
+                "old_text": "Release 1.0\nBug fixes and stability.\n",
+                "new_text": "Release 2.0\nBug fixes and stability.\nNew feature added.\n",
                 "format": "json"
             }
         }
@@ -412,7 +605,7 @@ async fn test_mcp_protocol_lifecycle() {
         "id": 20,
         "method": "tools/call",
         "params": {
-            "name": "capture_screenshot",
+            "name": "take_screenshot",
             "arguments": {
                 "url": "http://169.254.169.254/latest/meta-data/"
             }
@@ -446,7 +639,7 @@ async fn test_mcp_protocol_lifecycle() {
         "id": 21,
         "method": "tools/call",
         "params": {
-            "name": "convert_table",
+            "name": "export_tables",
             "arguments": {
                 "html": table_sample,
                 "format": "sql",
@@ -466,13 +659,13 @@ async fn test_mcp_protocol_lifecycle() {
     assert!(convert_sql.contains("INSERT INTO quarterly_financials"));
     assert!(convert_sql.contains("Q1 2026"));
 
-    // 5r. Tool Call: export_tables with tkless_ prefix and CSV format
+    // 5r. Tool Call: export_tables and CSV format
     let export_req = serde_json::json!({
         "jsonrpc": "2.0",
         "id": 22,
         "method": "tools/call",
         "params": {
-            "name": "tkless_export_tables",
+            "name": "export_tables",
             "arguments": {
                 "html": "<table><thead><tr><th>Asset</th><th>Value</th></tr></thead><tbody><tr><td>Bitcoin</td><td>95000</td></tr><tr><td>Ethereum</td><td>3500</td></tr></tbody></table>",
                 "format": "csv",
@@ -491,13 +684,13 @@ async fn test_mcp_protocol_lifecycle() {
     assert!(export_csv.contains("Asset,Value"));
     assert!(export_csv.contains("Bitcoin,95000"));
 
-    // 5s. Tool Call: chunk_markdown with tkless_ prefix
+    // 5s. Tool Call: chunk_markdown
     let chunk_md_req = serde_json::json!({
         "jsonrpc": "2.0",
         "id": 23,
         "method": "tools/call",
         "params": {
-            "name": "tkless_chunk_markdown",
+            "name": "chunk_markdown",
             "arguments": {
                 "markdown": "# Overview\nTkLess is an ultra-fast token-efficient extraction engine for LLMs.\n## Architecture\nBuilt in pure Rust with strict stream separation and MCP stdio support.\n## Features\nSupports 15+ platform adapters.",
                 "chunk_size": 25,
@@ -522,13 +715,13 @@ async fn test_mcp_protocol_lifecycle() {
         .unwrap()
         .contains("TkLess"));
 
-    // 5t. Tool Call: summarize_content with tkless_ prefix
+    // 5t. Tool Call: summarize_content
     let sum_content_req = serde_json::json!({
         "jsonrpc": "2.0",
         "id": 24,
         "method": "tools/call",
         "params": {
-            "name": "tkless_summarize_content",
+            "name": "summarize_content",
             "arguments": {
                 "text": "TkLess provides an ultra-fast web content extraction engine designed specifically for LLMs. By stripping aggressive advertisements and noisy navigation elements, TkLess reduces LLM context token consumption by up to 90%. Native adapters for GitHub, Bilibili, WeChat, Zhihu, and Wikipedia are included.",
                 "max_bullets": 2,
@@ -547,13 +740,13 @@ async fn test_mcp_protocol_lifecycle() {
     let parsed_sum: serde_json::Value = serde_json::from_str(sum_content_text).unwrap();
     assert!(parsed_sum.as_array().unwrap().len() <= 2);
 
-    // 5u. Tool Call: diff_documents with tkless_ prefix (also tests backward-compatible tkless_ prefix)
+    // 5u. Tool Call: diff_documents
     let diff_doc_req = serde_json::json!({
         "jsonrpc": "2.0",
         "id": 25,
         "method": "tools/call",
         "params": {
-            "name": "tkless_diff_documents",
+            "name": "diff_documents",
             "arguments": {
                 "old_text": "Version 1.0\nInitial release",
                 "new_text": "Version 1.1\nInitial release\nAdded MCP extensions",
@@ -663,7 +856,7 @@ async fn test_mcp_progress_notification_streaming() {
     let cache = DocumentCache::memory_only(300);
     let server = McpServer::new(engine, cache);
 
-    let (notify_tx, mut notify_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (notify_tx, mut notify_rx) = tokio::sync::mpsc::channel(16);
 
     let batch_req = r#"{
         "jsonrpc": "2.0",
@@ -672,7 +865,7 @@ async fn test_mcp_progress_notification_streaming() {
         "params": {
             "name": "batch_fetch_webpages",
             "arguments": {
-                "urls": ["https://example.com/page1", "https://example.com/page2"]
+                "urls": ["http://127.0.0.1/page1", "http://127.0.0.1/page2"]
             },
             "_meta": {
                 "progressToken": "batch-job-42"
@@ -864,7 +1057,7 @@ async fn test_mcp_two_stage_dynamic_discovery() {
     assert!(exec_text.contains("Rust"));
 
     // 6. Stage 2: activate_tools dynamic activation with list_changed notification
-    let (notify_tx, mut notify_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (notify_tx, mut notify_rx) = tokio::sync::mpsc::channel(16);
     let act_req = serde_json::json!({
         "jsonrpc": "2.0",
         "id": 6,

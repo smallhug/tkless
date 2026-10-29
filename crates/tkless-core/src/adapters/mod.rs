@@ -10,6 +10,7 @@ pub mod juejin;
 pub mod medium;
 pub mod paperswithcode;
 pub mod reddit;
+pub mod skills;
 pub mod stackoverflow;
 pub mod substack;
 pub mod twitter;
@@ -32,6 +33,7 @@ pub use juejin::JuejinAdapter;
 pub use medium::MediumAdapter;
 pub use paperswithcode::PapersWithCodeAdapter;
 pub use reddit::RedditAdapter;
+pub use skills::SkillsAdapter;
 pub use stackoverflow::StackoverflowAdapter;
 pub use substack::SubstackAdapter;
 pub use twitter::TwitterAdapter;
@@ -59,6 +61,12 @@ pub trait PlatformAdapter: Send + Sync {
 
     /// Checks if this adapter should intercept the given URL.
     fn matches(&self, url: &Url) -> bool;
+
+    /// Whether generic HTML extraction can represent this resource after an adapter failure.
+    /// API-only catalog resources should return false instead of exposing a client-side shell.
+    fn allow_html_fallback(&self, _url: &Url) -> bool {
+        true
+    }
 
     /// Fetches and formats the platform content into a PageDocument.
     fn extract<'a>(
@@ -113,6 +121,7 @@ impl AdapterRegistry {
         registry.register(Arc::new(StackoverflowAdapter::new()));
         registry.register(Arc::new(V2exAdapter::new()));
         registry.register(Arc::new(BaikeAdapter::new()));
+        registry.register(Arc::new(SkillsAdapter::new()));
         registry
     }
 
@@ -129,9 +138,21 @@ impl AdapterRegistry {
             .map(|b| b.as_ref())
     }
 
-    /// Returns structured metadata for all 21 built-in platform adapters.
+    /// Returns structured metadata for all 22 built-in platform adapters.
     pub fn list_adapter_metadata() -> Vec<AdapterInfo> {
         vec![
+            AdapterInfo {
+                name: "skills",
+                title: "Skills.sh (Agent Skills)",
+                domain_patterns: &["skills.sh", "www.skills.sh"],
+                features: &[
+                    "技能详情与折叠正文",
+                    "仓库技能列表",
+                    "站内搜索",
+                    "榜单自动翻页",
+                    "结构化技能元数据",
+                ],
+            },
             AdapterInfo {
                 name: "bilibili",
                 title: "哔哩哔哩 (Bilibili)",
@@ -336,7 +357,7 @@ pub struct AdapterInfo {
 /// Formats a list of AdapterInfo into a clean GitHub Flavored Markdown table.
 pub fn format_adapters_markdown(adapters: &[AdapterInfo]) -> String {
     let mut out = String::new();
-    out.push_str("# 🧩 TkLess 原生平台适配器矩阵 (Supported Platforms)\n\n");
+    out.push_str("# TkLess 原生平台适配器矩阵 (Supported Platforms)\n\n");
     out.push_str(
         "| # | 平台名称 (Platform) | 匹配域名 (Domains) | 核心专属优化能力 (Specialized Features) |\n",
     );

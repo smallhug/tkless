@@ -122,7 +122,7 @@ pub fn summarize_markdown(markdown: &str, max_bullets: usize) -> String {
     }
 
     let mut out = String::new();
-    out.push_str("### 💡 核心要点速览 (Key Takeaways)\n\n");
+    out.push_str("### 核心要点速览 (Key Takeaways)\n\n");
     for bullet in bullets {
         out.push_str(&format!("- {}\n", bullet.trim()));
     }
@@ -257,7 +257,7 @@ mod tests {
         "#;
 
         let summarized = summarize_markdown(text, 2);
-        assert!(summarized.contains("### 💡 核心要点速览 (Key Takeaways)"));
+        assert!(summarized.contains("### 核心要点速览 (Key Takeaways)"));
         assert!(summarized.contains("- "));
         assert!(summarized.contains("所有权系统"));
     }

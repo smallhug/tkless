@@ -247,6 +247,8 @@ impl GithubAdapter {
         let token_count = count_tokens(&content, options.tokenizer);
 
         Ok(PageDocument {
+            extraction: Default::default(),
+            warnings: Vec::new(),
             url: url.to_string(),
             final_url: url.to_string(),
             status: 200,
@@ -356,6 +358,8 @@ impl GithubAdapter {
         let token_count = count_tokens(&content, options.tokenizer);
 
         Ok(PageDocument {
+            extraction: Default::default(),
+            warnings: Vec::new(),
             url: url.to_string(),
             final_url: url.to_string(),
             status: 200,
@@ -483,7 +487,7 @@ impl GithubAdapter {
             }
             _ => {
                 let mut md = String::new();
-                md.push_str(&format!("# 🌟 {title}\n\n"));
+                md.push_str(&format!("# {title}\n\n"));
                 md.push_str(&format!(
                     "> **榜单语言**: `{lang_label}` | **周期**: `{period_label}` | **上榜项目**: {}\n\n",
                     repos.len()
@@ -508,6 +512,8 @@ impl GithubAdapter {
         let token_count = count_tokens(&content, options.tokenizer);
 
         Ok(PageDocument {
+            extraction: Default::default(),
+            warnings: Vec::new(),
             url: url.to_string(),
             final_url: url.to_string(),
             status: 200,

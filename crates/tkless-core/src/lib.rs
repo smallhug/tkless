@@ -4,6 +4,7 @@
 
 pub mod adapters;
 pub mod auth;
+pub mod batch;
 pub mod cache;
 pub mod cdp;
 pub mod chunker;
@@ -23,6 +24,7 @@ pub mod pdf;
 pub mod research;
 pub mod schema;
 pub mod search;
+mod search_preflight;
 pub mod splitter;
 pub mod summarizer;
 pub mod token;
@@ -31,8 +33,8 @@ pub use adapters::{
     format_adapters_markdown, AdapterInfo, AdapterRegistry, ArxivAdapter, BaikeAdapter,
     BilibiliAdapter, CsdnAdapter, DiscourseAdapter, GithubAdapter, HackerNewsAdapter,
     HuggingfaceAdapter, JuejinAdapter, MediumAdapter, PapersWithCodeAdapter, PlatformAdapter,
-    RedditAdapter, StackoverflowAdapter, SubstackAdapter, TwitterAdapter, V2exAdapter,
-    WechatAdapter, WikipediaAdapter, XiaohongshuAdapter, YoutubeAdapter, ZhihuAdapter,
+    RedditAdapter, SkillsAdapter, StackoverflowAdapter, SubstackAdapter, TwitterAdapter,
+    V2exAdapter, WechatAdapter, WikipediaAdapter, XiaohongshuAdapter, YoutubeAdapter, ZhihuAdapter,
 };
 pub use auth::{
     execute_login_flow, generate_qrcode, poll_qrcode_status, LoginOptions, QrPollStatus,
@@ -54,10 +56,10 @@ pub use error::TklessError;
 pub use feed::{format_feed_markdown, is_feed_xml, parse_feed, FeedChannel, FeedItem};
 pub use mcp::McpServer;
 pub use model::{
-    CommentEntry, ConclusionChapter, ConclusionKeypoint, DanmakuEntry, ExtractedImage,
-    ExtractedLink, ExtractedTable, ExtractionMetrics, ExtractionMode, ExtractionOptions,
-    FetchOptions, OnTooLarge, OutputFormat, PageDocument, PageMetadata, SearchEngineKind,
-    SubtitleLine, TableExportFormat, TokenizerKind, VideoConclusion, VideoQuality,
+    CommentEntry, ConclusionChapter, ConclusionKeypoint, DanmakuEntry, DiagnosticWarning,
+    ExtractedImage, ExtractedLink, ExtractedTable, ExtractionMetrics, ExtractionMode,
+    ExtractionOptions, ExtractionProvenance, FetchOptions, OnTooLarge, OutputFormat, PageDocument,
+    PageMetadata, SubtitleLine, TableExportFormat, TokenizerKind, VideoConclusion, VideoQuality,
 };
 pub use pdf::{
     extract_pdf_metadata, extract_pdf_to_document, extract_raw_text_from_pdf, is_pdf_content,
@@ -72,15 +74,9 @@ pub use schema::{
     ScaffoldReport,
 };
 pub use search::{
-    format_search_fetch_markdown, format_search_results_markdown, merge_and_dedup_search_results,
-    merge_multi_engine_search_results, normalize_url_for_dedup, parse_brave_html, parse_brave_json,
-    parse_duckduckgo_html, parse_google_html, parse_searxng_json, parse_yandex_html, search_baike,
-    search_bing, search_bing_with_options, search_brave, search_brave_with_options,
-    search_duckduckgo, search_duckduckgo_with_options, search_google, search_google_with_options,
-    search_searxng, search_searxng_with_options, search_wechat_sogou, search_yandex,
-    search_yandex_with_options, unwrap_duckduckgo_url, unwrap_google_url, web_search,
-    web_search_and_fetch, web_search_and_fetch_scoped, web_search_scoped, web_search_with_engine,
-    web_search_with_options, SearchFetchItem, SearchResultItem,
+    fetch_search_results, format_search_fetch_markdown, format_search_results_markdown,
+    normalize_url_for_dedup, web_search, SearchFetchItem, SearchOptions, SearchPageDiagnostics,
+    SearchReport, SearchResultItem, SearchStatus,
 };
 pub use splitter::{export_sections_to_dir, split_markdown_by_headings, DocumentSection};
 pub use summarizer::{extract_key_takeaways, summarize_markdown};
@@ -149,6 +145,21 @@ impl TklessEngine {
         &self.fetcher
     }
 
+    /// Cache identity includes request configuration and the current target's resolved credentials.
+    pub fn cache_key(
+        &self,
+        cache: &DocumentCache,
+        url: &str,
+        options: &ExtractionOptions,
+    ) -> String {
+        let cookie = Url::parse(url)
+            .ok()
+            .and_then(|u| self.fetcher.resolve_cookie_for_url(&u));
+        let scope = serde_json::to_vec(&(self.fetcher.options(), cookie))
+            .expect("Fetch options are JSON serializable");
+        cache.generate_scoped_key(url, options, &scope)
+    }
+
     /// Fetches a remote URL and transforms it according to extraction options.
     /// Intercepts platform-specific URLs when a matching adapter exists unless disabled.
     pub async fn process_url(
@@ -156,6 +167,8 @@ impl TklessEngine {
         url: &str,
         options: &ExtractionOptions,
     ) -> Result<PageDocument, TklessError> {
+        options.validate()?;
+        let mut fallback_warnings = Vec::new();
         let parsed_url = Url::parse(url)?;
         let fetch_start = std::time::Instant::now();
 
@@ -186,6 +199,14 @@ impl TklessEngine {
                 );
                 match adapter.extract(&self.fetcher, &parsed_url, options).await {
                     Ok(mut doc) => {
+                        doc.extraction.method = "platform_adapter".into();
+                        doc.extraction.transport = "http".into();
+                        doc.extraction.adapter = Some(adapter.name().into());
+                        if options.summarize
+                            && matches!(options.format, OutputFormat::Markdown | OutputFormat::Json)
+                        {
+                            doc.content = summarizer::summarize_markdown(&doc.content, 3);
+                        }
                         // Enforce token counting and budget truncation
                         let initial_token_count = count_tokens(&doc.content, options.tokenizer);
                         if let Some(limit) = options.max_tokens {
@@ -315,9 +336,31 @@ impl TklessEngine {
                             }
                         }
 
+                        if let Some(limit) = options.max_tokens {
+                            let (content, truncated) =
+                                truncate_to_tokens(&doc.content, limit, options.tokenizer);
+                            doc.content = content;
+                            doc.truncated |= truncated;
+                        }
+                        doc.token_count = count_tokens(&doc.content, options.tokenizer);
+                        if options.chunk {
+                            doc.chunks = Some(chunker::chunk_markdown(
+                                &doc.content,
+                                options.chunk_size.unwrap_or(500),
+                                options.chunk_overlap.unwrap_or(50),
+                                options.tokenizer,
+                            ));
+                        }
                         return Ok(doc);
                     }
                     Err(err) => {
+                        if !adapter.allow_html_fallback(&parsed_url) {
+                            return Err(err);
+                        }
+                        fallback_warnings.push(DiagnosticWarning::new(
+                            "adapter_fallback",
+                            format!("{} adapter failed: {err}", adapter.name()),
+                        ));
                         warn!(
                             platform = adapter.name(),
                             error = %err,
@@ -330,10 +373,11 @@ impl TklessEngine {
                         );
                         if let Some(ep) = cdp_ep {
                             debug!(endpoint = %ep, "平台适配器受阻，自动无缝回退至 CDP 渲染会话");
-                            if let Ok(doc) = self
+                            if let Ok(mut doc) = self
                                 .fetch_via_cdp_and_process(url, &parsed_url, options, &ep)
                                 .await
                             {
+                                doc.warnings.extend(fallback_warnings);
                                 return Ok(doc);
                             }
                         }
@@ -351,7 +395,11 @@ impl TklessEngine {
             );
             return self
                 .fetch_via_cdp_and_process(url, &parsed_url, options, cdp_endpoint)
-                .await;
+                .await
+                .map(|mut doc| {
+                    doc.warnings.extend(fallback_warnings);
+                    doc
+                });
         }
 
         let response = match self.fetcher.fetch(url).await {
@@ -361,6 +409,10 @@ impl TklessEngine {
                     cdp::resolve_cdp_endpoint(options.cdp_endpoint.as_deref(), options.auto_cdp);
 
                 if is_challenge {
+                    fallback_warnings.push(DiagnosticWarning::new(
+                        "http_challenge",
+                        "HTTP response contains an access challenge",
+                    ));
                     if let Some(ep) = cdp_ep {
                         debug!(
                             url = url,
@@ -369,12 +421,17 @@ impl TklessEngine {
                         );
                         return self
                             .fetch_via_cdp_and_process(url, &parsed_url, options, &ep)
-                            .await;
+                            .await
+                            .map(|mut doc| {
+                                doc.warnings.extend(fallback_warnings);
+                                doc
+                            });
                     }
                 }
                 resp
             }
             Err(err) => {
+                fallback_warnings.push(DiagnosticWarning::new("http_fallback", err.to_string()));
                 let cdp_ep =
                     cdp::resolve_cdp_endpoint(options.cdp_endpoint.as_deref(), options.auto_cdp);
                 // If CDP endpoint is configured or auto_cdp is enabled, seamlessly fall back to CDP on HTTP client/server errors
@@ -387,12 +444,32 @@ impl TklessEngine {
                     );
                     return self
                         .fetch_via_cdp_and_process(url, &parsed_url, options, &ep)
-                        .await;
+                        .await
+                        .map(|mut doc| {
+                            doc.warnings.extend(fallback_warnings);
+                            doc
+                        });
                 }
                 return Err(err);
             }
         };
 
+        self.process_response(response, options, fetch_start)
+            .await
+            .map(|mut doc| {
+                doc.warnings.extend(fallback_warnings);
+                doc
+            })
+    }
+
+    async fn process_response(
+        &self,
+        response: fetcher::FetchedResponse,
+        options: &ExtractionOptions,
+        fetch_start: Instant,
+    ) -> Result<PageDocument, TklessError> {
+        let source_url = response.requested_url.clone();
+        let url = source_url.as_str();
         // Native PDF extraction fast-path when server returns PDF bytes
         if let Some(ref bytes) = response.raw_bytes {
             if pdf::is_pdf_content(bytes) {
@@ -402,6 +479,7 @@ impl TklessEngine {
                 );
                 let mut doc =
                     pdf::extract_pdf_to_document(bytes, Some(&response.final_url), options)?;
+                doc.extraction.transport = "http".into();
                 doc.url = response.requested_url;
                 doc.final_url = response.final_url;
                 doc.status = response.status;
@@ -411,6 +489,7 @@ impl TklessEngine {
         }
 
         let mut doc = self.process_html(&response.html, Some(&response.final_url), options)?;
+        doc.extraction.transport = "http".into();
         doc.url = response.requested_url;
         doc.final_url = response.final_url;
         doc.status = response.status;
@@ -452,6 +531,14 @@ impl TklessEngine {
             wait_ms: options.cdp_wait_ms,
             timeout_ms: None,
             user_agent: self.fetcher.options().user_agent.clone(),
+            accept_language: self
+                .fetcher
+                .options()
+                .headers
+                .iter()
+                .rev()
+                .find(|(name, _)| name.eq_ignore_ascii_case("Accept-Language"))
+                .map(|(_, value)| value.clone()),
             cookie: self.fetcher.resolve_cookie_for_url(parsed_url),
             block_resources: Some(options.cdp_block_resources),
             auto_scroll: Some(options.cdp_auto_scroll),
@@ -459,6 +546,7 @@ impl TklessEngine {
         };
         let html = cdp::fetch_html_via_cdp(url, &cdp_opts).await?;
         let mut doc = self.process_html(&html, Some(url), options)?;
+        doc.extraction.transport = "cdp".into();
         doc.url = url.to_string();
         doc.final_url = url.to_string();
         doc.status = 200;
@@ -475,8 +563,28 @@ impl TklessEngine {
         options: &ExtractionOptions,
         cache: &DocumentCache,
     ) -> Result<PageDocument, TklessError> {
-        let key = cache.generate_key(url, options);
+        options.validate()?;
+        self.fetcher.validate_ssrf(&Url::parse(url)?).await?;
+        let key = self.cache_key(cache, url, options);
 
+        // Platform and browser paths must use the same extraction behavior with or without caching.
+        let specialized = (!options.no_adapter
+            && options.schema.is_none()
+            && self
+                .adapter_registry
+                .find_adapter(&Url::parse(url)?)
+                .is_some())
+            || options.cdp_endpoint.is_some()
+            || options.auto_cdp
+            || options.download_images;
+        if specialized {
+            if let Some(doc) = cache.get(&key) {
+                return Ok(doc);
+            }
+            let doc = self.process_url(url, options).await?;
+            cache.set(&key, &doc, None)?;
+            return Ok(doc);
+        }
         if let Some(entry) = cache.get_entry(&key) {
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -514,28 +622,19 @@ impl TklessEngine {
                         return Ok(entry.document);
                     }
                     Ok(resp) => {
-                        let mut doc =
-                            self.process_html(&resp.html, Some(&resp.final_url), options)?;
-                        doc.url = resp.requested_url;
-                        doc.final_url = resp.final_url;
-                        doc.status = resp.status;
-                        doc.truncated = doc.truncated || resp.truncated;
-                        let _ = cache.set_with_validators(
-                            &key,
-                            &doc,
-                            None,
-                            resp.etag,
-                            resp.last_modified,
-                        );
+                        let etag = resp.etag.clone();
+                        let last_modified = resp.last_modified.clone();
+                        let doc = self.process_response(resp, options, Instant::now()).await?;
+                        let _ = cache.set_with_validators(&key, &doc, None, etag, last_modified);
                         return Ok(doc);
                     }
                     Err(err) => {
                         warn!(
                             url = url,
                             error = %err,
-                            "Conditional revalidation failed due to network error; returning stale cached document"
+                            "Conditional revalidation failed"
                         );
-                        return Ok(entry.document);
+                        return Err(err);
                     }
                 }
             }
@@ -543,13 +642,10 @@ impl TklessEngine {
 
         // Cache miss: fetch full document and store with validators
         let resp = self.fetcher.fetch(url).await?;
-        let mut doc = self.process_html(&resp.html, Some(&resp.final_url), options)?;
-        doc.url = resp.requested_url;
-        doc.final_url = resp.final_url;
-        doc.status = resp.status;
-        doc.truncated = doc.truncated || resp.truncated;
-
-        let _ = cache.set_with_validators(&key, &doc, None, resp.etag, resp.last_modified);
+        let etag = resp.etag.clone();
+        let last_modified = resp.last_modified.clone();
+        let doc = self.process_response(resp, options, Instant::now()).await?;
+        let _ = cache.set_with_validators(&key, &doc, None, etag, last_modified);
         Ok(doc)
     }
 
@@ -560,6 +656,7 @@ impl TklessEngine {
         base_url: Option<&str>,
         options: &ExtractionOptions,
     ) -> Result<PageDocument, TklessError> {
+        options.validate()?;
         // Check if raw content is a PDF document
         if pdf::is_pdf_content(raw_html.as_bytes()) {
             debug!("Directing raw input to native PDF extraction pipeline");
@@ -585,7 +682,7 @@ impl TklessEngine {
         };
 
         // 0.5 Auto-detection or explicit request for RSS 2.0 / Atom 1.0 Syndication Feeds
-        if options.feed || feed::is_feed_xml(effective_html) {
+        if options.schema.is_none() && (options.feed || feed::is_feed_xml(effective_html)) {
             if let Ok(channel) = feed::parse_feed(effective_html) {
                 let content = match options.format {
                     OutputFormat::Json => serde_json::to_string_pretty(&channel)
@@ -601,6 +698,11 @@ impl TklessEngine {
                 };
 
                 return Ok(PageDocument {
+                    extraction: ExtractionProvenance {
+                        method: "feed".into(),
+                        ..Default::default()
+                    },
+                    warnings: Vec::new(),
                     url: base_url.unwrap_or(&channel.link).to_string(),
                     final_url: base_url.unwrap_or(&channel.link).to_string(),
                     status: 200,
@@ -667,6 +769,9 @@ impl TklessEngine {
                 Ok(schema) => match schema::extract_entities(effective_html, &schema, base_url) {
                     Ok(val) => (Some(val), None),
                     Err(err) => {
+                        if options.schema_strict {
+                            return Err(err);
+                        }
                         warn!(
                             error = %err,
                             "Schema 实体提取未匹配到有效字段，自动回退至全文正文提取"
@@ -675,6 +780,9 @@ impl TklessEngine {
                     }
                 },
                 Err(err) => {
+                    if options.schema_strict {
+                        return Err(err);
+                    }
                     warn!(error = %err, "解析 Schema 定义失败，自动回退至全文正文提取");
                     (None, Some(err.to_string()))
                 }
@@ -736,7 +844,7 @@ impl TklessEngine {
 
             if let Some(ref warn_msg) = schema_warning {
                 if options.format == OutputFormat::Markdown {
-                    formatted.push_str(&format!("\n\n> ⚠️ **Schema 提取提示**: {}\n", warn_msg));
+                    formatted.push_str(&format!("\n\n> **Schema 提取提示**: {}\n", warn_msg));
                 }
             }
             formatted
@@ -853,6 +961,14 @@ impl TklessEngine {
         };
 
         Ok(PageDocument {
+            extraction: ExtractionProvenance {
+                method: if entity.is_some() { "schema" } else { "html" }.into(),
+                ..Default::default()
+            },
+            warnings: schema_warning
+                .into_iter()
+                .map(|message| DiagnosticWarning::new("schema_fallback", message))
+                .collect(),
             url: base_url.unwrap_or("").to_string(),
             final_url: base_url.unwrap_or("").to_string(),
             status: 200,

@@ -3,15 +3,10 @@ use serde::{Deserialize, Serialize};
 /// Standard JSON-RPC 2.0 request envelope.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JsonRpcRequest {
-    #[serde(default = "default_jsonrpc_version")]
     pub jsonrpc: String,
     pub id: Option<serde_json::Value>,
     pub method: String,
     pub params: Option<serde_json::Value>,
-}
-
-fn default_jsonrpc_version() -> String {
-    "2.0".to_string()
 }
 
 /// Standard JSON-RPC 2.0 response envelope.
@@ -72,6 +67,12 @@ pub struct McpTool {
     pub description: String,
     #[serde(rename = "inputSchema")]
     pub input_schema: serde_json::Value,
+    #[serde(
+        rename = "outputSchema",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub output_schema: Option<serde_json::Value>,
 }
 
 /// Model Context Protocol text content item.
@@ -97,6 +98,12 @@ pub struct McpToolCallResult {
     pub content: Vec<McpContent>,
     #[serde(rename = "isError")]
     pub is_error: bool,
+    #[serde(
+        rename = "structuredContent",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub structured_content: Option<serde_json::Value>,
 }
 
 impl McpToolCallResult {
@@ -104,13 +111,37 @@ impl McpToolCallResult {
         Self {
             content: vec![McpContent::text(text)],
             is_error: false,
+            structured_content: None,
         }
     }
 
     pub fn error(text: impl Into<String>) -> Self {
+        let text = text.into();
         Self {
-            content: vec![McpContent::text(text)],
+            content: vec![McpContent::text(text.clone())],
             is_error: true,
+            structured_content: Some(
+                serde_json::json!({"error": {"code":"tool_error", "message":text,"retryable":false,"exit_code":1}}),
+            ),
         }
+    }
+
+    pub fn with_structured(mut self, value: impl Serialize) -> Self {
+        match serde_json::to_value(value) {
+            Ok(value) => self.structured_content = Some(value),
+            Err(error) => {
+                return Self::error(format!("Failed to serialize structured result: {error}"))
+            }
+        }
+        self
+    }
+
+    pub fn from_error(error: &crate::TklessError) -> Self {
+        Self::error(error.to_string())
+            .with_structured(serde_json::json!({"error": error.details()}))
+    }
+
+    pub fn invalid_argument(message: impl Into<String>) -> Self {
+        Self::from_error(&crate::TklessError::InvalidArgument(message.into()))
     }
 }
