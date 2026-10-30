@@ -14,6 +14,7 @@ use url::Url;
 pub struct FetchedResponse {
     pub requested_url: String,
     pub final_url: String,
+    pub content_type: Option<String>,
     pub status: u16,
     pub html: String,
     pub truncated: bool,
@@ -446,6 +447,7 @@ impl Fetcher {
         Ok(FetchedResponse {
             requested_url: target_url.to_string(),
             final_url: url.to_string(),
+            content_type,
             status: status.as_u16(),
             html,
             truncated: false,
@@ -576,6 +578,7 @@ impl Fetcher {
                 return Ok(FetchedResponse {
                     requested_url: target_url.to_string(),
                     final_url: current_url.to_string(),
+                    content_type: None,
                     status: 304,
                     html: String::new(),
                     truncated: false,
@@ -687,9 +690,16 @@ impl Fetcher {
                 .as_deref()
                 .map(|c| c.contains("pdf"))
                 .unwrap_or(false);
+        let is_office = crate::office::detect_office(
+            &raw_bytes,
+            content_type.as_deref(),
+            Some(final_url.as_str()),
+        )
+        .is_some();
+        let is_binary = is_pdf || is_office;
 
         // Decode character encoding (UTF-8, GBK, Shift-JIS, etc.)
-        let html = if is_pdf {
+        let html = if is_binary {
             String::new()
         } else if same_origin {
             std::str::from_utf8(&raw_bytes)
@@ -699,11 +709,12 @@ impl Fetcher {
             decode_html(&raw_bytes, content_type.as_deref())
         };
 
-        let raw_bytes_opt = if is_pdf { Some(raw_bytes) } else { None };
+        let raw_bytes_opt = if is_binary { Some(raw_bytes) } else { None };
 
         Ok(FetchedResponse {
             requested_url: target_url.to_string(),
             final_url,
+            content_type,
             status: status_u16,
             html,
             truncated,

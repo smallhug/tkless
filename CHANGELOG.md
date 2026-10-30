@@ -24,6 +24,7 @@
 - `crawl` 新增 `--bundle FILE`：额外输出 Markdown 知识库 ZIP（`README.md` 索引 + 逐页 `.md`）；采用不压缩实现，512 条目与 64 MiB 上限，路径不得与 `-o`/`--checkpoint` 相同。
 - MCP 新增 `jobs_start`/`jobs_status`/`jobs_cancel`/`jobs_list`：将 `crawl_site`、`batch_fetch_webpages`、`collect_pages`、`sync_collection` 转为进程内后台任务；最多 4 个活动任务，结果默认保留 3600 秒，重启即丢失。业务工具总数增至 31。
 - `crawl` 新增 `--epub FILE`：导出 EPUB 3（标题目录、逐页 XHTML、正文以转义 `<pre>` 保留 Markdown），复用不压缩 ZIP 实现，最多 508 页。
+- 新增 DOCX/PPTX 原生解析：远程响应按媒体类型或扩展名识别，内置 ZIP+XML 读取标题、段落、标题层级与逐页文本；限制条目数与解压体积，拒绝加密与 ZIP64，XLSX 明确提示转 CSV。
 
 ### Fixed
 

@@ -25,6 +25,7 @@ pub mod limits;
 pub mod markdown;
 pub mod mcp;
 pub mod model;
+pub mod office;
 pub mod pdf;
 pub mod research;
 pub mod schema;
@@ -71,6 +72,7 @@ pub use model::{
     ExtractionOptions, ExtractionProvenance, FetchOptions, OnTooLarge, OutputFormat, PageDocument,
     PageMetadata, SubtitleLine, TableExportFormat, TokenizerKind, VideoConclusion, VideoQuality,
 };
+pub use office::{detect_office, extract_office_to_document, OfficeKind};
 pub use pdf::{
     extract_pdf_metadata, extract_pdf_to_document, extract_raw_text_from_pdf, is_pdf_content,
     is_pdf_path, is_pdf_url, structure_pdf_text_to_markdown,
@@ -480,8 +482,31 @@ impl TklessEngine {
     ) -> Result<PageDocument, TklessError> {
         let source_url = response.requested_url.clone();
         let url = source_url.as_str();
-        // Native PDF extraction fast-path when server returns PDF bytes
+        // Native Office extraction fast-path when the server returns OOXML bytes
         if let Some(ref bytes) = response.raw_bytes {
+            if let Some(kind) = office::detect_office(
+                bytes,
+                response.content_type.as_deref(),
+                Some(&response.final_url),
+            ) {
+                debug!(
+                    url = url,
+                    ?kind,
+                    "Directing response to native Office extraction pipeline"
+                );
+                let mut doc = office::extract_office_to_document(
+                    bytes,
+                    kind,
+                    Some(&response.final_url),
+                    options,
+                )?;
+                doc.extraction.transport = "http".into();
+                doc.url = response.requested_url;
+                doc.final_url = response.final_url;
+                doc.status = response.status;
+                doc.truncated = doc.truncated || response.truncated;
+                return Ok(doc);
+            }
             if pdf::is_pdf_content(bytes) {
                 debug!(
                     url = url,

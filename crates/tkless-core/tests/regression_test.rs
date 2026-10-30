@@ -806,3 +806,113 @@ async fn pdf_summary_chunks_and_cached_extraction_match() {
         .unwrap();
     assert_eq!(site.hits.load(Ordering::SeqCst), 1);
 }
+
+fn crc32(data: &[u8]) -> u32 {
+    let mut crc = 0xFFFF_FFFFu32;
+    for byte in data {
+        crc ^= u32::from(*byte);
+        for _ in 0..8 {
+            let mask = (crc & 1).wrapping_neg();
+            crc = (crc >> 1) ^ (0xEDB8_8320 & mask);
+        }
+    }
+    !crc
+}
+
+fn zip_u16(buffer: &mut Vec<u8>, value: u16) {
+    buffer.extend_from_slice(&value.to_le_bytes());
+}
+
+fn zip_u32(buffer: &mut Vec<u8>, value: u32) {
+    buffer.extend_from_slice(&value.to_le_bytes());
+}
+
+/// Builds a minimal stored ZIP so tests can serve DOCX bytes without an extra dependency.
+fn zip_with(entries: &[(&str, &str)]) -> Vec<u8> {
+    let mut local = Vec::new();
+    let mut central = Vec::new();
+    for (name, data) in entries {
+        let offset = local.len() as u32;
+        let crc = crc32(data.as_bytes());
+        let size = data.len() as u32;
+        zip_u32(&mut local, 0x0403_4b50);
+        zip_u16(&mut local, 20);
+        zip_u16(&mut local, 0x0800);
+        zip_u16(&mut local, 0);
+        zip_u16(&mut local, 0);
+        zip_u16(&mut local, 0);
+        zip_u32(&mut local, crc);
+        zip_u32(&mut local, size);
+        zip_u32(&mut local, size);
+        zip_u16(&mut local, name.len() as u16);
+        zip_u16(&mut local, 0);
+        local.extend_from_slice(name.as_bytes());
+        local.extend_from_slice(data.as_bytes());
+
+        zip_u32(&mut central, 0x0201_4b50);
+        zip_u16(&mut central, 20);
+        zip_u16(&mut central, 20);
+        zip_u16(&mut central, 0x0800);
+        zip_u16(&mut central, 0);
+        zip_u16(&mut central, 0);
+        zip_u16(&mut central, 0);
+        zip_u32(&mut central, crc);
+        zip_u32(&mut central, size);
+        zip_u32(&mut central, size);
+        zip_u16(&mut central, name.len() as u16);
+        zip_u16(&mut central, 0);
+        zip_u16(&mut central, 0);
+        zip_u16(&mut central, 0);
+        zip_u16(&mut central, 0);
+        zip_u32(&mut central, 0);
+        zip_u32(&mut central, offset);
+        central.extend_from_slice(name.as_bytes());
+    }
+    let central_offset = local.len() as u32;
+    let central_size = central.len() as u32;
+    let mut archive = local;
+    archive.extend_from_slice(&central);
+    zip_u32(&mut archive, 0x0605_4b50);
+    zip_u16(&mut archive, 0);
+    zip_u16(&mut archive, 0);
+    zip_u16(&mut archive, entries.len() as u16);
+    zip_u16(&mut archive, entries.len() as u16);
+    zip_u32(&mut archive, central_size);
+    zip_u32(&mut archive, central_offset);
+    zip_u16(&mut archive, 0);
+    archive
+}
+
+#[tokio::test]
+async fn ooxml_responses_use_native_office_extraction() {
+    let docx = zip_with(&[
+        (
+            "word/document.xml",
+            "<w:document><w:body><w:p><w:r><w:t>Quarterly numbers</w:t></w:r></w:p></w:body></w:document>",
+        ),
+        (
+            "docProps/core.xml",
+            "<cp:coreProperties><dc:title>Board Deck Notes</dc:title></cp:coreProperties>",
+        ),
+    ]);
+    let site = Site::start(move |_request, _| Reply {
+        status: 200,
+        headers:
+            "Content-Type: application/vnd.openxmlformats-officedocument.wordprocessingml.document\r\n"
+                .into(),
+        body: docx.clone(),
+        delay_ms: 0,
+    })
+    .await;
+    let doc = site
+        .engine()
+        .process_url(
+            &format!("{}/report.docx", site.url),
+            &ExtractionOptions::default(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(doc.extraction.method, "office");
+    assert_eq!(doc.title.as_deref(), Some("Board Deck Notes"));
+    assert!(doc.content.contains("Quarterly numbers"), "{}", doc.content);
+}

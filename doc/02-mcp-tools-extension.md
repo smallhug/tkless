@@ -73,11 +73,11 @@ TKLESS_MCP_TOKEN=... tkless mcp --http 0.0.0.0:8787 --allow-public-bind --auth-t
 
 `format`=json 时，文本载荷位于 `result.content[].text`。`fetch_webpage`、`clean_html`、`web_search` 和 `batch_fetch_webpages` 提供 `outputSchema` 和 `structuredContent`，调用方可直接读取对象；不提供旧协议降级。搜索 JSON 文本与结构化结果使用同一报告结构，不返回旧的裸数组。
 
-文档工具结构为 `{document: PageDocument}`；搜索结构为 `{query, effective_query, status, results, diagnostics, warnings?}`；批量结构为 `{total, succeeded, failed, resumed, fetched, results}`。`diagnostics` 仅控制 Markdown 诊断展示。服务端按内置契约校验这些结构化结果。
+文档工具结构为 `{document: PageDocument}`；搜索结构为 `{query, effective_query, status, results, diagnostics, warnings?}`；批量结构为 `{total, succeeded, failed, resumed, fetched, results}`。`diagnostics` 仅控制 Markdown 诊断展示。服务端按内置契约校验这些结构化结果。远程 PDF、DOCX、PPTX 响应由原生解析器处理（`extraction.method` 分别为 `pdf`、`office`）；XLSX 返回 `office_error`，需先导出为 CSV。
 
 参数统一检查声明中的类型、枚举、必填项及数值范围，工具别名和 `execute_tool` 使用同一校验路径。四个工具及搜索/调研拒绝未声明参数。Schema 严格模式禁止回退，但不要求所有字段非空。
 
-工具错误返回 `result.isError=true`；`structuredContent.error` 包含 `code`、`message`、`retryable`、`exit_code`，限流错误另有 `retry_after_secs`。常见 code 包括 `invalid_argument`、`schema_error`、`verification_required`、`search_parse_error`、`rate_limited`。部分批量失败保留在 `results[].error` 和 `results[].error_details`，全部失败时 `isError=true` 且结构化内容仍是批量报告。单个请求失败不等同于协议连接中断。
+工具错误返回 `result.isError=true`；`structuredContent.error` 包含 `code`、`message`、`retryable`、`exit_code`，限流错误另有 `retry_after_secs`。常见 code 包括 `invalid_argument`、`schema_error`、`verification_required`、`search_parse_error`、`rate_limited`、`office_error`。部分批量失败保留在 `results[].error` 和 `results[].error_details`，全部失败时 `isError=true` 且结构化内容仍是批量报告。单个请求失败不等同于协议连接中断。
 
 ```json
 {"jsonrpc":"2.0","id":3,"result":{"content":[{"type":"text","text":"{\"query\":\"example\",\"effective_query\":\"example\",\"status\":\"no_results\",\"results\":[],\"diagnostics\":[]}"}],"structuredContent":{"query":"example","effective_query":"example","status":"no_results","results":[],"diagnostics":[]},"isError":false}}
