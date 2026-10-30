@@ -262,6 +262,7 @@ impl McpServer {
             timeout_secs: timeout,
             connect_timeout_secs: connect_timeout,
             retries,
+            max_total_retries: None,
             max_bytes: 10 * 1024 * 1024,
             on_too_large,
             headers: Vec::new(),

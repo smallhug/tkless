@@ -111,6 +111,9 @@ pub struct FetchOptions {
     pub connect_timeout_secs: u64,
     /// Number of exponential backoff retry attempts on 5xx or network errors.
     pub retries: u32,
+    /// Optional cap on total retries shared by this fetcher instance (all hosts and requests).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_total_retries: Option<u32>,
     /// Maximum allowed download size in bytes.
     pub max_bytes: usize,
     /// Behavior when response size exceeds max_bytes.
@@ -145,6 +148,7 @@ impl Default for FetchOptions {
             timeout_secs: 15,
             connect_timeout_secs: 10,
             retries: 0,
+            max_total_retries: None,
             max_bytes: 10 * 1024 * 1024, // 10MB
             on_too_large: OnTooLarge::default(),
             headers: Vec::new(),

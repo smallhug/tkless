@@ -10,7 +10,7 @@ mod upgrade;
 
 use anyhow::{bail, Context, Result};
 use clap::{CommandFactory, Parser};
-use cli::{CliArgs, CliFormat, SubCommand};
+use cli::{CliArgs, CliFormat, CliLogFormat, SubCommand};
 use progress::ConsoleProgressReporter;
 use std::io::{self, Read};
 use std::path::Path;
@@ -69,11 +69,18 @@ async fn run(args: CliArgs) -> Result<()> {
         let is_tty = io::stderr().is_terminal();
         let use_ansi = std::env::var("NO_COLOR").is_err() && is_tty;
 
-        tracing_subscriber::fmt()
+        let builder = tracing_subscriber::fmt()
             .with_writer(io::stderr)
             .with_env_filter(env_filter)
-            .with_ansi(use_ansi)
-            .init();
+            .with_ansi(use_ansi);
+        match args.log_format {
+            CliLogFormat::Json => {
+                builder.json().init();
+            }
+            CliLogFormat::Plain => {
+                builder.init();
+            }
+        }
     }
 
     // Parse custom headers
@@ -219,6 +226,7 @@ async fn run(args: CliArgs) -> Result<()> {
         timeout_secs: args.timeout_secs,
         connect_timeout_secs: args.connect_timeout,
         retries: args.retries,
+        max_total_retries: args.retry_budget,
         max_bytes: args.max_size_mb * 1024 * 1024,
         on_too_large: args.on_too_large.into(),
         headers: custom_headers,

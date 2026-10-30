@@ -177,7 +177,7 @@ tkless search "Rust async" --lang zh-CN --region cn -f json
 
 `--limit` 必须为正整数；`--dedup`、`--max-tokens-per-page` 要求 `--fetch-content`。`--since`/`--until`/`--lang`/`--region` 使用 Bing 未公开的参数，属于尽力而为：启用时报告附加 `search_filters_best_effort` 警告，请核验结果。CLI、Shell 和 MCP 均直接使用 Bing；旧的引擎选择参数及平台布尔开关已移除。搜索结果仍保留 `engine: "bing"` 来源字段。
 
-搜索前默认在后台执行 HTTPS 连接预检，成功缓存 60 秒、失败缓存 5 秒。慢连接或状态未知仍尝试搜索，限流按 `Retry-After` 冷却。使用 `-vv` 查看诊断，结构化输出包含查询与页面诊断。详细用法见 [Bing 搜索说明](doc/06-bing-search.md)。
+搜索前默认在后台执行 HTTPS 连接预检，成功缓存 60 秒、失败缓存 5 秒。慢连接或状态未知仍尝试搜索，限流按 `Retry-After` 冷却。使用 `-vv` 查看诊断，结构化输出包含查询与页面诊断。`--log-format json` 可把 stderr 日志改成每行一个 JSON 对象（便于采集）；`--retry-budget N` 为整个运行设置共享重试上限，避免失败站点耗尽重试。详细用法见 [Bing 搜索说明](doc/06-bing-search.md)。
 
 搜索保留原始查询的连字符、引号、排除词和年份，不再自动放宽查询。JSON 始终返回报告对象，JSONL 返回单行报告；`--diagnostics` 控制 Markdown 中是否展示详细诊断，包含原始与实际查询、页面状态、过滤计数及警告。未知页面结构会报解析错误，不会作为“无结果”成功返回。
 
@@ -430,6 +430,8 @@ tkless [OPTIONS] [TARGET] [COMMAND]
 | `--timeout` / `--connect-timeout` / `--retries` | 默认 15 秒 / 10 秒 / 0 次 |
 | `--max-size` / `--on-too-large` | 默认 10 MB；超限默认报错，可选择截断 |
 | `--cdp` / `--auto-cdp` / `--screenshot` | 浏览器端点 / 挑战回退 / 截图（另支持 `--pdf` 打印） |
+| `--retry-budget N` | 整个运行共享的重试次数上限；省略时不限制 |
+| `--log-format plain\|json` | stderr 日志格式；json 每行一个对象 |
 | `-p, --proxy` / `--mobile` | 代理 / 移动端 UA |
 | `--cache` / `--cache-ttl` / `--cache-dir` | 缓存开关 / TTL / 目录 |
 | `-o, --output` | 输出文件 |

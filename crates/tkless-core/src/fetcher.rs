@@ -29,6 +29,7 @@ pub struct Fetcher {
     options: FetchOptions,
     search_preflight: crate::search_preflight::HttpState,
     credentials: crate::credentials::CredentialsFile,
+    retry_budget: std::sync::Arc<std::sync::atomic::AtomicU64>,
 }
 
 impl Fetcher {
@@ -93,11 +94,13 @@ impl Fetcher {
 
         let client = client_builder.build()?;
 
+        let retry_budget = options.max_total_retries.map(u64::from).unwrap_or(u64::MAX);
         Ok(Self {
             client,
             options,
             search_preflight: Default::default(),
             credentials: crate::credentials::load(),
+            retry_budget: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(retry_budget)),
         })
     }
 
@@ -109,6 +112,30 @@ impl Fetcher {
     /// Access the underlying fetch options.
     pub fn options(&self) -> &FetchOptions {
         &self.options
+    }
+
+    /// Consumes one unit of the shared retry budget. Unlimited when unconfigured.
+    fn take_retry(&self) -> bool {
+        use std::sync::atomic::Ordering;
+        if self.options.max_total_retries.is_none() {
+            return true;
+        }
+        loop {
+            let value = self.retry_budget.load(Ordering::Relaxed);
+            if value == 0 {
+                return false;
+            }
+            if value == u64::MAX {
+                return true;
+            }
+            if self
+                .retry_budget
+                .compare_exchange(value, value - 1, Ordering::Relaxed, Ordering::Relaxed)
+                .is_ok()
+            {
+                return true;
+            }
+        }
     }
 
     pub(crate) fn search_preflight(&self) -> &crate::search_preflight::HttpState {
@@ -357,6 +384,7 @@ impl Fetcher {
                     if (status.is_server_error()
                         || status == reqwest::StatusCode::TOO_MANY_REQUESTS)
                         && attempt < self.options.retries
+                        && self.take_retry()
                     {
                         attempt += 1;
                         let delay = retry_delay(
@@ -372,7 +400,7 @@ impl Fetcher {
                     break response;
                 }
                 Ok(Err(error)) => {
-                    if attempt < self.options.retries {
+                    if attempt < self.options.retries && self.take_retry() {
                         attempt += 1;
                         let delay = retry_delay(attempt, None);
                         tokio::time::sleep(delay).await;
@@ -381,7 +409,7 @@ impl Fetcher {
                     return Err(TklessError::Network(error));
                 }
                 Err(_) => {
-                    if attempt < self.options.retries {
+                    if attempt < self.options.retries && self.take_retry() {
                         attempt += 1;
                         let delay = retry_delay(attempt, None);
                         tokio::time::sleep(delay).await;
@@ -467,6 +495,7 @@ impl Fetcher {
                         if (status.is_server_error()
                             || status == reqwest::StatusCode::TOO_MANY_REQUESTS)
                             && attempt < self.options.retries
+                            && self.take_retry()
                         {
                             attempt += 1;
                             let delay = retry_delay(
@@ -489,7 +518,7 @@ impl Fetcher {
                         break r;
                     }
                     Ok(Err(err)) => {
-                        if attempt < self.options.retries {
+                        if attempt < self.options.retries && self.take_retry() {
                             attempt += 1;
                             let delay = retry_delay(attempt, None);
                             warn!(
@@ -506,7 +535,7 @@ impl Fetcher {
                         return Err(TklessError::Network(err));
                     }
                     Err(_) => {
-                        if attempt < self.options.retries {
+                        if attempt < self.options.retries && self.take_retry() {
                             attempt += 1;
                             let delay = retry_delay(attempt, None);
                             warn!(
@@ -1784,5 +1813,28 @@ mod tests {
         assert_eq!(search_fetcher.resolve_cookie_for_url(&api_bili_url), None);
         assert_eq!(search_fetcher.resolve_cookie_for_url(&third_party), None);
         assert_eq!(search_fetcher.resolve_cookie_for_url(&attacker), None);
+    }
+
+    #[test]
+    fn retry_budget_is_shared_and_finite() {
+        let fetcher = Fetcher::new(FetchOptions {
+            retries: 3,
+            max_total_retries: Some(2),
+            ..Default::default()
+        })
+        .unwrap();
+        let clone = fetcher.clone();
+        assert!(fetcher.take_retry());
+        assert!(clone.take_retry());
+        assert!(!fetcher.take_retry());
+
+        let unlimited = Fetcher::new(FetchOptions {
+            retries: 5,
+            ..Default::default()
+        })
+        .unwrap();
+        for _ in 0..10 {
+            assert!(unlimited.take_retry());
+        }
     }
 }

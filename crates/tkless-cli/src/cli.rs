@@ -41,6 +41,13 @@ mod workflow_contract_tests {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, ValueEnum)]
+pub enum CliLogFormat {
+    #[default]
+    Plain,
+    Json,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, ValueEnum)]
 pub enum CliFormat {
     /// GitHub Flavored Markdown (default)
     #[default]
@@ -769,6 +776,25 @@ pub struct CliArgs {
         help_heading = "网络与身份认证 (Network & Auth)"
     )]
     pub retries: u32,
+
+    /// Shared cap on total retries across the run (all hosts); omitted means unlimited
+    #[arg(
+        long = "retry-budget",
+        value_name = "N",
+        value_parser = clap::value_parser!(u32).range(1..=1000),
+        help_heading = "网络与身份认证 (Network & Auth)"
+    )]
+    pub retry_budget: Option<u32>,
+
+    /// 日志输出格式：plain（默认）或 json（每行一个 JSON 对象）
+    #[arg(
+        long = "log-format",
+        value_enum,
+        default_value_t = CliLogFormat::Plain,
+        global = true,
+        help_heading = "缓存与运行诊断 (Cache & Diagnostics)"
+    )]
+    pub log_format: CliLogFormat,
 
     /// Maximum response download size in megabytes
     #[arg(
