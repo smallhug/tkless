@@ -19,6 +19,7 @@
 | **[08-skills-sh.md](./08-skills-sh.md)** | **Skills.sh** | 技能详情、折叠正文恢复、仓库列表、站内搜索、榜单自动翻页及公开接口边界。 |
 | **[09-security-hardening.md](./09-security-hardening.md)** | **安全加固** | 凭据隔离、HTML 转义、下载校验、资源上限及尚未覆盖的边界。 |
 | **[10-collection-workflows.md](./10-collection-workflows.md)** | **采集工作流** | 通用分页、列表详情、快照增量、爬虫恢复与预算、受限浏览器步骤。 |
+| **[11-wechat-public.md](./11-wechat-public.md)** | **微信公众号** | 名称发现、文章身份、关联合集、自动翻页及公开内容边界。 |
 
 ---
 

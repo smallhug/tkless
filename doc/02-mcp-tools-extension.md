@@ -1,6 +1,6 @@
 # MCP 接入与工具扩展
 
-本文对齐 2026-10-30 工作区。当前提供 26 个业务工具；`web_search` 与 `deep_research` 均仅使用 Bing。工具名称与完整参数以 [tools.rs](../crates/tkless-core/src/mcp/tools.rs) 及运行时 `tools/list` 为准。
+本文对齐 2026-10-30 工作区。当前提供 27 个业务工具；`web_search` 与 `deep_research` 均仅使用 Bing。工具名称与完整参数以 [tools.rs](../crates/tkless-core/src/mcp/tools.rs) 及运行时 `tools/list` 为准。
 
 ## 启动与客户端配置
 
@@ -10,7 +10,7 @@ tkless mcp --dynamic
 tkless mcp --profile dynamic
 ```
 
-完整模式返回 26 个业务工具；动态模式初始返回 2 个核心工具和 4 个发现元工具。环境变量 `TKLESS_MCP_DYNAMIC=1` 也可启用动态模式。MCP 本身不依赖 Node.js 或 Python；浏览器渲染和截图另需本机浏览器或远程 CDP 服务。
+完整模式返回 27 个业务工具；动态模式初始返回 2 个核心工具和 4 个发现元工具。环境变量 `TKLESS_MCP_DYNAMIC=1` 也可启用动态模式。MCP 本身不依赖 Node.js 或 Python；浏览器渲染和截图另需本机浏览器或远程 CDP 服务。
 
 支持 mcpServers 的客户端可参考：
 
@@ -104,6 +104,6 @@ tkless mcp --profile dynamic
 {"jsonrpc":"2.0","method":"notifications/progress","params":{"progressToken":"crawl-1","progress":2,"total":10,"message":"Page processed"}}
 ```
 
-26 个业务工具的分类清单见 [README](../README.md#mcp-接入)。返回文件、图片、认证或缓存信息的工具，应按各自 Schema 和响应处理；适配器存在不代表站点所有内容均可访问。
+27 个业务工具的分类清单见 [README](../README.md#mcp-接入)。返回文件、图片、认证或缓存信息的工具，应按各自 Schema 和响应处理；适配器存在不代表站点所有内容均可访问。
 
 新增工具需同步更新 `get_available_tools`、`get_tool_catalog`、`dispatch_tool_execution` 及协议测试；实现与规范见 [开发标准](04-development-standards.md)。

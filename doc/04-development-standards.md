@@ -190,7 +190,7 @@ TkLess 原生实现了基于标准 stdio 的 JSON-RPC 2.0 MCP 协议，为确保
 针对 MCP 客户端默认将所有工具定义注入 System Prompt 导致上下文过度消耗的问题，TkLess 提供了两阶段动态工具发现架构（`--dynamic` 或 `--profile dynamic` 或环境变量 `TKLESS_MCP_DYNAMIC=1`）：
 
 - **第一阶段：轻量常驻核心集 (Stage 1: Resident Core + Meta Discovery Tools)**
-  - **初次暴露工具数**：从全量 26 个业务工具大幅精简为 **6 个常驻工具**；
+  - **初次暴露工具数**：从全量 27 个业务工具大幅精简为 **6 个常驻工具**；
   - **核心基础工具 (Core Tools)**：`fetch_webpage`（多格式抓取与清洗）、`web_search`（免 Key 全网搜索）；
   - **发现元工具 (Meta-Tools)**：
     1. `discover_tools(query, category)`：按关键词或分类（`content`, `search`, `media`, `analysis`, `system`, `all`）检索专门工具目录及简述；

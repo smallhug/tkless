@@ -5,6 +5,64 @@ use super::{
 use url::Url;
 
 impl McpServer {
+    pub(super) async fn call_list_wechat_articles(&self, args: &Value) -> McpToolCallResult {
+        let result = async {
+            let source = args["source"]
+                .as_str()
+                .ok_or_else(|| TklessError::InvalidArgument("Missing source".into()))?;
+            let options = crate::wechat::WechatOptions {
+                limit: args["limit"]
+                    .as_u64()
+                    .unwrap_or(crate::wechat::DEFAULT_LIMIT as u64) as usize,
+                max_pages: args["max_pages"]
+                    .as_u64()
+                    .unwrap_or(crate::wechat::DEFAULT_PAGES as u64)
+                    as usize,
+                delay_ms: args["delay_ms"].as_u64().unwrap_or(300),
+                fetch_content: args["fetch_content"].as_bool().unwrap_or(false),
+                follow_albums: args["follow_albums"].as_bool().unwrap_or(true),
+                expected_biz: args["expected_biz"].as_str().map(str::to_owned),
+            };
+            let mut fetch = self.engine.fetcher().options().clone();
+            fetch.initial_target_host = Some("mp.weixin.qq.com".into());
+            fetch.initial_target_origin = Some("https://mp.weixin.qq.com".into());
+            let extraction = ExtractionOptions {
+                max_tokens: Some(args["max_tokens_per_article"].as_u64().unwrap_or(4000) as usize),
+                ..Default::default()
+            };
+            if args["history"].as_bool().unwrap_or(false) {
+                return crate::wechat::history::list_history(
+                    &TklessEngine::with_options(fetch)?,
+                    source,
+                    &options,
+                    &crate::wechat::history::HistoryOptions {
+                        session_file: args["session_file"].as_str().map(Into::into),
+                        checkpoint: args["checkpoint"].as_str().map(Into::into),
+                        resume: args["resume"].as_bool().unwrap_or(false),
+                    },
+                    &extraction,
+                )
+                .await;
+            }
+            if args.get("session_file").is_some()
+                || args.get("checkpoint").is_some()
+                || args["resume"].as_bool().unwrap_or(false)
+            {
+                return Err(TklessError::InvalidArgument(
+                    "Session/checkpoint parameters require history=true".into(),
+                ));
+            }
+            crate::wechat::list_articles(
+                &TklessEngine::with_options(fetch)?,
+                source,
+                &options,
+                &extraction,
+            )
+            .await
+        }
+        .await;
+        report_result(result)
+    }
     pub(super) async fn call_browse_page(&self, args: &Value) -> McpToolCallResult {
         let result = async {
             let plan: crate::browser_workflow::BrowserPlan =

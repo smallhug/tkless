@@ -146,7 +146,7 @@ tkless browse https://example.com/search --plan ./browser.json -o rendered.json
 
 ## MCP 与验证
 
-新增 `collect_pages`、`sync_collection`、`browse_page` 三个工具，完整模式共 26 个业务工具；动态模式仍初始返回 6 个工具，可通过发现接口按需启用。新工具返回 `structuredContent`，参数 JSON Schema 与核心校验共同限制配置。`crawl_site` 扩展了对应检查点与预算参数，成功返回的结构化报告包含完成状态。MCP 传输层单次工具调用仍受 300 秒超时约束，长爬取任务可通过检查点分次恢复。
+新增 `collect_pages`、`sync_collection`、`browse_page` 三个工具，完整模式共 27 个业务工具；动态模式仍初始返回 6 个工具，可通过发现接口按需启用。新工具返回 `structuredContent`，参数 JSON Schema 与核心校验共同限制配置。`crawl_site` 扩展了对应检查点与预算参数，成功返回的结构化报告包含完成状态。MCP 传输层单次工具调用仍受 300 秒超时约束，长爬取任务可通过检查点分次恢复。
 
 ```json
 {"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"collect_pages","arguments":{"config":{"url":"https://example.com/articles","schema":{"items_selector":".article-card","fields":{"title":"h2","url":"a@href"}},"pagination":{"kind":"next_link","selector":"a[rel=next]"}}}}}

@@ -19,7 +19,7 @@ TkLess 内置自动化平台识别调度器，当输入的 URL 命中受支持�
 | **X (Twitter)** | `x.com`, `twitter.com` | - 免鉴权官方 Syndication API 接口（抗封锁、零 API Key）<br>- 单推文、长推文讨论串 (Threads) 提取<br>- 高清图集/视频媒体附件与引用推文 (Quoted Tweet) 嵌套解析 |
 | **Papers With Code** | `paperswithcode.com` | - 论文 Abstract 摘要与作者列表提取<br>- arXiv 原文与直接 PDF 下载链接<br>- GitHub 开源实现与 Stars 关注度表格<br>- SOTA 基准评测结果表格结构化呈现 |
 | **知乎 (Zhihu)** | `zhihu.com`, `zhuanlan.zhihu.com` | - 问题、回答、想法、专栏文章高保真纯净抓取<br>- 防外链重定向拦截解包（还原真实目标 URL）<br>- 自动替换高清原图与 LaTeX 数学公式标准化<br>- 智能探测知乎安全验证码与反爬挑战 |
-| **微信公众号 (WeChat)** | `mp.weixin.qq.com` | - 自动解析 `data-src` 懒加载真实高清图片<br>- 提取精准作者名与发布时间戳<br>- 智能识别“该内容已被发布者删除”与反爬风控页面 |
+| **微信公众号 (WeChat)** | `mp.weixin.qq.com` | - 自动解析 `data-src` 懒加载真实高清图片<br>- 提取精准作者名与发布时间戳<br>- 智能识别“该内容已被发布者删除”与反爬风控页面<br>- 公开文章身份、名称发现、合集游标翻页与部分结果续取，见[微信公众号说明](11-wechat-public.md) |
 | **小红书 (Xiaohongshu)** | `xiaohongshu.com`, `xhslink.com` | - 提取笔记正文、话题标签与发布者信息<br>- 自动提取高清无水印多图画廊列表 |
 | **GitHub** | `github.com` | - 仓库 README 深度降噪与代码块语言标识保留<br>- Release 发版说明解析<br>- **Trending 热榜抽取**（支持每日/每周/每月及编程语言过滤） |
 | **Hugging Face** | `huggingface.co` | - 模型主页 Model Card、数据集主页与论文正文提取<br>- 提取头部 YAML Frontmatter 元数据（任务分类、下载量、许可证等） |
