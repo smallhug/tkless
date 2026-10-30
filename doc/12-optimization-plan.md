@@ -239,7 +239,9 @@ tkless watch --config ./watch.json --state ./watch-state --interval 3600
 
 验收：明文文件权限测试（Unix）、跨 origin 不发送、会话失效可区分于网络错误、`--no-cache` 下不写盘。
 
-### WS7 内容类型扩展（P1/P2）
+### WS7 内容类型扩展（P1/P2，部分实施）
+
+> 实施状态（2026-10-30）：已落地 CDP `Page.printToPDF`（`tkless ... --pdf` 与 `capture_pdf_via_cdp`），复用截图相同的导航/等待/自动滚动/请求拦截流程。OCR、Office、EPUB 与 ASR 未实现；均需外部程序或可选依赖，待后续按需求排序。
 
 **原则**：默认构建不引入重依赖与模型权重；全部通过 feature 开关，并在 `--help`/文档中明确"需要外部程序或额外特性"。
 
@@ -420,3 +422,4 @@ tkless watch --config ./watch.json --state ./watch-state --interval 3600
 | 2026-10-30 | WS4 部分实施：可选 HTTP JSON-RPC 传输、Bearer Token、可配置工具超时 |
 | 2026-10-30 | WS5 部分实施：搜索时间/语言/地区筛选与尽力而为告警 |
 | 2026-10-30 | WS6 部分实施：本地凭据库（权限、限制、请求时回退） |
+| 2026-10-30 | WS7 部分实施：CDP PDF 打印（与截图共享流程） |

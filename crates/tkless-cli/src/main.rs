@@ -622,7 +622,8 @@ async fn run(args: CliArgs) -> Result<()> {
     // -------------------------------------------------------------------------
     // Dedicated Visual Action: Capture Screenshot via CDP Headless Browser
     // -------------------------------------------------------------------------
-    if let Some(ref shot_path) = args.screenshot {
+    if let Some(ref produced_path) = args.screenshot.as_ref().or(args.pdf.as_ref()) {
+        let as_pdf = args.pdf.is_some();
         let parsed_url = url::Url::parse(&target)?;
         engine
             .fetcher()
@@ -644,13 +645,18 @@ async fn run(args: CliArgs) -> Result<()> {
             scroll_count: Some(5),
             ..Default::default()
         };
-        let img_bytes = tkless_core::capture_screenshot_via_cdp(&target, &cdp_opts, None).await?;
-        std::fs::write(shot_path, &img_bytes)?;
+        let bytes = if as_pdf {
+            tkless_core::cdp::capture_pdf_via_cdp(&target, &cdp_opts).await?
+        } else {
+            tkless_core::capture_screenshot_via_cdp(&target, &cdp_opts, None).await?
+        };
+        std::fs::write(produced_path, &bytes)?;
         if !args.quiet {
             eprintln!(
-                "[TkLess] Successfully saved visual screenshot ({}) to: {}",
-                tkless_core::downloader::format_bytes(img_bytes.len() as u64),
-                shot_path.display()
+                "[TkLess] Successfully saved visual {} ({}) to: {}",
+                if as_pdf { "PDF" } else { "screenshot" },
+                tkless_core::downloader::format_bytes(bytes.len() as u64),
+                produced_path.display()
             );
         }
         return Ok(());

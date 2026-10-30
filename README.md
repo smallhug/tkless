@@ -20,7 +20,7 @@
 - **Bing 搜索**：默认最多 10 条；支持平台定向、搜索后抓取正文和 SimHash 近似去重。
 - **批量与站点抓取**：URL 列表并发提取、站点链接遍历、Sitemap、深度与页数限制、路径范围限制。
 - **PDF**：识别远程、本地或 stdin 中的 PDF，提取文本和元数据，再用启发式规则整理为 Markdown。
-- **浏览器渲染**：通过 CDP 使用 Chrome / Edge / Chromium，支持挑战回退、自动滚动、资源拦截和截图。
+- **浏览器渲染**：通过 CDP 使用 Chrome / Edge / Chromium，支持挑战回退、自动滚动、资源拦截、截图与 PDF 打印。
 - **MCP 服务**：stdio JSON-RPC，27 个业务工具；动态模式初始暴露 2 个核心工具和 4 个发现元工具。
 - **辅助工具**：表格 SQL / CSV / TSV 导出、文本差异、RSS / Atom、REPL、自检、缓存维护、Shell 补全和自升级。
 
@@ -287,6 +287,9 @@ tkless https://example.com/feed --cdp http://127.0.0.1:9222 --cdp-auto-scroll
 tkless https://example.com/gallery --cdp http://127.0.0.1:9222 --cdp-no-block-resources
 tkless https://example.com/page --screenshot ./page.png
 
+# 将渲染后的页面打印为完整 PDF（由浏览器的 Page.printToPDF 生成）
+tkless https://example.com/report --pdf ./report.pdf
+
 # 代理、移动端 UA、超时和重试
 tkless https://example.com/page --proxy http://127.0.0.1:7890 --mobile --timeout 30 --retries 2
 ```
@@ -426,7 +429,7 @@ tkless [OPTIONS] [TARGET] [COMMAND]
 | `-H, --header` / `-u, --user-agent` | 自定义 HTTP 头 / UA |
 | `--timeout` / `--connect-timeout` / `--retries` | 默认 15 秒 / 10 秒 / 0 次 |
 | `--max-size` / `--on-too-large` | 默认 10 MB；超限默认报错，可选择截断 |
-| `--cdp` / `--auto-cdp` / `--screenshot` | 浏览器端点 / 挑战回退 / 截图 |
+| `--cdp` / `--auto-cdp` / `--screenshot` | 浏览器端点 / 挑战回退 / 截图（另支持 `--pdf` 打印） |
 | `-p, --proxy` / `--mobile` | 代理 / 移动端 UA |
 | `--cache` / `--cache-ttl` / `--cache-dir` | 缓存开关 / TTL / 目录 |
 | `-o, --output` | 输出文件 |
