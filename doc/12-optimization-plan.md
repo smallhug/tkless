@@ -267,7 +267,9 @@ tkless watch --config ./watch.json --state ./watch-state --interval 3600
 
 验收：熔断状态可在报告中观察；JSON 日志字段稳定；磁盘超限返回独立错误码而非通用 I/O。
 
-### WS9 平台覆盖与扩展机制（P2）
+### WS9 平台覆盖与扩展机制（P2，部分实施）
+
+> 实施状态（2026-10-30）：已落地配置式适配器（`TKLESS_ADAPTERS_DIR/*.json`，域/路径匹配 + 可选 Schema，无代码加载、大小与数量限制、内置优先）。编译式新站点适配器未新增，候选清单仍为微博、抖音、豆瓣、TikTok、LinkedIn、Notion 等。
 
 **方案 A（优先）**：配置式适配器 `adapters.d/*.json`，仅描述数据来源，不加载代码：
 
@@ -426,3 +428,4 @@ tkless watch --config ./watch.json --state ./watch-state --interval 3600
 | 2026-10-30 | WS6 部分实施：本地凭据库（权限、限制、请求时回退） |
 | 2026-10-30 | WS7 部分实施：CDP PDF 打印（与截图共享流程） |
 | 2026-10-30 | WS8 部分实施：共享重试预算与 JSON 结构化日志 |
+| 2026-10-30 | WS9 部分实施：声明式配置适配器（TKLESS_ADAPTERS_DIR） |

@@ -16,7 +16,7 @@
 - **网页提取**：Readability 正文清洗、CSS 定向与排除选择器，输出 Markdown、JSON、纯文本或 HTML。
 - **结构化数据**：JSON-LD、OpenGraph、Twitter Card、链接、图片、表格，以及声明式 Schema 字段提取和 DOM 脚手架。
 - **Token 与文档处理**：`o200k` / `cl100k` / 启发式计数、按边界截断、Markdown 分块、本地提取式摘要、按标题导出文件。
-- **22 个平台适配器**：优先使用平台接口或页面内置数据，提取文章、讨论、视频元数据、字幕及 Skills.sh 技能内容；Skills.sh 支持站内搜索和榜单自动翻页，见[适配说明](doc/08-skills-sh.md)。
+- **22 个平台适配器**：优先使用平台接口或页面内置数据，提取文章、讨论、视频元数据、字幕及 Skills.sh 技能内容；Skills.sh 支持站内搜索和榜单自动翻页，见[适配说明](doc/08-skills-sh.md)。另可通过 `TKLESS_ADAPTERS_DIR` 加载声明式 JSON 适配器补全长尾站点。
 - **Bing 搜索**：默认最多 10 条；支持平台定向、搜索后抓取正文和 SimHash 近似去重。
 - **批量与站点抓取**：URL 列表并发提取、站点链接遍历、Sitemap、深度与页数限制、路径范围限制。
 - **PDF**：识别远程、本地或 stdin 中的 PDF，提取文本和元数据，再用启发式规则整理为 Markdown。
