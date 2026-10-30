@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fs::{self, File};
-use std::io::{BufReader, BufWriter};
+use std::io::{BufReader, Read, Write};
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -88,7 +88,7 @@ impl DocumentCache {
         let schema_contents = options.schema.as_ref().and_then(|s| fs::read(s).ok());
         let canonical = serde_json::to_vec(&(url.trim(), options, schema_contents, scope))
             .expect("Extraction options are JSON serializable");
-        format!("v3_{:x}", Sha256::digest(canonical))
+        format!("v4_{:x}", Sha256::digest(canonical))
     }
 
     /// Retrieves a document from cache if present and unexpired.
@@ -111,13 +111,13 @@ impl DocumentCache {
             let file_path = dir.join(format!("{key}.json"));
             if file_path.is_file() {
                 if let Ok(file) = File::open(&file_path) {
-                    let reader = BufReader::new(file);
+                    let reader = BufReader::new(file.take(16 * 1024 * 1024));
                     if let Ok(entry) = serde_json::from_reader::<_, CacheEntry>(reader) {
                         if !entry.is_expired(now) {
                             debug!(key = key, path = %file_path.display(), "L2 disk cache hit");
                             // Backfill L1 memory
                             if let Ok(mut mem) = self.memory.write() {
-                                mem.insert(key.to_string(), entry.clone());
+                                insert_bounded(&mut mem, key, &entry);
                             }
                             return Some(entry.document);
                         } else {
@@ -151,6 +151,9 @@ impl DocumentCache {
         etag: Option<String>,
         last_modified: Option<String>,
     ) -> Result<(), TklessError> {
+        if doc.warnings.iter().any(|w| w.code == "skills_page_failed") {
+            return Ok(());
+        }
         let now = current_time_secs();
         let ttl = ttl_secs.unwrap_or(self.default_ttl_secs);
 
@@ -165,22 +168,14 @@ impl DocumentCache {
 
         // Write L1 memory
         if let Ok(mut mem) = self.memory.write() {
-            mem.insert(key.to_string(), entry.clone());
+            insert_bounded(&mut mem, key, &entry);
         }
 
         // Write L2 disk
         if let Some(ref dir) = self.cache_dir {
             let file_path = dir.join(format!("{key}.json"));
-            match File::create(&file_path) {
-                Ok(file) => {
-                    let writer = BufWriter::new(file);
-                    if let Err(e) = serde_json::to_writer(writer, &entry) {
-                        warn!(error = %e, "Failed to serialize document to disk cache");
-                    }
-                }
-                Err(e) => {
-                    warn!(error = %e, path = %file_path.display(), "Failed to create disk cache file");
-                }
+            if let Err(e) = write_cache_atomic(&file_path, &entry) {
+                warn!(error = %e, "Failed to publish disk cache entry");
             }
         }
 
@@ -201,11 +196,11 @@ impl DocumentCache {
             let file_path = dir.join(format!("{key}.json"));
             if file_path.is_file() {
                 if let Ok(file) = File::open(&file_path) {
-                    let reader = BufReader::new(file);
+                    let reader = BufReader::new(file.take(16 * 1024 * 1024));
                     if let Ok(entry) = serde_json::from_reader::<_, CacheEntry>(reader) {
                         // Backfill L1 memory
                         if let Ok(mut mem) = self.memory.write() {
-                            mem.insert(key.to_string(), entry.clone());
+                            insert_bounded(&mut mem, key, &entry);
                         }
                         return Some(entry);
                     }
@@ -221,22 +216,15 @@ impl DocumentCache {
         let now = current_time_secs();
         let new_ttl = ttl_secs.unwrap_or(self.default_ttl_secs);
 
-        let mut updated_entry = None;
-        if let Ok(mut mem) = self.memory.write() {
-            if let Some(entry) = mem.get_mut(key) {
-                entry.created_at = now;
-                entry.ttl_secs = new_ttl;
-                updated_entry = Some(entry.clone());
+        if let Some(mut entry) = self.get_entry(key) {
+            entry.created_at = now;
+            entry.ttl_secs = new_ttl;
+            if let Ok(mut mem) = self.memory.write() {
+                insert_bounded(&mut mem, key, &entry);
             }
-        }
-
-        if let Some(entry) = updated_entry {
             if let Some(ref dir) = self.cache_dir {
                 let file_path = dir.join(format!("{key}.json"));
-                if let Ok(file) = File::create(&file_path) {
-                    let writer = BufWriter::new(file);
-                    let _ = serde_json::to_writer(writer, &entry);
-                }
+                let _ = write_cache_atomic(&file_path, &entry);
             }
         }
     }
@@ -322,6 +310,49 @@ impl DocumentCache {
     }
 }
 
+fn insert_bounded(memory: &mut HashMap<String, CacheEntry>, key: &str, entry: &CacheEntry) {
+    // At most 64 entries of 1 MiB serialized each; larger documents remain on disk.
+    memory.remove(key);
+    if serde_json::to_vec(entry).map_or(true, |v| v.len() > 1024 * 1024) {
+        return;
+    }
+    if memory.len() >= 64 {
+        if let Some(oldest) = memory
+            .iter()
+            .min_by_key(|(_, e)| e.created_at)
+            .map(|(k, _)| k.clone())
+        {
+            memory.remove(&oldest);
+        }
+    }
+    memory.insert(key.to_owned(), entry.clone());
+}
+
+fn write_cache_atomic(path: &std::path::Path, entry: &CacheEntry) -> std::io::Result<()> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let bytes = serde_json::to_vec(entry)?;
+    if bytes.len() > 16 * 1024 * 1024 {
+        return Ok(());
+    }
+    let temp = path.with_extension(format!(
+        "tmp-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temp)?;
+    let result = (|| {
+        file.write_all(&bytes)?;
+        file.sync_all()?;
+        drop(file);
+        fs::rename(&temp, path)
+    })();
+    let _ = fs::remove_file(temp);
+    result
+}
 fn current_time_secs() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)

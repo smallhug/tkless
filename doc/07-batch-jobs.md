@@ -40,7 +40,7 @@ JSON 报告包含 `total`、`succeeded`、`failed`、`resumed`、`fetched` 和 `
 - 检查点持有操作系统独占文件锁，禁止两个进程同时恢复/写入同一任务。Unix 新文件权限为 `0600`。
 - 新任务不会覆盖既有检查点；不迁移旧格式。
 
-当前恢复针对固定 URL 列表的 `batch`，站点爬虫的队列恢复另行实现。
+本文描述固定 URL 列表的 `batch` 恢复；站点爬虫的队列检查点与预算见 [采集工作流](10-collection-workflows.md)。
 
 ## MCP
 

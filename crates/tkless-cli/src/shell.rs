@@ -76,6 +76,10 @@ pub async fn run_shell(engine: &TklessEngine, base_options: &ExtractionOptions) 
                 } else {
                     let cdp = base_options.cdp_endpoint.as_ref().map(|endpoint| {
                         tkless_core::CdpOptions {
+                            allow_private_addresses: engine
+                                .fetcher()
+                                .options()
+                                .allow_private_addresses,
                             endpoint: endpoint.clone(),
                             wait_ms: base_options.cdp_wait_ms,
                             ..Default::default()

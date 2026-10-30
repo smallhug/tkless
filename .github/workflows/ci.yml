@@ -39,4 +39,36 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
 
       - name: Run Workspace Tests
-        run: cargo test --workspace --all-targets
+        run: cargo test --workspace --locked
+
+      - name: Check without default features
+        run: cargo check -p tkless-core --no-default-features --all-targets --locked
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Check documentation and executable contracts
+        run: |
+          cargo build -p tkless-cli --locked
+          node scripts/check-docs.cjs
+
+  msrv:
+    name: Minimum supported Rust
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: '1.98.1'
+      - run: cargo check --workspace --all-targets --locked
+
+  browser:
+    name: Local Chrome workflow
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Exercise disposable browser against local fixtures
+        run: cargo test -p tkless-core --test bing_cdp_test --locked -- --ignored

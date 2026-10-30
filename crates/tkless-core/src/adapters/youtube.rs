@@ -189,7 +189,7 @@ impl YoutubeAdapter {
             .send()
             .await?;
 
-        let html = resp.text().await?;
+        let html = fetcher.read_text(resp).await?;
 
         // 1. Extract ytInitialPlayerResponse JSON payload
         let player_response: Option<Value> = YT_PLAYER_RESPONSE_RE
@@ -281,14 +281,13 @@ impl YoutubeAdapter {
                         format!("{base_url}&fmt=json3")
                     };
 
-                    if let Ok(parsed_sub_url) = Url::parse(&sub_fetch_url) {
-                        if let Ok(sub_resp) = fetcher.get(&parsed_sub_url).send().await {
-                            if let Ok(sub_text) = sub_resp.text().await {
-                                if sub_text.trim_start().starts_with('{') {
-                                    subtitle_lines = Self::parse_timedtext_json3(&sub_text);
-                                } else {
-                                    subtitle_lines = Self::parse_timedtext_xml(&sub_text);
-                                }
+                    if let Ok(sub_resp) = fetcher.fetch_api(&sub_fetch_url).await {
+                        if !sub_resp.truncated {
+                            let sub_text = sub_resp.html;
+                            if sub_text.trim_start().starts_with('{') {
+                                subtitle_lines = Self::parse_timedtext_json3(&sub_text);
+                            } else {
+                                subtitle_lines = Self::parse_timedtext_xml(&sub_text);
                             }
                         }
                     }

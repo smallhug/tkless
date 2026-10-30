@@ -9,7 +9,7 @@
   面向 AI Agent 与 LLM 管道的 Rust 网页抓取、正文清洗、结构化提取与搜索工具。
 </p>
 
-当前源码版本：**0.4.0**，文档对齐日期：**2026-10-28**。本说明按当前工作区实现整理；尚未发布的提交可能领先于 GitHub Release。
+当前源码版本：**0.5.0**，文档对齐日期：**2026-10-30**。本说明按当前工作区实现整理；尚未发布的提交可能领先于 GitHub Release。
 
 ## 核心能力
 
@@ -21,7 +21,7 @@
 - **批量与站点抓取**：URL 列表并发提取、站点链接遍历、Sitemap、深度与页数限制、路径范围限制。
 - **PDF**：识别远程、本地或 stdin 中的 PDF，提取文本和元数据，再用启发式规则整理为 Markdown。
 - **浏览器渲染**：通过 CDP 使用 Chrome / Edge / Chromium，支持挑战回退、自动滚动、资源拦截和截图。
-- **MCP 服务**：stdio JSON-RPC，23 个业务工具；动态模式初始暴露 2 个核心工具和 4 个发现元工具。
+- **MCP 服务**：stdio JSON-RPC，27 个业务工具；动态模式初始暴露 2 个核心工具和 4 个发现元工具。
 - **辅助工具**：表格 SQL / CSV / TSV 导出、文本差异、RSS / Atom、REPL、自检、缓存维护、Shell 补全和自升级。
 
 普通抓取和转换不需要 Node.js、Python 或外部大模型服务。CDP 渲染及截图需要本机已安装的 Chromium 系浏览器，或可连接的远程 CDP 服务。
@@ -68,6 +68,9 @@ tkless upgrade
 
 升级下载会逐跳检查地址、限制产物大小，并在替换前验证 GitHub Release 的 SHA-256 digest 或配套 `.sha256` 文件。缺少校验信息或校验不一致时拒绝替换；版本比较采用语义化版本规则。
 
+当前源码还会验证下载大小、可执行文件格式、落盘内容及替换前后的 `--version` 输出；使用独占升级锁和独立暂存目录，失败时恢复原程序。Windows 下若旧程序仍被占用，会显示保留的备份路径。上述安装加固尚未随 0.5.0 发布。
+
+**从 0.4.0 更新的注意事项**：该版本升级器未跟随 GitHub 下载重定向，可能把 302 的空响应体安装成程序后报告成功。遇到此问题，请从 Release 页面手动下载对应二进制并核对 SHA-256，或在源码目录运行 `cargo install --path crates/tkless-cli --force --locked` 恢复。旧程序自身的升级代码不会因远程版本更新而自动修复。
 ## 常用工作流
 
 示例中的 `example.com` URL、视频号和文件路径是占位符，需要替换为实际目标。不同子命令的选项支持范围请以各自的 `--help` 为准。
@@ -187,7 +190,7 @@ tkless crawl https://example.com/sitemap.xml --sitemap --max-pages 50 -f json -o
 tkless crawl https://example.com/docs --dedup --delay-ms 500 -f jsonl -o site.jsonl
 ```
 
-`batch` 和 `crawl` 均支持有界并发及 `--delay-ms` 请求启动间隔。批量任务另支持单主机并发/延迟、JSONL 逐项交付、检查点及失败重试。Sitemap index 会递归遍历子地图并检测循环，最多检查 10,000 个地图；站点爬虫的队列恢复尚未实现。
+`batch` 和 `crawl` 均支持有界并发、`--delay-ms` 请求启动间隔、检查点与失败重试。`crawl` 另支持时间、页面输出和待抓队列预算，以及可选 robots.txt 检查；Sitemap index 会递归遍历子地图并检测循环，单次运行最多检查 10,000 个地图。恢复及完成状态见 [采集工作流](doc/10-collection-workflows.md)。
 
 **批量 JSON 输出**：返回 `{total, succeeded, failed, resumed, fetched, results}`，每项包含从 0 开始的 `index`、`url`、`document`、`error`、`exit_code` 和可选错误详情。JSONL 每项交付后刷新，默认按输入顺序；`--order completion` 按完成顺序交付。CLI 批量或站点任务只要有失败项，默认写出报告后非零退出；可加 `--allow-partial` 接受部分失败。MCP 批量任务在全部失败时返回 `isError: true`，部分失败保留在结果中。
 
@@ -198,6 +201,16 @@ tkless batch ./urls.txt -f jsonl --checkpoint ./batch.state.jsonl --resume --ret
 
 新任务要求检查点不存在；恢复使用原 URL 列表和提取/请求配置。已保存结果会重新交付，输出文件重建，成功页面不重复抓取。详见 [批量任务说明](doc/07-batch-jobs.md)。
 
+### 分页、增量同步与浏览器步骤
+
+```bash
+# 配置中的 URL、分页和字段规则需要按目标网站填写
+tkless collect --config ./collect.json -o collection.json
+tkless sync --config ./collect.json --state ./collection-state -o changes.json
+tkless browse https://example.com/search --plan ./browser.json -o rendered.json
+```
+
+`collect` 支持下一页链接、页码与 JSON 游标，以及列表详情关联；`sync` 保存快照并输出新增/更新/删除事件，采集不完整时不删除旧条目；`browse` 支持等待元素、填写文本、点击和滚动。配置示例与限制见 [采集工作流](doc/10-collection-workflows.md)。
 ### 平台适配器与视频
 
 ```bash
@@ -310,7 +323,7 @@ tkless completions powershell
 ```
 
 ```bash
-# 全量模式：tools/list 返回 23 个业务工具
+# 全量模式：tools/list 返回 27 个业务工具
 tkless mcp
 
 # 动态模式：初始返回 6 个工具，按需激活业务工具
@@ -339,11 +352,11 @@ MCP 仅支持 `2025-11-25`；网页提取、HTML 清洗、搜索和批量抓取�
 
 动态模式减少初始工具声明；具体 Token 开销取决于当前 Schema、序列化方式、分词器及宿主注入策略，此处不沿用旧版固定节省率。
 
-23 个业务工具按目录分类如下，四个发现元工具不计入该数量：
+27 个业务工具按目录分类如下，四个发现元工具不计入该数量：
 
 | 分类 | 工具 |
 |---|---|
-| 内容（6） | `fetch_webpage`、`crawl_site`、`batch_fetch_webpages`、`clean_html`、`fetch_feed`、`scaffold_schema` |
+| 内容（10） | `fetch_webpage`、`crawl_site`、`batch_fetch_webpages`、`clean_html`、`fetch_feed`、`scaffold_schema`、`collect_pages`、`sync_collection`、`browse_page`、`list_wechat_articles` |
 | 搜索（5） | `web_search`、`search_bilibili`、`inspect_links`、`list_adapters`、`deep_research` |
 | 媒体（3） | `fetch_bilibili_feed`、`download_media`、`take_screenshot` |
 | 分析（6） | `export_tables`、`summarize_content`、`split_document`、`chunk_markdown`、`diff_documents`、`compare_similarity` |
@@ -362,6 +375,10 @@ tkless [OPTIONS] [TARGET] [COMMAND]
 | `search` | Bing 平台定向搜索与搜索后正文提取 |
 | `batch` | 从文件或 stdin 读取 URL 列表并发抓取 |
 | `crawl` | 站点链接 / Sitemap 遍历与知识库汇编 |
+| `wechat` | 微信公众号名称发现、合集翻页与授权账号历史采集（`--history`）；[使用说明](doc/11-wechat-public.md) |
+| `collect` | 通用分页与列表详情采集 |
+| `sync` | 保存采集快照并输出增量事件 |
+| `browse` | 执行受限浏览器步骤并提取正文 |
 | `research` | 启发式两跳资料检索及摘录报告 |
 | `tables` | 表格 Markdown / CSV / TSV / JSON / SQL 导出 |
 | `diff` | 本地文本或网页的行级差异 |
@@ -464,19 +481,24 @@ crates/
       search.rs / search_preflight.rs / research.rs / crawler.rs / feed.rs
       cdp/                   # 浏览器连接预检与任务页面管理
       batch.rs / batch/      # 流式调度、单主机限制及持久检查点
+      collection.rs / sync.rs / browser_workflow.rs
+      workflow.rs / limits.rs / state_file.rs  # 类型化结果、共享约束及持久化
       pdf.rs / cdp.rs / auth.rs / downloader.rs / diff.rs / dedup.rs
       adapters/              # 22 个内置平台适配器与注册表
-      mcp/                   # tools.rs、server.rs、types.rs
+      mcp/                   # 工具契约、协议分发及 server/ 业务处理器和通用传输
     tests/                   # 提取、批量中断/恢复、CLI 子进程及 MCP 协议验证
     benches/                 # Criterion 合成 HTML 基准
   tkless-cli/
     src/
       main.rs / cli.rs / output.rs
+      commands/              # 搜索、批处理、爬虫及采集工作流编排
       shell.rs / doctor.rs / progress.rs / upgrade.rs
     build.rs                 # 构建日期与 Windows 资源
 doc/                         # 设计及开发文档
 .github/workflows/           # 三平台 CI、多平台 Release
 ```
+
+当前支持 Rust **1.98.1** 及以上。`scripts/check-docs.cjs` 用于开发时检查文档示例、链接和可执行程序的 MCP 工具目录；Node.js 不属于产品运行依赖。核心库宿主通过 `McpServer::run_transport` 传入异步输入输出流，CLI 负责绑定 stdin/stdout。
 
 ```bash
 cargo fmt --all -- --check
@@ -499,6 +521,8 @@ cargo bench -p tkless-core --bench extraction_bench
 - [开发规范与工程标准](doc/04-development-standards.md)
 - [搜索引擎在线实测与功能验证](doc/05-search-engine-validation.md)
 - [批量流式任务与断点恢复](doc/07-batch-jobs.md)
+- [安全加固与当前边界](doc/09-security-hardening.md)
+- [分页、增量同步、爬虫恢复与浏览器步骤](doc/10-collection-workflows.md)
 - [变更日志](CHANGELOG.md)
 
 设计文档中部分数量、接口示例和性能描述尚未同步；实际可用命令及 Schema 以源码、`--help` 和 MCP `tools/list` 为准。

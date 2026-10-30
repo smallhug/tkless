@@ -5,10 +5,12 @@
 pub mod adapters;
 pub mod auth;
 pub mod batch;
+pub mod browser_workflow;
 pub mod cache;
 pub mod cdp;
 pub mod chunker;
 pub mod cleaner;
+pub mod collection;
 pub mod crawler;
 pub mod dedup;
 pub mod diff;
@@ -17,6 +19,7 @@ pub mod error;
 pub mod extractor;
 pub mod feed;
 pub mod fetcher;
+pub mod limits;
 pub mod markdown;
 pub mod mcp;
 pub mod model;
@@ -26,8 +29,12 @@ pub mod schema;
 pub mod search;
 mod search_preflight;
 pub mod splitter;
+mod state_file;
 pub mod summarizer;
+pub mod sync;
 pub mod token;
+pub mod wechat;
+pub mod workflow;
 
 pub use adapters::{
     format_adapters_markdown, AdapterInfo, AdapterRegistry, ArxivAdapter, BaikeAdapter,
@@ -527,6 +534,7 @@ impl TklessEngine {
         cdp_endpoint: &str,
     ) -> Result<PageDocument, TklessError> {
         let cdp_opts = cdp::CdpOptions {
+            allow_private_addresses: self.fetcher.options().allow_private_addresses,
             endpoint: cdp_endpoint.to_string(),
             wait_ms: options.cdp_wait_ms,
             timeout_ms: None,
@@ -543,6 +551,7 @@ impl TklessEngine {
             block_resources: Some(options.cdp_block_resources),
             auto_scroll: Some(options.cdp_auto_scroll),
             scroll_count: Some(5),
+            ..Default::default()
         };
         let html = cdp::fetch_html_via_cdp(url, &cdp_opts).await?;
         let mut doc = self.process_html(&html, Some(url), options)?;

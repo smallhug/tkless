@@ -82,7 +82,7 @@ impl BaikeAdapter {
             Ok(resp) => {
                 let status = resp.status();
                 if status.is_success() {
-                    let text = resp.text().await?;
+                    let text = fetcher.read_text(resp).await?;
                     if text.contains("__PARIS_CHALLENGE_START__")
                         || text.contains("百度安全验证")
                         || text.contains("mkdjump")
@@ -145,7 +145,7 @@ impl BaikeAdapter {
             return None;
         }
 
-        let data = resp.json::<serde_json::Value>().await.ok()?;
+        let data = fetcher.read_json::<serde_json::Value>(resp).await.ok()?;
         let title = data.get("title").and_then(|v| v.as_str())?.to_string();
         let abstract_text = data
             .get("abstract")

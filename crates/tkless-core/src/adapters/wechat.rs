@@ -45,24 +45,35 @@ impl WechatAdapter {
     ) -> Result<PageDocument, TklessError> {
         debug!(url = %url, "Executing WeChat Official Accounts adapter extraction");
 
+        if url.path() == "/mp/appmsgalbum" {
+            let report = crate::wechat::album::collect(fetcher, url, &Default::default()).await?;
+            return crate::wechat::report_document(report, url, options);
+        }
+
         // Decrypt intermediate Sogou redirect link if applicable
-        let target_url = if url.host_str().unwrap_or("").contains("weixin.sogou.com") {
+        let target_url = if url.host_str() == Some("weixin.sogou.com") {
             Self::decrypt_sogou_wechat_redirect(fetcher, url, options).await?
         } else {
             url.clone()
         };
 
-        let resp = fetcher
-            .get(&target_url)
-            .header(
-                "Accept",
-                "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-            )
-            .send()
-            .await?;
-
-        let html = resp.text().await?;
-        self.parse_article(&html, &target_url, options)
+        let target_url = crate::wechat::identity::public_url(target_url.as_str())?;
+        let raw = fetcher.fetch_api(target_url.as_str()).await?;
+        if raw.truncated || !(200..300).contains(&raw.status) {
+            return Err(crate::wechat::identity::failure(
+                "Incomplete or unsuccessful WeChat article response",
+            ));
+        }
+        let final_url = crate::wechat::identity::public_url(&raw.final_url)?;
+        if !crate::wechat::identity::is_article(&final_url) {
+            return Err(crate::wechat::identity::failure(
+                "Article redirected to verification or an unsupported route",
+            ));
+        }
+        let mut document = self.parse_article(&raw.html, &final_url, options)?;
+        document.url = url.to_string();
+        document.status = raw.status;
+        Ok(document)
     }
 
     /// Automatically decrypts and unpacks Sogou WeChat intermediate redirect URLs (`/link?url=...`)
@@ -88,7 +99,7 @@ impl WechatAdapter {
             );
         let resp = req.send().await?;
         let status_u16 = resp.status().as_u16();
-        let html = resp.text().await?;
+        let html = fetcher.read_text(resp).await?;
 
         // 2. Static regex extraction of dynamic JavaScript string concatenations
         let mut parts = Vec::new();
@@ -117,6 +128,7 @@ impl WechatAdapter {
             if let Some(ep) = cdp_ep {
                 debug!(endpoint = %ep, "搜狗重定向受阻，自动无缝启动无头浏览器 CDP 执行重定向跟踪");
                 let cdp_opts = crate::cdp::CdpOptions {
+                    allow_private_addresses: fetcher.options().allow_private_addresses,
                     endpoint: ep,
                     wait_ms: Some(2000),
                     timeout_ms: Some(30_000),
@@ -198,12 +210,20 @@ impl WechatAdapter {
         }
 
         // 4. Extract and Clean Article Body (#js_content)
-        let body_html = if let Some(content_el) = doc.select(&WECHAT_CONTENT_SELECTOR).next() {
-            clean_wechat_content(content_el)
-        } else {
-            let cleaned = crate::cleaner::clean_html(raw_html, Some(url.as_str()), options.mode)?;
-            cleaned.html
-        };
+        let content_el = doc.select(&WECHAT_CONTENT_SELECTOR).next().ok_or_else(|| {
+            crate::wechat::identity::failure(
+                "WeChat article body missing: page may be deleted, restricted or changed",
+            )
+        })?;
+        let rendered_body = clean_wechat_content(content_el);
+        let body_html = crate::cleaner::clean_html(
+            &rendered_body,
+            Some(url.as_str()),
+            crate::ExtractionMode::Full,
+        )?
+        .html;
+        let account = crate::wechat::identity::article_identity(raw_html, url);
+        let albums = crate::wechat::identity::album_links(raw_html, url, &account);
 
         // 5. Convert to requested format
         let content = match options.format {
@@ -285,7 +305,9 @@ impl WechatAdapter {
             links: None,
             images: None,
             tables: None,
-            entity: None,
+            entity: Some(
+                serde_json::json!({"type":"wechat_article","account":account,"albums":albums,"article_id":crate::wechat::identity::article_id_from_html(raw_html, url, &account)}),
+            ),
             chunks: None,
             content_hash: None,
             metrics: None,
@@ -294,14 +316,20 @@ impl WechatAdapter {
 }
 
 impl PlatformAdapter for WechatAdapter {
+    fn allow_html_fallback(&self, _url: &Url) -> bool {
+        // Verification and API error pages must never become successful article content.
+        false
+    }
+
     fn name(&self) -> &'static str {
         "wechat"
     }
 
     fn matches(&self, url: &Url) -> bool {
         let host = url.host_str().unwrap_or("");
-        (host == "mp.weixin.qq.com" && url.path().starts_with("/s"))
-            || (host.contains("weixin.sogou.com") && url.path().starts_with("/link"))
+        (host == "mp.weixin.qq.com"
+            && (crate::wechat::identity::is_article(url) || url.path() == "/mp/appmsgalbum"))
+            || (host == "weixin.sogou.com" && url.path() == "/link")
     }
 
     fn extract<'a>(

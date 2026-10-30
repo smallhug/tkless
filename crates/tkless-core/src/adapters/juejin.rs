@@ -56,7 +56,7 @@ impl JuejinAdapter {
             .send()
             .await?;
 
-        let html = resp.text().await?;
+        let html = fetcher.read_text(resp).await?;
         self.parse_article(&html, url, options)
     }
 

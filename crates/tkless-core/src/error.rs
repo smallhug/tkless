@@ -36,6 +36,21 @@ pub enum TklessError {
     #[error("Invalid argument: {0}")]
     InvalidArgument(String),
 
+    #[error("State is busy: {0}")]
+    StateBusy(String),
+
+    #[error("Invalid persistent state: {0}")]
+    StateCorrupt(String),
+
+    #[error("State budget exceeded: {0}")]
+    StateBudgetExceeded(String),
+
+    #[error("Task execution failed: {0}")]
+    TaskFailed(#[from] tokio::task::JoinError),
+
+    #[error("Serialization error: {0}")]
+    Serialization(#[from] serde_json::Error),
+
     #[error("Platform adapter error ({platform}): {message}")]
     AdapterError {
         platform: &'static str,
@@ -100,6 +115,11 @@ impl TklessError {
             Self::ConversionError(_) => "conversion_error",
             Self::Io(_) => "io_error",
             Self::InvalidArgument(_) => "invalid_argument",
+            Self::StateBusy(_) => "state_busy",
+            Self::StateCorrupt(_) => "state_corrupt",
+            Self::StateBudgetExceeded(_) => "state_budget_exceeded",
+            Self::TaskFailed(_) => "task_failed",
+            Self::Serialization(_) => "serialization_error",
             Self::AdapterError { .. } => "adapter_error",
             Self::SsrfBlocked(_) => "ssrf_blocked",
             Self::CacheError(_) => "cache_error",
@@ -123,6 +143,7 @@ impl TklessError {
             retryable: matches!(
                 self,
                 Self::Network(_)
+                    | Self::StateBusy(_)
                     | Self::ConnectionTimeout(_)
                     | Self::SearchConnectionError(_)
                     | Self::SearchRateLimited { .. }
@@ -156,6 +177,11 @@ impl TklessError {
             Self::ResponseTooLarge { .. } => 5,
             Self::SsrfBlocked(_) => 6,
             Self::Io(_)
+            | Self::StateBusy(_)
+            | Self::StateCorrupt(_)
+            | Self::StateBudgetExceeded(_)
+            | Self::TaskFailed(_)
+            | Self::Serialization(_)
             | Self::AdapterError { .. }
             | Self::CacheError(_)
             | Self::CheckpointError(_)
