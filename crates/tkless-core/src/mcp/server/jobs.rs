@@ -1,7 +1,19 @@
+use super::jobs_registry::{
+    JobGuard, JobState, DEFAULT_JOB_TTL_SECS, MAX_JOB_TTL_SECS, MIN_JOB_TTL_SECS,
+};
 use super::{
     ExtractionOptions, McpServer, McpToolCallResult, NotificationSender, OutputFormat,
     TklessEngine, TklessError, TokenizerKind, Value, INTERNAL_ERROR,
 };
+use std::time::Duration;
+
+/// Tools that may be launched through `jobs_start`; abuse-prone or trivial tools stay synchronous.
+const ASYNC_JOB_TOOLS: [&str; 4] = [
+    "crawl_site",
+    "batch_fetch_webpages",
+    "collect_pages",
+    "sync_collection",
+];
 
 impl McpServer {
     pub(super) async fn call_crawl_site(
@@ -393,4 +405,210 @@ impl McpServer {
         };
         response.with_structured(structured)
     }
+
+    pub(super) async fn call_jobs_start(&self, args: &Value) -> McpToolCallResult {
+        let tool = match args.get("tool").and_then(Value::as_str) {
+            Some(name) if ASYNC_JOB_TOOLS.contains(&name) => name,
+            _ => {
+                return McpToolCallResult::invalid_argument(format!(
+                    "'tool' must be one of: {}",
+                    ASYNC_JOB_TOOLS.join(", ")
+                ))
+            }
+        };
+        let arguments = args
+            .get("arguments")
+            .cloned()
+            .unwrap_or_else(|| serde_json::json!({}));
+        if !arguments.is_object() {
+            return McpToolCallResult::invalid_argument("'arguments' must be an object");
+        }
+        if let Err(error) = crate::mcp::contracts::validate_arguments(tool, &arguments) {
+            return McpToolCallResult::from_error(&error);
+        }
+        let ttl_secs = args
+            .get("ttl_secs")
+            .and_then(Value::as_u64)
+            .unwrap_or(DEFAULT_JOB_TTL_SECS)
+            .clamp(MIN_JOB_TTL_SECS, MAX_JOB_TTL_SECS);
+        let job = match self.jobs.reserve(tool, Duration::from_secs(ttl_secs)) {
+            Ok(job) => job,
+            Err(error) => return McpToolCallResult::from_error(&error),
+        };
+
+        let server = self.clone();
+        let tool_name = tool.to_string();
+        let task_job = job.clone();
+        let task = tokio::spawn(async move {
+            let _guard = JobGuard(task_job.clone());
+            task_job.mark_running();
+            let result = run_job_tool(&server, &tool_name, &arguments).await;
+            task_job.finish(job_outcome(result));
+        });
+        job.set_abort_handle(task.abort_handle());
+
+        let snapshot = job.snapshot();
+        let text = format!(
+            "Started '{}' as {} ({}); poll with jobs_status, cancel with jobs_cancel.",
+            snapshot.tool,
+            snapshot.job_id,
+            snapshot.state.as_str()
+        );
+        McpToolCallResult::success(text).with_structured(snapshot)
+    }
+
+    pub(super) async fn call_jobs_status(&self, args: &Value) -> McpToolCallResult {
+        let job_id = match required_job_id(args) {
+            Ok(id) => id,
+            Err(result) => return result,
+        };
+        match self.jobs.snapshot(job_id) {
+            Some(snapshot) => {
+                let text = format!(
+                    "Job {} ({}) is {} after {} ms. finished_at={:?}, error={:?}",
+                    snapshot.job_id,
+                    snapshot.tool,
+                    snapshot.state.as_str(),
+                    snapshot.elapsed_ms,
+                    snapshot.finished_at,
+                    snapshot.error
+                );
+                McpToolCallResult::success(text).with_structured(snapshot)
+            }
+            None => McpToolCallResult::error(format!(
+                "Unknown or expired job '{job_id}'; active jobs can be listed with jobs_list"
+            )),
+        }
+    }
+
+    pub(super) async fn call_jobs_cancel(&self, args: &Value) -> McpToolCallResult {
+        let job_id = match required_job_id(args) {
+            Ok(id) => id,
+            Err(result) => return result,
+        };
+        match self.jobs.cancel(job_id) {
+            Some(snapshot) => {
+                let text = if snapshot.state == JobState::Cancelled {
+                    format!("Job {} cancelled; its task was aborted.", snapshot.job_id)
+                } else {
+                    format!(
+                        "Job {} already finished as {}; nothing to cancel.",
+                        snapshot.job_id,
+                        snapshot.state.as_str()
+                    )
+                };
+                McpToolCallResult::success(text).with_structured(snapshot)
+            }
+            None => McpToolCallResult::error(format!("Unknown or expired job '{job_id}'")),
+        }
+    }
+
+    pub(super) async fn call_jobs_list(&self, args: &Value) -> McpToolCallResult {
+        let state = match args.get("state").and_then(Value::as_str) {
+            None => None,
+            Some("queued") => Some(JobState::Queued),
+            Some("running") => Some(JobState::Running),
+            Some("completed") => Some(JobState::Completed),
+            Some("failed") => Some(JobState::Failed),
+            Some("cancelled") => Some(JobState::Cancelled),
+            Some(other) => {
+                return McpToolCallResult::invalid_argument(format!(
+                    "Unsupported job state '{other}'"
+                ))
+            }
+        };
+        let limit = args
+            .get("limit")
+            .and_then(Value::as_u64)
+            .unwrap_or(20)
+            .clamp(1, 100) as usize;
+        let (jobs, active) = self.jobs.list(state, limit);
+        let mut text = format!(
+            "MCP jobs: {} listed, {} active (limit {}).\n",
+            jobs.len(),
+            active,
+            limit
+        );
+        for job in &jobs {
+            text.push_str(&format!(
+                "- {} {} [{}] {} ms\n",
+                job.job_id,
+                job.tool,
+                job.state.as_str(),
+                job.elapsed_ms
+            ));
+        }
+        McpToolCallResult::success(text).with_structured(serde_json::json!({
+            "total": jobs.len() as u64,
+            "active": active as u64,
+            "jobs": jobs,
+        }))
+    }
+}
+
+/// Executes one supported tool directly, avoiding the recursive `dispatch_tool_execution`
+/// cycle that would otherwise make the spawned future non-`Send`.
+async fn run_job_tool(server: &McpServer, tool: &str, arguments: &Value) -> McpToolCallResult {
+    let result = match tool {
+        "crawl_site" => server.call_crawl_site(arguments, None, None).await,
+        "batch_fetch_webpages" => {
+            server
+                .call_batch_fetch_webpages(arguments, None, None)
+                .await
+        }
+        "collect_pages" => server.call_collect_pages(arguments).await,
+        "sync_collection" => server.call_sync_collection(arguments).await,
+        _ => {
+            return McpToolCallResult::invalid_argument(format!(
+                "Unsupported async job tool '{tool}'"
+            ))
+        }
+    };
+    if let Some(schema) = crate::mcp::contracts::output_schema(tool) {
+        let valid = result
+            .structured_content
+            .as_ref()
+            .ok_or_else(|| "Missing structuredContent".to_string())
+            .and_then(|value| crate::mcp::contracts::validate_value(&schema, value, "result"));
+        if let Err(message) = valid {
+            return McpToolCallResult::from_error(&TklessError::McpError {
+                code: INTERNAL_ERROR,
+                message: format!("Invalid output from {tool}: {message}"),
+            });
+        }
+    }
+    result
+}
+
+fn required_job_id(args: &Value) -> Result<&str, McpToolCallResult> {
+    match args.get("job_id").and_then(Value::as_str) {
+        Some(id) if !id.trim().is_empty() => Ok(id),
+        _ => Err(McpToolCallResult::error(
+            "Missing required parameter 'job_id'",
+        )),
+    }
+}
+
+fn job_outcome(result: McpToolCallResult) -> Result<Value, String> {
+    let text = result
+        .content
+        .first()
+        .map(|content| content.text.clone())
+        .unwrap_or_default();
+    if result.is_error {
+        return Err(truncate_message(text));
+    }
+    Ok(result
+        .structured_content
+        .unwrap_or_else(|| serde_json::json!({"content": text})))
+}
+
+fn truncate_message(text: String) -> String {
+    const LIMIT: usize = 4096;
+    if text.chars().count() <= LIMIT {
+        return text;
+    }
+    let mut truncated: String = text.chars().take(LIMIT).collect();
+    truncated.push('…');
+    truncated
 }

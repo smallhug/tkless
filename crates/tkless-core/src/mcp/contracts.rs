@@ -13,6 +13,17 @@ pub(super) fn output_schema(name: &str) -> Option<Value> {
     let result_item = json!({"type":"object","required":["title","url","snippet","engine"],"properties":{
         "title":{"type":"string"},"url":{"type":"string"},"snippet":{"type":"string"},"engine":{"const":"bing"}
     }});
+    let job = json!({"type":"object","required":["job_id","tool","state","created_at","started_at","finished_at","elapsed_ms","progress","result","error"],"properties":{
+        "job_id":{"type":"string"},"tool":{"type":"string"},
+        "state":{"enum":["queued","running","completed","failed","cancelled"]},
+        "created_at":{"type":"string"},"started_at":{"type":["string","null"]},
+        "finished_at":{"type":["string","null"]},"elapsed_ms":{"type":"integer","minimum":0},
+        "progress":{"type":"object","required":["completed","total","message"],"properties":{
+            "completed":{"type":"integer","minimum":0},"total":{"type":["integer","null"]},
+            "message":{"type":["string","null"]}
+        }},
+        "result":{},"error":{"type":["string","null"]}
+    }});
     let success = match name {
         "list_wechat_articles" => {
             json!({"type":"object","required":["source","scope","account_history_complete","listing_complete","complete","articles","stop_reason"],"properties":{
@@ -53,6 +64,13 @@ pub(super) fn output_schema(name: &str) -> Option<Value> {
                 "total":{"type":"integer"},"succeeded":{"type":"integer"},"failed":{"type":"integer"},
                 "resumed":{"type":"integer"},"fetched":{"type":"integer"},"streamed":{"const":true}
             }}]})
+        }
+        "jobs_start" | "jobs_status" | "jobs_cancel" => job,
+        "jobs_list" => {
+            json!({"type":"object","required":["total","active","jobs"],"properties":{
+                "total":{"type":"integer","minimum":0},"active":{"type":"integer","minimum":0},
+                "jobs":{"type":"array","items":job}
+            }})
         }
         _ => return None,
     };

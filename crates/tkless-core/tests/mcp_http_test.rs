@@ -46,7 +46,7 @@ async fn http_transport_serves_json_rpc_and_health() {
     let text = response.text().await.unwrap();
     assert_eq!(status, 200, "{text}");
     let body: serde_json::Value = serde_json::from_str(&text).unwrap();
-    assert_eq!(body["result"]["tools"].as_array().unwrap().len(), 27);
+    assert_eq!(body["result"]["tools"].as_array().unwrap().len(), 31);
 
     // Malformed payloads still receive a JSON-RPC error rather than a transport panic.
     let response = client

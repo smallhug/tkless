@@ -197,6 +197,34 @@ pub fn get_tool_catalog() -> Vec<ToolCatalogEntry> {
             keywords: &["auth", "check", "cookie", "session", "verify"],
             is_core: false,
         },
+        ToolCatalogEntry {
+            name: "jobs_start",
+            category: "system",
+            summary: "Starts crawl_site, batch_fetch_webpages, collect_pages or sync_collection in the background and returns a job_id.",
+            keywords: &["jobs", "async", "background", "start", "long-running", "task"],
+            is_core: false,
+        },
+        ToolCatalogEntry {
+            name: "jobs_status",
+            category: "system",
+            summary: "Reports state, elapsed time, progress and the final structured result of one background job.",
+            keywords: &["jobs", "status", "progress", "result", "poll"],
+            is_core: false,
+        },
+        ToolCatalogEntry {
+            name: "jobs_cancel",
+            category: "system",
+            summary: "Cancels a queued or running background job and aborts its task.",
+            keywords: &["jobs", "cancel", "abort", "stop"],
+            is_core: false,
+        },
+        ToolCatalogEntry {
+            name: "jobs_list",
+            category: "system",
+            summary: "Lists in-process background jobs with optional state filter and result-free summaries.",
+            keywords: &["jobs", "list", "active", "summary"],
+            is_core: false,
+        },
     ]
 }
 
@@ -825,6 +853,60 @@ pub fn get_available_tools() -> Vec<McpTool> {
                 "type": "object",
                 "properties": {
                     "format": { "type": "string", "enum": ["markdown", "json"], "default": "markdown", "description": "Output format" }
+                }
+            }),
+        },
+        McpTool {
+            output_schema: None,
+            name: "jobs_start".to_string(),
+            description: "Starts a long-running tool in the background and returns a job_id immediately. Jobs are in-process, capped at 4 active, and expire after their TTL or on restart. Poll with jobs_status.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["tool", "arguments"],
+                "properties": {
+                    "tool": { "type": "string", "enum": ["crawl_site", "batch_fetch_webpages", "collect_pages", "sync_collection"], "description": "Target tool to run asynchronously" },
+                    "arguments": { "type": "object", "description": "Arguments object matching the target tool inputSchema" },
+                    "ttl_secs": { "type": "integer", "minimum": 60, "maximum": 86400, "default": 3600, "description": "Retention after the job reaches a terminal state" }
+                }
+            }),
+        },
+        McpTool {
+            output_schema: None,
+            name: "jobs_status".to_string(),
+            description: "Returns one background job's state, elapsed time, progress, error and the final structured result once completed.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["job_id"],
+                "properties": {
+                    "job_id": { "type": "string", "minLength": 1, "description": "Identifier returned by jobs_start" }
+                }
+            }),
+        },
+        McpTool {
+            output_schema: None,
+            name: "jobs_cancel".to_string(),
+            description: "Cancels a queued or running job. Cancelling a finished job is idempotent and returns its final state.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["job_id"],
+                "properties": {
+                    "job_id": { "type": "string", "minLength": 1, "description": "Identifier returned by jobs_start" }
+                }
+            }),
+        },
+        McpTool {
+            output_schema: None,
+            name: "jobs_list".to_string(),
+            description: "Lists in-process background jobs, newest first. Summaries omit results; use jobs_status for a completed job's result.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "state": { "type": "string", "enum": ["queued", "running", "completed", "failed", "cancelled"], "description": "Optional state filter" },
+                    "limit": { "type": "integer", "minimum": 1, "maximum": 100, "default": 20, "description": "Maximum summaries to return" }
                 }
             }),
         }

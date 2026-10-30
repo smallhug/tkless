@@ -190,7 +190,7 @@ TkLess 原生实现了基于标准 stdio 的 JSON-RPC 2.0 MCP 协议，为确保
 针对 MCP 客户端默认将所有工具定义注入 System Prompt 导致上下文过度消耗的问题，TkLess 提供了两阶段动态工具发现架构（`--dynamic` 或 `--profile dynamic` 或环境变量 `TKLESS_MCP_DYNAMIC=1`）：
 
 - **第一阶段：轻量常驻核心集 (Stage 1: Resident Core + Meta Discovery Tools)**
-  - **初次暴露工具数**：从全量 27 个业务工具大幅精简为 **6 个常驻工具**；
+  - **初次暴露工具数**：从全量 31 个业务工具大幅精简为 **6 个常驻工具**；
   - **核心基础工具 (Core Tools)**：`fetch_webpage`（多格式抓取与清洗）、`web_search`（免 Key 全网搜索）；
   - **发现元工具 (Meta-Tools)**：
     1. `discover_tools(query, category)`：按关键词或分类（`content`, `search`, `media`, `analysis`, `system`, `all`）检索专门工具目录及简述；
@@ -200,6 +200,7 @@ TkLess 原生实现了基于标准 stdio 的 JSON-RPC 2.0 MCP 协议，为确保
 - **第二阶段：按需探查与执行 (Stage 2: On-Demand Discovery & Execution)**
   - Agent 在识别出特殊需求（如提取数据表格并转为 SQL、音视频字幕抓取、文档比对、语义切块）时，先调用 `discover_tools` / `get_tool_schema` 确定工具签名，随后既可直接通过 `execute_tool` 单次即时运行，也可调用 `activate_tools` 动态入库；
   - **直接调用**：动态模式也允许直接调用未激活的规范业务工具名称（如 `export_tables`），参数与输出仍经过同样的校验。
+  - **后台任务**：`jobs_start`/`jobs_status`/`jobs_cancel`/`jobs_list` 属于 `system` 分类，可经 `discover_tools` 发现；后台任务只能启动目录内允许的长任务，不得绕过输入或输出 Schema 校验。
 - **Token 开销**：以当前 Schema、分词器和宿主注入策略实测，不将历史固定比例作为验收保证。
 
 ---
