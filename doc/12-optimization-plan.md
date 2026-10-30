@@ -289,11 +289,13 @@ tkless watch --config ./watch.json --state ./watch-state --interval 3600
 
 说明：无适配器不等于不能抓取；通用管线仍可处理静态页面，适配器主要提升"接口优先/内嵌数据/分页"的成功率。文档需保留这句边界声明，避免夸大。
 
-### WS10 输出与企业集成（P2）
+### WS10 输出与企业集成（P2，部分实施）
 
 - Sink 抽象：`file | stdout | http | s3`（S3 走 feature，遵循最小依赖）；
 - 交付格式：Markdown 打包、JSONL 事件流、EPUB、PDF（CDP 打印）；
 - 与外部系统：webhook 事件（复用 WS3）、退出码契约保持不变。
+
+> 实施状态（2026-10-31）：已落地 `crawl --bundle FILE`，输出 `README.md` 索引与逐页 Markdown 的 ZIP（stored 实现，512 条目 / 64 MiB 上限）。已存在 JSONL 事件流、webhook 通知与 CDP PDF。对象存储/数据库 sink、S3 与 EPUB 导出未实现。
 
 ---
 
@@ -429,3 +431,4 @@ tkless watch --config ./watch.json --state ./watch-state --interval 3600
 | 2026-10-30 | WS7 部分实施：CDP PDF 打印（与截图共享流程） |
 | 2026-10-30 | WS8 部分实施：共享重试预算与 JSON 结构化日志 |
 | 2026-10-30 | WS9 部分实施：声明式配置适配器（TKLESS_ADAPTERS_DIR） |
+| 2026-10-31 | WS10 部分实施：`crawl --bundle` Markdown 知识库打包（stored ZIP） |

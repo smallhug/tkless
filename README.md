@@ -192,9 +192,12 @@ cat ./urls.txt | tkless batch - --concurrency 5
 tkless crawl https://example.com/docs --max-depth 2 --max-pages 20 --same-path-prefix -o docs.md
 tkless crawl https://example.com/sitemap.xml --sitemap --max-pages 50 -f json -o site.json
 tkless crawl https://example.com/docs --dedup --delay-ms 500 -f jsonl -o site.jsonl
+
+# 额外输出 Markdown 知识库压缩包
+tkless crawl https://example.com/docs --max-pages 50 --bundle ./site.zip -o docs.md
 ```
 
-`batch` 和 `crawl` 均支持有界并发、`--delay-ms` 请求启动间隔、检查点与失败重试。`crawl` 另支持时间、页面输出和待抓队列预算，以及可选 robots.txt 检查；Sitemap index 会递归遍历子地图并检测循环，单次运行最多检查 10,000 个地图。恢复及完成状态见 [采集工作流](doc/10-collection-workflows.md)。
+`batch` 和 `crawl` 均支持有界并发、`--delay-ms` 请求启动间隔、检查点与失败重试。`crawl` 另支持时间、页面输出和待抓队列预算，以及可选 robots.txt 检查；Sitemap index 会递归遍历子地图并检测循环，单次运行最多检查 10,000 个地图。`crawl --bundle site.zip` 可额外输出 Markdown 知识库压缩包（README 索引 + 每页一个 `.md`）。恢复及完成状态见 [采集工作流](doc/10-collection-workflows.md)。
 
 **批量 JSON 输出**：返回 `{total, succeeded, failed, resumed, fetched, results}`，每项包含从 0 开始的 `index`、`url`、`document`、`error`、`exit_code` 和可选错误详情。JSONL 每项交付后刷新，默认按输入顺序；`--order completion` 按完成顺序交付。CLI 批量或站点任务只要有失败项，默认写出报告后非零退出；可加 `--allow-partial` 接受部分失败。MCP 批量任务在全部失败时返回 `isError: true`，部分失败保留在结果中。
 

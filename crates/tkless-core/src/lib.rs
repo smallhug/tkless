@@ -6,6 +6,7 @@ pub mod adapters;
 pub mod auth;
 pub mod batch;
 pub mod browser_workflow;
+pub mod bundle;
 pub mod cache;
 pub mod cdp;
 pub mod chunker;

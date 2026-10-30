@@ -276,6 +276,11 @@ pub async fn run(
             crawl_args.output.as_deref(),
             crawl_args.checkpoint.as_deref(),
         )?;
+        paths::distinct(crawl_args.output.as_deref(), crawl_args.bundle.as_deref())?;
+        paths::distinct(
+            crawl_args.checkpoint.as_deref(),
+            crawl_args.bundle.as_deref(),
+        )?;
         let mut crawl_fetch_options = fetch_options.clone();
         if crawl_args.proxy.is_some() {
             crawl_fetch_options.proxy = crawl_args.proxy.clone();
@@ -333,6 +338,15 @@ pub async fn run(
         )?;
 
         output::write_payload(&payload, crawl_args.output.as_deref())?;
+        if let Some(bundle) = crawl_args.bundle.as_deref() {
+            let files = tkless_core::bundle::write_markdown_bundle(&report, bundle)?;
+            if !args.quiet {
+                eprintln!(
+                    "[TkLess Crawl] Markdown bundle written ({files} files): {}",
+                    bundle.display()
+                );
+            }
+        }
         let failed = report
             .pages
             .iter()
