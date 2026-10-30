@@ -279,7 +279,8 @@ impl McpServer {
             mobile,
             circuit_breaker_failures: std::env::var("TKLESS_CIRCUIT_BREAKER")
                 .ok()
-                .and_then(|value| value.parse().ok())
+                .and_then(|value| value.parse::<u32>().ok())
+                .map(|value| value.min(100))
                 .unwrap_or(0),
         };
 

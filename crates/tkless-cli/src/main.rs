@@ -244,7 +244,15 @@ async fn run(args: CliArgs) -> Result<()> {
         allow_http_errors: args.allow_http_errors,
         proxy: args.proxy.clone(),
         mobile: args.mobile,
-        circuit_breaker_failures: args.circuit_breaker,
+        circuit_breaker_failures: if args.circuit_breaker == 0 {
+            std::env::var("TKLESS_CIRCUIT_BREAKER")
+                .ok()
+                .and_then(|value| value.parse::<u32>().ok())
+                .map(|value| value.min(100))
+                .unwrap_or(0)
+        } else {
+            args.circuit_breaker
+        },
     };
 
     // Build extraction options
