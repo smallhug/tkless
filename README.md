@@ -20,6 +20,7 @@
 - **Bing 搜索**：默认最多 10 条；支持平台定向、搜索后抓取正文和 SimHash 近似去重。
 - **批量与站点抓取**：URL 列表并发提取、站点链接遍历、Sitemap、深度与页数限制、路径范围限制。
 - **PDF**：识别远程、本地或 stdin 中的 PDF，提取文本和元数据，再用启发式规则整理为 Markdown。
+- **Office**：识别远程 `.docx`/`.pptx`，用内置 ZIP + XML 解析提取标题、段落、标题层级与列表；`.xlsx` 需先导出为 CSV。
 - **浏览器渲染**：通过 CDP 使用 Chrome / Edge / Chromium，支持挑战回退、自动滚动、资源拦截、截图与 PDF 打印。
 - **MCP 服务**：stdio / 可选 HTTP JSON-RPC，31 个业务工具；动态模式初始暴露 2 个核心工具和 4 个发现元工具。
 - **辅助工具**：表格 SQL / CSV / TSV 导出、文本差异、RSS / Atom、REPL、自检、缓存维护、Shell 补全和自升级。
@@ -308,6 +309,9 @@ tkless ./research_paper.pdf --chunk --summarize -f json -o paper.json
 # POSIX Shell 中的二进制 stdin 示例；Windows 优先直接传入 PDF 路径
 cat ./research_paper.pdf | tkless -
 
+# 远程 Office 文档（DOCX/PPTX）自动转 Markdown
+tkless https://example.com/reports/q3.docx -o q3.md
+
 # 启发式维度拆解、搜索、最多两跳引链抓取与摘录汇编
 tkless research "Rust Web 框架技术选型" --depth 2 --breadth 3 --max-pages 8 -o research.md
 tkless research "长文本上下文压缩" -f json -o research.json
@@ -322,6 +326,7 @@ tkless completions powershell
 当前能力边界：
 
 - PDF 支持 Token 截断、摘要和分块，并可走缓存路径；尚无扫描件 OCR，复杂多栏、表格及公式的排版还原有限。
+- Office 支持 `.docx`（标题样式、段落、简单列表）与 `.pptx`（按页码逐页提取文本），不渲染图片、图表、批注、修订或嵌入对象；`.xlsx` 明确拒绝并提示转 CSV。归档读取限制 512 条目、单条目 32 MiB、总未压缩 64 MiB，拒绝加密与 ZIP64。
 - `research` 使用本地启发式规则与提取式摘要，不调用 LLM。发现会附带来源编号，不自动生成未经证据支持的比较表；内容仍需交叉核验。最终报告应用 `--max-tokens` 预算，JSON 会保留合法结构和 `truncated` 标记；预算连基本结构也容纳不了时会明确报错。
 - `diff` 使用 Myers 行级算法，生成包含 hunk 头的标准 unified diff；末尾换行的变化也属于差异。
 - `--stream` 当前在内容处理完成后逐行写出并 flush，并非网络获取、解析和输出同时进行。
@@ -465,7 +470,7 @@ tkless mcp --help
 | `1` | 通用、I/O、平台适配器、CDP、Schema、搜索等未单独映射的错误 |
 | `2` | 参数或 URL 格式错误 |
 | `3` | 网络错误、超时或 HTTP 5xx |
-| `4` | 解码、清洗、转换、PDF / 搜索页解析错误或 HTTP 4xx |
+| `4` | 解码、清洗、转换、PDF / Office / 搜索页解析错误或 HTTP 4xx |
 | `5` | 响应体超过大小限制 |
 | `6` | SSRF 地址检查拦截 |
 

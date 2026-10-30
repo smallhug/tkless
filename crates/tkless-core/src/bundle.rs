@@ -236,7 +236,10 @@ fn slugify(title: &str, fallback: usize) -> String {
     }
 }
 
-fn write_stored_zip(path: &Path, entries: &[(String, Vec<u8>)]) -> Result<(), TklessError> {
+pub(crate) fn write_stored_zip(
+    path: &Path,
+    entries: &[(String, Vec<u8>)],
+) -> Result<(), TklessError> {
     if entries.is_empty() || entries.len() > MAX_BUNDLE_ENTRIES {
         return Err(TklessError::InvalidArgument(format!(
             "Bundle requires 1..{MAX_BUNDLE_ENTRIES} entries"

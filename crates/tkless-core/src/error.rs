@@ -87,6 +87,9 @@ pub enum TklessError {
     #[error("PDF extraction error: {0}")]
     PdfError(String),
 
+    #[error("Office document extraction error: {0}")]
+    OfficeError(String),
+
     #[error("Search engine error: {0}")]
     SearchEngineError(String),
 
@@ -131,6 +134,7 @@ impl TklessError {
             Self::SchemaError(_) => "schema_error",
             Self::SearchAntiScraping(_) => "verification_required",
             Self::PdfError(_) => "pdf_error",
+            Self::OfficeError(_) => "office_error",
             Self::SearchEngineError(_) => "search_error",
             Self::SearchParseError(_) => "search_parse_error",
             Self::SearchConnectionError(_) => "search_connection_error",
@@ -172,7 +176,8 @@ impl TklessError {
             Self::CleaningError(_)
             | Self::ConversionError(_)
             | Self::EncodingError(_)
-            | Self::PdfError(_) => 4,
+            | Self::PdfError(_)
+            | Self::OfficeError(_) => 4,
             Self::SearchParseError(_) => 4,
             Self::ResponseTooLarge { .. } => 5,
             Self::SsrfBlocked(_) => 6,

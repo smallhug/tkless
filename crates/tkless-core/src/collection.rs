@@ -734,6 +734,7 @@ async fn fetch_page(
             Ok(crate::fetcher::FetchedResponse {
                 requested_url: url.into(),
                 final_url: page.final_url,
+                content_type: None,
                 status: 200,
                 html: page.html,
                 truncated: false,
