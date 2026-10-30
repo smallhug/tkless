@@ -140,6 +140,10 @@ pub struct FetchOptions {
     pub proxy: Option<String>,
     /// Whether to emulate a mobile device User-Agent to trigger lightweight mobile layouts and strip desktop clutter.
     pub mobile: bool,
+    /// Consecutive transport/server failures after which a host is temporarily rejected.
+    /// 0 disables the breaker.
+    #[serde(default)]
+    pub circuit_breaker_failures: u32,
 }
 
 impl Default for FetchOptions {
@@ -165,6 +169,7 @@ impl Default for FetchOptions {
             allow_http_errors: false,
             proxy: None,
             mobile: false,
+            circuit_breaker_failures: 0,
         }
     }
 }

@@ -959,3 +959,34 @@ async fn cookie_jar_captures_set_cookie_and_replays_on_same_host() {
     assert_eq!(reopened.header_for(&parsed).as_deref(), Some("sid=abc"));
     let _ = std::fs::remove_file(&jar_path);
 }
+
+#[tokio::test]
+async fn circuit_breaker_rejects_a_failing_host_without_refetching() {
+    let site = Site::start(|_request, _| Reply {
+        status: 500,
+        headers: "Content-Type: text/html\r\n".into(),
+        body: b"upstream failed".to_vec(),
+        delay_ms: 0,
+    })
+    .await;
+    let fetcher = tkless_core::fetcher::Fetcher::new(FetchOptions {
+        allow_private_addresses: true,
+        circuit_breaker_failures: 1,
+        ..Default::default()
+    })
+    .unwrap();
+
+    assert!(fetcher.fetch(&site.url).await.is_err());
+    let error = fetcher
+        .fetch(&site.url)
+        .await
+        .expect_err("the circuit should reject the second request");
+    assert!(
+        matches!(error, tkless_core::TklessError::CircuitOpen { .. }),
+        "{error}"
+    );
+    assert_eq!(error.details().code, "circuit_open");
+    assert!(error.details().retryable);
+    assert!(error.details().retry_after_secs.is_some());
+    assert_eq!(site.hits.load(Ordering::SeqCst), 1);
+}

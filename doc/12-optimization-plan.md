@@ -257,7 +257,7 @@ tkless watch --config ./watch.json --state ./watch-state --interval 3600
 
 ### WS8 稳定性、限流与可观测性（P2，部分实施）
 
-> 实施状态（2026-10-30）：已落地共享重试预算（`--retry-budget`）与 JSON 结构化日志（`--log-format json`）。每域名熔断、代理池、OTLP 导出与任务级磁盘预算未实现；磁盘预算仍列为已知边界（见 `doc/09`）。
+> 实施状态（2026-10-31）：已落地共享重试预算（`--retry-budget`）、JSON 结构化日志（`--log-format json`）与可选每主机熔断（`--circuit-breaker N`，默认关闭；连续失败后 30 秒冷却、半开探测与退避上限 5 分钟，错误码 `circuit_open`）。代理池、OTLP 导出与任务级磁盘预算未实现；磁盘预算仍列为已知边界（见 `doc/09`）。
 
 - **每域名熔断**：连续失败阈值 + 半开探测 + 退避抖动；与现有 429 冷却合并为统一 `HostPolicy`；
 - **重试策略**：`retries` 默认保持 0（不改变现有延迟特性），但新增 `--retry-budget` 按任务限制总重试次数；
@@ -436,3 +436,4 @@ tkless watch --config ./watch.json --state ./watch-state --interval 3600
 | 2026-10-31 | WS7 部分实施：`crawl --epub` 静态 EPUB 3 导出（无新依赖） |
 | 2026-10-31 | WS7 部分实施：DOCX/PPTX 原生解析（内置 ZIP+XML，无新依赖） |
 | 2026-10-31 | WS6 部分实施：可选持久化 Cookie Jar（精确主机、无新依赖） |
+| 2026-10-31 | WS8 部分实施：可选每主机熔断（阈值、冷却、半开探测） |

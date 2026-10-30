@@ -26,6 +26,7 @@
 - `crawl` 新增 `--epub FILE`：导出 EPUB 3（标题目录、逐页 XHTML、正文以转义 `<pre>` 保留 Markdown），复用不压缩 ZIP 实现，最多 508 页。
 - 新增 DOCX/PPTX 原生解析：远程响应按媒体类型或扩展名识别，内置 ZIP+XML 读取标题、段落、标题层级与逐页文本；限制条目数与解压体积，拒绝加密与 ZIP64，XLSX 明确提示转 CSV。
 - 新增可选持久化 Cookie Jar（`--cookie-jar` 或 `TKLESS_COOKIE_JAR`）：保存 `Set-Cookie` 并按精确主机、路径、过期与 `Secure` 回放；`Domain` 属性被忽略，限制 1024 条与 4 MiB，损坏文件明确报错。
+- 新增可选每主机熔断（`--circuit-breaker N` 或 `TKLESS_CIRCUIT_BREAKER`）：连续失败后本地冷却 30 秒并放行单个半开探测，失败后冷却翻倍至 5 分钟；返回 `circuit_open` 与 `retry_after_secs`。默认 `0` 禁用。
 
 ### Fixed
 

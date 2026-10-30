@@ -32,6 +32,7 @@ pub struct Fetcher {
     credentials: crate::credentials::CredentialsFile,
     retry_budget: std::sync::Arc<std::sync::atomic::AtomicU64>,
     cookie_jar: Option<std::sync::Arc<crate::cookie_jar::CookieJar>>,
+    circuit: std::sync::Arc<crate::circuit_breaker::CircuitBreaker>,
 }
 
 impl Fetcher {
@@ -103,6 +104,11 @@ impl Fetcher {
             )?)),
             None => None,
         };
+        let circuit = std::sync::Arc::new(crate::circuit_breaker::CircuitBreaker::new(
+            options.circuit_breaker_failures,
+            crate::circuit_breaker::DEFAULT_COOLDOWN,
+            crate::circuit_breaker::MAX_COOLDOWN,
+        ));
         Ok(Self {
             client,
             options,
@@ -110,6 +116,7 @@ impl Fetcher {
             credentials: crate::credentials::load(),
             retry_budget: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(retry_budget)),
             cookie_jar,
+            circuit,
         })
     }
 
@@ -326,6 +333,30 @@ impl Fetcher {
         }
     }
 
+    fn circuit_check(&self, url: &Url) -> Result<(), TklessError> {
+        let Some(host) = url.host_str() else {
+            return Ok(());
+        };
+        self.circuit
+            .before_request(host)
+            .map_err(|retry_after_secs| TklessError::CircuitOpen {
+                host: host.to_string(),
+                retry_after_secs,
+            })
+    }
+
+    fn circuit_failure(&self, url: &Url) {
+        if let Some(host) = url.host_str() {
+            self.circuit.record_failure(host);
+        }
+    }
+
+    fn circuit_success(&self, url: &Url) {
+        if let Some(host) = url.host_str() {
+            self.circuit.record_success(host);
+        }
+    }
+
     /// Fetch a webpage by URL with retry backoff, full-chain SSRF validation across redirects,
     /// and decode its content into a clean string.
     pub async fn fetch(&self, target_url: &str) -> Result<FetchedResponse, TklessError> {
@@ -382,6 +413,7 @@ impl Fetcher {
             TklessError::InvalidArgument(format!("Unsupported HTTP method: {method}"))
         })?;
         let connect_timeout = Duration::from_secs(self.options.connect_timeout_secs);
+        self.circuit_check(&url)?;
 
         let mut attempt = 0;
         let response = loop {
@@ -405,6 +437,12 @@ impl Fetcher {
             match tokio::time::timeout(connect_timeout, builder.send()).await {
                 Ok(Ok(response)) => {
                     let status = response.status();
+                    if status.is_server_error() || status == reqwest::StatusCode::TOO_MANY_REQUESTS
+                    {
+                        self.circuit_failure(&url);
+                    } else {
+                        self.circuit_success(&url);
+                    }
                     if (status.is_server_error()
                         || status == reqwest::StatusCode::TOO_MANY_REQUESTS)
                         && attempt < self.options.retries
@@ -424,6 +462,7 @@ impl Fetcher {
                     break response;
                 }
                 Ok(Err(error)) => {
+                    self.circuit_failure(&url);
                     if attempt < self.options.retries && self.take_retry() {
                         attempt += 1;
                         let delay = retry_delay(attempt, None);
@@ -433,6 +472,7 @@ impl Fetcher {
                     return Err(TklessError::Network(error));
                 }
                 Err(_) => {
+                    self.circuit_failure(&url);
                     if attempt < self.options.retries && self.take_retry() {
                         attempt += 1;
                         let delay = retry_delay(attempt, None);
@@ -500,6 +540,7 @@ impl Fetcher {
             // Strictly validate SSRF on EVERY hop (initial request and all redirect targets)
             self.validate_ssrf(&current_url).await?;
             debug!(url = %current_url, redirect_hop = redirect_count, "Fetching URL with SSRF guard");
+            self.circuit_check(&current_url)?;
 
             let mut attempt = 0;
             let resp = loop {
@@ -519,6 +560,13 @@ impl Fetcher {
                 match tokio::time::timeout(connect_timeout, send_fut).await {
                     Ok(Ok(r)) => {
                         let status = r.status();
+                        if status.is_server_error()
+                            || status == reqwest::StatusCode::TOO_MANY_REQUESTS
+                        {
+                            self.circuit_failure(&current_url);
+                        } else {
+                            self.circuit_success(&current_url);
+                        }
                         if (status.is_server_error()
                             || status == reqwest::StatusCode::TOO_MANY_REQUESTS)
                             && attempt < self.options.retries
@@ -545,6 +593,7 @@ impl Fetcher {
                         break r;
                     }
                     Ok(Err(err)) => {
+                        self.circuit_failure(&current_url);
                         if attempt < self.options.retries && self.take_retry() {
                             attempt += 1;
                             let delay = retry_delay(attempt, None);
@@ -562,6 +611,7 @@ impl Fetcher {
                         return Err(TklessError::Network(err));
                     }
                     Err(_) => {
+                        self.circuit_failure(&current_url);
                         if attempt < self.options.retries && self.take_retry() {
                             attempt += 1;
                             let delay = retry_delay(attempt, None);

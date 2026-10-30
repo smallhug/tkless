@@ -794,6 +794,16 @@ pub struct CliArgs {
     )]
     pub retry_budget: Option<u32>,
 
+    /// 同一主机连续失败达到 N 次后熔断 30 秒；0 禁用（默认）
+    #[arg(
+        long = "circuit-breaker",
+        default_value_t = 0,
+        value_name = "N",
+        value_parser = clap::value_parser!(u32).range(0..=100),
+        help_heading = "网络与身份认证 (Network & Auth)"
+    )]
+    pub circuit_breaker: u32,
+
     /// 日志输出格式：plain（默认）或 json（每行一个 JSON 对象）
     #[arg(
         long = "log-format",
