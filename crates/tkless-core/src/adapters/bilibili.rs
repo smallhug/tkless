@@ -218,11 +218,13 @@ impl BilibiliAdapter {
         let api_url = format!("https://api.bilibili.com/x/web-interface/view?bvid={bvid}");
 
         let resp: BiliResponse<VideoViewData> = fetcher
-            .get_str(&api_url)
-            .header("Referer", "https://www.bilibili.com/")
-            .send()
-            .await?
-            .json()
+            .read_json(
+                fetcher
+                    .get_str(&api_url)
+                    .header("Referer", "https://www.bilibili.com/")
+                    .send()
+                    .await?,
+            )
             .await?;
 
         if resp.code != 0 {
@@ -261,7 +263,7 @@ impl BilibiliAdapter {
                 .send()
                 .await
             {
-                if let Ok(bili_resp) = resp.json::<BiliResponse<PlayerV2Data>>().await {
+                if let Ok(bili_resp) = fetcher.read_json::<BiliResponse<PlayerV2Data>>(resp).await {
                     if let Some(pdata) = bili_resp.data {
                         if let Some(sub_wrap) = pdata.subtitle {
                             subtitle_list = sub_wrap.subtitles;
@@ -290,11 +292,13 @@ impl BilibiliAdapter {
 
         // 4. Download and parse subtitle JSON
         let sub_resp: SubtitleFileResponse = fetcher
-            .get_str(&sub_url)
-            .header("Referer", "https://www.bilibili.com/")
-            .send()
-            .await?
-            .json()
+            .read_json(
+                fetcher
+                    .get_str(&sub_url)
+                    .header("Referer", "https://www.bilibili.com/")
+                    .send()
+                    .await?,
+            )
             .await?;
 
         let lines = sub_resp
@@ -324,8 +328,8 @@ impl BilibiliAdapter {
             .send()
             .await?;
 
-        let bytes = resp.bytes().await?;
-        let xml_str = decode_xml_body(&bytes)?;
+        let bytes = fetcher.read_bytes(resp).await?;
+        let xml_str = decode_xml_body_with_limit(&bytes, fetcher.options().max_bytes)?;
         let mut entries = parse_danmaku_xml(&xml_str);
 
         if let Some(lim) = limit {
@@ -353,11 +357,13 @@ impl BilibiliAdapter {
             );
 
             let resp: BiliResponse<ReplyData> = fetcher
-                .get_str(&api_url)
-                .header("Referer", "https://www.bilibili.com/")
-                .send()
-                .await?
-                .json()
+                .read_json(
+                    fetcher
+                        .get_str(&api_url)
+                        .header("Referer", "https://www.bilibili.com/")
+                        .send()
+                        .await?,
+                )
                 .await?;
 
             if resp.code != 0 {
@@ -413,7 +419,7 @@ impl BilibiliAdapter {
         cid: u64,
         up_mid: u64,
     ) -> Result<Option<VideoConclusion>, TklessError> {
-        let mixin_key = match get_wbi_mixin_key(fetcher.client()).await {
+        let mixin_key = match get_wbi_mixin_key(fetcher).await {
             Ok(k) => k,
             Err(e) => {
                 debug!(error = %e, "Failed to obtain WBI mixin key for conclusion, skipping");
@@ -438,11 +444,13 @@ impl BilibiliAdapter {
             format!("https://api.bilibili.com/x/web-interface/view/conclusion/get?{signed_query}");
 
         let resp: ConclusionApiResponse = fetcher
-            .get_str(&api_url)
-            .header("Referer", "https://www.bilibili.com/")
-            .send()
-            .await?
-            .json()
+            .read_json(
+                fetcher
+                    .get_str(&api_url)
+                    .header("Referer", "https://www.bilibili.com/")
+                    .send()
+                    .await?,
+            )
             .await?;
 
         if resp.code != 0 {
@@ -496,11 +504,13 @@ impl BilibiliAdapter {
         );
 
         let resp: BiliResponse<PlayUrlData> = fetcher
-            .get_str(&api_url)
-            .header("Referer", "https://www.bilibili.com/")
-            .send()
-            .await?
-            .json()
+            .read_json(
+                fetcher
+                    .get_str(&api_url)
+                    .header("Referer", "https://www.bilibili.com/")
+                    .send()
+                    .await?,
+            )
             .await?;
 
         if resp.code != 0 {
@@ -525,6 +535,7 @@ impl BilibiliAdapter {
     ) -> Result<PathBuf, TklessError> {
         let details = Self::fetch_video_details(fetcher, bvid).await?;
         let cover_url = normalize_cover_url(&details.pic);
+        fetcher.validate_ssrf(&Url::parse(&cover_url)?).await?;
         let default_name = format!("{bvid}_cover.jpg");
         let target_path = resolve_download_path(dest_path, &default_name);
 
@@ -624,6 +635,10 @@ impl BilibiliAdapter {
         let mut downloaded = false;
 
         for stream_url in &candidate_urls {
+            if let Err(error) = fetcher.validate_ssrf(&Url::parse(stream_url)?).await {
+                last_err = Some(error);
+                continue;
+            }
             debug!(url = %stream_url, "Attempting video stream download from candidate mirror");
             let cookie_str = Url::parse(stream_url)
                 .ok()
@@ -923,11 +938,13 @@ impl BilibiliAdapter {
             format!("https://api.bilibili.com/x/web-interface/ranking/v2?rid={rid}&type=all");
 
         let resp: BiliResponse<RankingData> = fetcher
-            .get_str(&api_url)
-            .header("Referer", "https://www.bilibili.com/")
-            .send()
-            .await?
-            .json()
+            .read_json(
+                fetcher
+                    .get_str(&api_url)
+                    .header("Referer", "https://www.bilibili.com/")
+                    .send()
+                    .await?,
+            )
             .await?;
 
         if resp.code != 0 {
@@ -970,11 +987,13 @@ impl BilibiliAdapter {
         let api_url = "https://api.bilibili.com/x/web-interface/popular?pn=1&ps=20";
 
         let resp: BiliResponse<PopularData> = fetcher
-            .get_str(api_url)
-            .header("Referer", "https://www.bilibili.com/")
-            .send()
-            .await?
-            .json()
+            .read_json(
+                fetcher
+                    .get_str(api_url)
+                    .header("Referer", "https://www.bilibili.com/")
+                    .send()
+                    .await?,
+            )
             .await?;
 
         if resp.code != 0 {
@@ -1015,11 +1034,13 @@ impl BilibiliAdapter {
         let api_url = "https://api.bilibili.com/x/web-interface/index/top/feed/rcmd?ps=15";
 
         let resp: BiliResponse<RcmdData> = fetcher
-            .get_str(api_url)
-            .header("Referer", "https://www.bilibili.com/")
-            .send()
-            .await?
-            .json()
+            .read_json(
+                fetcher
+                    .get_str(api_url)
+                    .header("Referer", "https://www.bilibili.com/")
+                    .send()
+                    .await?,
+            )
             .await?;
 
         if resp.code != 0 {
@@ -1074,14 +1095,13 @@ impl BilibiliAdapter {
             }
         }
 
-        let resp: BiliResponse<SearchData> = fetcher
+        let response = fetcher
             .get(&api_url)
             .header("Referer", "https://search.bilibili.com/")
             .header("Cookie", "buvid3=infoc;")
             .send()
-            .await?
-            .json()
             .await?;
+        let resp: BiliResponse<SearchData> = fetcher.read_json(response).await?;
 
         if resp.code != 0 {
             return Err(TklessError::AdapterError {
@@ -1443,29 +1463,45 @@ pub fn format_subtitle_range(from: f64, to: f64) -> String {
 }
 
 pub fn decode_xml_body(bytes: &[u8]) -> Result<String, TklessError> {
+    decode_xml_body_with_limit(bytes, 10 * 1024 * 1024)
+}
+
+fn decode_xml_body_with_limit(bytes: &[u8], limit: usize) -> Result<String, TklessError> {
+    if bytes.len() > limit {
+        return Err(TklessError::ResponseTooLarge {
+            limit,
+            received: bytes.len(),
+        });
+    }
     if let Ok(s) = std::str::from_utf8(bytes) {
         if s.trim_start().starts_with('<') {
             return Ok(s.to_string());
         }
     }
     use std::io::Read;
-    // Try Deflate
-    let mut def_decoder = flate2::read::DeflateDecoder::new(bytes);
-    let mut s = String::new();
-    if def_decoder.read_to_string(&mut s).is_ok() && s.trim_start().starts_with('<') {
-        return Ok(s);
-    }
-    // Try Zlib
-    let mut zlib_decoder = flate2::read::ZlibDecoder::new(bytes);
-    s.clear();
-    if zlib_decoder.read_to_string(&mut s).is_ok() && s.trim_start().starts_with('<') {
-        return Ok(s);
-    }
-    // Try Gzip
-    let mut gz_decoder = flate2::read::GzDecoder::new(bytes);
-    s.clear();
-    if gz_decoder.read_to_string(&mut s).is_ok() && s.trim_start().starts_with('<') {
-        return Ok(s);
+    let decoders: [Box<dyn Read + '_>; 3] = [
+        Box::new(flate2::read::DeflateDecoder::new(bytes)),
+        Box::new(flate2::read::ZlibDecoder::new(bytes)),
+        Box::new(flate2::read::GzDecoder::new(bytes)),
+    ];
+    for decoder in decoders {
+        let mut expanded = Vec::new();
+        let result = decoder
+            .take(limit.saturating_add(1) as u64)
+            .read_to_end(&mut expanded);
+        if expanded.len() > limit {
+            return Err(TklessError::ResponseTooLarge {
+                limit,
+                received: expanded.len(),
+            });
+        }
+        if result.is_ok() {
+            if let Ok(text) = String::from_utf8(expanded) {
+                if text.trim_start().starts_with('<') {
+                    return Ok(text);
+                }
+            }
+        }
     }
     Ok(String::from_utf8_lossy(bytes).to_string())
 }
@@ -1776,7 +1812,7 @@ pub fn compute_md5(input: &[u8]) -> String {
     result.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-pub async fn get_wbi_mixin_key(client: &reqwest::Client) -> Result<String, TklessError> {
+pub async fn get_wbi_mixin_key(fetcher: &crate::fetcher::Fetcher) -> Result<String, TklessError> {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -1791,12 +1827,14 @@ pub async fn get_wbi_mixin_key(client: &reqwest::Client) -> Result<String, Tkles
     }
 
     let nav_url = "https://api.bilibili.com/x/web-interface/nav";
-    let resp: BiliResponse<NavData> = client
-        .get(nav_url)
-        .header("Referer", "https://www.bilibili.com/")
-        .send()
-        .await?
-        .json()
+    let resp: BiliResponse<NavData> = fetcher
+        .read_json(
+            fetcher
+                .get_str(nav_url)
+                .header("Referer", "https://www.bilibili.com/")
+                .send()
+                .await?,
+        )
         .await?;
 
     let wbi_img = resp
@@ -2163,6 +2201,23 @@ where
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn compressed_xml_cannot_expand_past_response_budget() {
+        use std::io::Write;
+        let xml = format!("<i>{}</i>", "x".repeat(4096));
+        let mut encoder =
+            flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+        encoder.write_all(xml.as_bytes()).unwrap();
+        let compressed = encoder.finish().unwrap();
+        assert!(matches!(
+            super::decode_xml_body_with_limit(&compressed, 512),
+            Err(crate::TklessError::ResponseTooLarge { .. })
+        ));
+        assert_eq!(
+            super::decode_xml_body_with_limit(&compressed, 8192).unwrap(),
+            xml
+        );
+    }
     use super::*;
 
     #[test]

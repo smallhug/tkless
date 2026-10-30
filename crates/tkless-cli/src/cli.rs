@@ -3,6 +3,43 @@ use clap::{Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 use tkless_core::model::{ExtractionMode, OutputFormat};
 
+#[cfg(test)]
+mod workflow_contract_tests {
+    use super::*;
+
+    #[test]
+    fn sync_budget_matches_core_limits() {
+        for value in [0, tkless_core::limits::SYNC_MAX_STATE_MB + 1, u64::MAX] {
+            assert!(CliArgs::try_parse_from([
+                "tkless",
+                "sync",
+                "--config",
+                "config.json",
+                "--state",
+                "state",
+                "--max-state-mb",
+                &value.to_string(),
+            ])
+            .is_err());
+            assert!(tkless_core::limits::sync_state_bytes(value).is_err());
+        }
+        for value in [1, tkless_core::limits::SYNC_MAX_STATE_MB] {
+            assert!(CliArgs::try_parse_from([
+                "tkless",
+                "sync",
+                "--config",
+                "config.json",
+                "--state",
+                "state",
+                "--max-state-mb",
+                &value.to_string(),
+            ])
+            .is_ok());
+            assert!(tkless_core::limits::sync_state_bytes(value).is_ok());
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, ValueEnum)]
 pub enum CliFormat {
     /// GitHub Flavored Markdown (default)
@@ -909,6 +946,12 @@ pub struct CliArgs {
 
 #[derive(Subcommand, Debug, Clone)]
 pub enum SubCommand {
+    /// 按配置进行通用分页和列表详情采集，输出 JSON 报告
+    Collect(CollectionArgs),
+    /// 保存采集快照，输出新增、更新和删除事件
+    Sync(SyncArgs),
+    /// 执行受限浏览器步骤后提取网页，输出 PageDocument JSON
+    Browse(BrowseArgs),
     /// 启动原生 Model Context Protocol (MCP) stdio 服务端 (供 Claude Desktop / Cursor 直连)
     #[command(
         name = "mcp",
@@ -1006,6 +1049,39 @@ pub enum SubCommand {
         about = "诊断并自检当前运行环境 (CDP 浏览器就绪、网络核心服务连通性、缓存读写权限)"
     )]
     Doctor(DoctorArgs),
+}
+
+#[derive(clap::Args, Debug, Clone)]
+pub struct CollectionArgs {
+    /// JSON 采集配置文件
+    #[arg(long, short = 'c')]
+    pub config: PathBuf,
+    #[arg(long, short = 'o')]
+    pub output: Option<PathBuf>,
+    /// 不完整结果仍返回成功退出码，报告保留停止原因
+    #[arg(long)]
+    pub allow_partial: bool,
+}
+
+#[derive(clap::Args, Debug, Clone)]
+pub struct SyncArgs {
+    #[command(flatten)]
+    pub collection: CollectionArgs,
+    /// 快照与增量清单目录，同一目录绑定同一采集配置
+    #[arg(long)]
+    pub state: PathBuf,
+    #[arg(long, default_value_t = tkless_core::limits::SYNC_DEFAULT_STATE_MB, value_parser = clap::value_parser!(u64).range(1..=tkless_core::limits::SYNC_MAX_STATE_MB))]
+    pub max_state_mb: u64,
+}
+
+#[derive(clap::Args, Debug, Clone)]
+pub struct BrowseArgs {
+    pub url: String,
+    /// BrowserPlan JSON 文件（endpoint、timeout_ms、steps）
+    #[arg(long)]
+    pub plan: PathBuf,
+    #[arg(long, short = 'o')]
+    pub output: Option<PathBuf>,
 }
 
 #[derive(clap::Args, Debug, Clone, Default)]
@@ -1407,6 +1483,21 @@ pub struct McpArgs {
 
 #[derive(clap::Args, Debug, Clone)]
 pub struct CrawlArgs {
+    #[arg(long, requires = "resume")]
+    pub retry_failed: bool,
+    #[arg(long)]
+    pub checkpoint: Option<PathBuf>,
+    #[arg(long, requires = "checkpoint")]
+    pub resume: bool,
+    #[arg(long)]
+    pub max_seconds: Option<u64>,
+    #[arg(long)]
+    pub max_output_bytes: Option<u64>,
+    #[arg(long, default_value_t = 10000)]
+    pub max_pending_urls: usize,
+    /// 读取 robots.txt 并按 TkLess / * 规则过滤页面
+    #[arg(long)]
+    pub respect_robots: bool,
     /// Return success despite failed pages; errors remain in the report
     #[arg(long = "allow-partial")]
     pub allow_partial: bool,

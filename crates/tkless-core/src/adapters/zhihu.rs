@@ -246,7 +246,7 @@ impl ZhihuAdapter {
             .await;
 
         if let Ok(res) = resp {
-            if let Ok(ans) = res.json::<ZhihuAnswerItem>().await {
+            if let Ok(ans) = fetcher.read_json::<ZhihuAnswerItem>(res).await {
                 let q_title = ans
                     .question
                     .map(|q| q.title)
@@ -345,7 +345,7 @@ impl ZhihuAdapter {
             .await;
 
         if let Ok(res) = resp {
-            if let Ok(data) = res.json::<ZhihuAnswersResponse>().await {
+            if let Ok(data) = fetcher.read_json::<ZhihuAnswersResponse>(res).await {
                 if !data.data.is_empty() {
                     let q_title = data
                         .data
@@ -717,7 +717,7 @@ async fn fetch_zhihu_html(
         .await?;
 
     let status = resp.status();
-    let html = resp.text().await?;
+    let html = fetcher.read_text(resp).await?;
 
     if status == reqwest::StatusCode::FORBIDDEN
         || html.contains("id=\"zh-zse-ck\"")

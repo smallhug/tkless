@@ -1,6 +1,7 @@
 use crate::error::TklessError;
 use crate::fetcher::Fetcher;
 use reqwest::header::{HeaderValue, CONTENT_RANGE, COOKIE, RANGE};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufReader, BufWriter, Read, Write};
@@ -39,6 +40,54 @@ pub struct DownloadOptions<'a> {
 
 /// Downloads a remote file with optional multi-threaded Range chunking and progress reporting.
 pub async fn download_file(
+    client: &reqwest::Client,
+    options: DownloadOptions<'_>,
+) -> Result<u64, TklessError> {
+    if let Some(parent) = options
+        .destination
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+    {
+        std::fs::create_dir_all(parent)?;
+    }
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let staged = options.destination.with_extension(format!(
+        "download-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&staged)?;
+    let guard = StagedDownload(staged);
+    let result = download_file_to_path(
+        client,
+        DownloadOptions {
+            url: options.url,
+            destination: &guard.0,
+            referer: options.referer,
+            cookie: options.cookie,
+            reporter: options.reporter,
+            concurrency: options.concurrency,
+        },
+    )
+    .await?;
+    std::fs::rename(&guard.0, options.destination)?;
+    Ok(result)
+}
+
+struct StagedDownload(PathBuf);
+impl Drop for StagedDownload {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+        for index in 0..16 {
+            let _ = std::fs::remove_file(format!("{}.part{index}", self.0.display()));
+        }
+    }
+}
+
+async fn download_file_to_path(
     client: &reqwest::Client,
     options: DownloadOptions<'_>,
 ) -> Result<u64, TklessError> {
@@ -171,7 +220,14 @@ async fn download_file_concurrent(
 
             let mut resp = req.send().await.map_err(TklessError::Network)?;
             let status = resp.status();
-            if !status.is_success() && status != reqwest::StatusCode::PARTIAL_CONTENT {
+            let expected_range = format!("bytes {start}-{end}/{total_bytes}");
+            if status != reqwest::StatusCode::PARTIAL_CONTENT
+                || resp
+                    .headers()
+                    .get(CONTENT_RANGE)
+                    .and_then(|v| v.to_str().ok())
+                    != Some(expected_range.as_str())
+            {
                 return Err(TklessError::AdapterError {
                     platform: "downloader",
                     message: format!("HTTP {} error for range {start}-{end}", status),
@@ -181,9 +237,21 @@ async fn download_file_concurrent(
             let file = File::create(&part_path).map_err(TklessError::Io)?;
             let mut writer = BufWriter::with_capacity(512 * 1024, file);
 
+            let mut received = 0u64;
             while let Some(chunk) = resp.chunk().await.map_err(TklessError::Network)? {
+                received += chunk.len() as u64;
+                if received > end - start + 1 {
+                    return Err(TklessError::InvalidArgument(
+                        "Range response exceeds requested length".into(),
+                    ));
+                }
                 writer.write_all(&chunk).map_err(TklessError::Io)?;
                 progress.fetch_add(chunk.len() as u64, Ordering::Relaxed);
+            }
+            if received != end - start + 1 {
+                return Err(TklessError::InvalidArgument(
+                    "Incomplete range response".into(),
+                ));
             }
             writer.flush().map_err(TklessError::Io)?;
             Ok::<(), TklessError>(())
@@ -200,10 +268,14 @@ async fn download_file_concurrent(
                 }
             }
             Ok(Err(err)) => {
+                join_set.abort_all();
+                while join_set.join_next().await.is_some() {}
                 cleanup_part_files(&part_files);
                 return Err(err);
             }
             Err(join_err) => {
+                join_set.abort_all();
+                while join_set.join_next().await.is_some() {}
                 cleanup_part_files(&part_files);
                 return Err(TklessError::AdapterError {
                     platform: "downloader",
@@ -361,7 +433,9 @@ pub async fn download_and_rewrite_markdown_images(
     // 2. Concurrently download images with SSRF protection
     let mut url_to_local_path: HashMap<String, String> = HashMap::new();
 
-    for (idx, img_url) in image_urls.into_iter().enumerate() {
+    let mut total_bytes = 0usize;
+    let total_limit = fetcher.options().max_bytes.saturating_mul(8);
+    for img_url in image_urls.into_iter().take(128) {
         let parsed_url = match Url::parse(&img_url) {
             Ok(u) => u,
             Err(_) => continue,
@@ -373,7 +447,7 @@ pub async fn download_and_rewrite_markdown_images(
         }
 
         // Fetch image bytes
-        let resp = match fetcher.get(&parsed_url).send().await {
+        let mut resp = match fetcher.get(&parsed_url).send().await {
             Ok(r) if r.status().is_success() => r,
             _ => continue,
         };
@@ -383,7 +457,8 @@ pub async fn download_and_rewrite_markdown_images(
             .headers()
             .get(reqwest::header::CONTENT_TYPE)
             .and_then(|v| v.to_str().ok())
-            .unwrap_or("");
+            .unwrap_or("")
+            .to_owned();
 
         let ext = if content_type.contains("png") {
             ".png"
@@ -395,20 +470,36 @@ pub async fn download_and_rewrite_markdown_images(
             ".svg"
         } else if content_type.contains("gif") {
             ".gif"
-        } else if let Some(path_ext) = Path::new(parsed_url.path())
-            .extension()
-            .and_then(|e| e.to_str())
-        {
-            &format!(".{path_ext}")
         } else {
             ".png"
         };
 
-        let file_name = format!("img_{:03}{}", idx + 1, ext);
+        let mut bytes = Vec::new();
+        let mut complete = true;
+        loop {
+            match resp.chunk().await {
+                Ok(Some(chunk))
+                    if bytes.len().saturating_add(chunk.len()) <= fetcher.options().max_bytes
+                        && total_bytes.saturating_add(chunk.len()) <= total_limit =>
+                {
+                    total_bytes += chunk.len();
+                    bytes.extend_from_slice(&chunk)
+                }
+                Ok(None) => break,
+                _ => {
+                    complete = false;
+                    break;
+                }
+            }
+        }
+        if !complete {
+            continue;
+        }
+        let file_name = format!("img_{:x}{}", Sha256::digest(&bytes), ext);
         let dest_path = assets_dir.join(&file_name);
 
-        if let Ok(bytes) = resp.bytes().await {
-            if std::fs::write(&dest_path, &bytes).is_ok() {
+        {
+            if write_asset_once(&dest_path, &bytes).is_ok() {
                 let folder_name = assets_dir
                     .file_name()
                     .and_then(|f| f.to_str())
@@ -431,6 +522,32 @@ pub async fn download_and_rewrite_markdown_images(
     });
 
     Ok(rewritten.into_owned())
+}
+
+fn write_asset_once(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    // Publish only complete data, without replacing another document's asset.
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let temp = path.with_extension(format!(
+        "tmp-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temp)?;
+    let result = (|| {
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        drop(file);
+        match std::fs::hard_link(&temp, path) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+            Err(e) => Err(e),
+        }
+    })();
+    let _ = std::fs::remove_file(temp);
+    result
 }
 
 #[cfg(test)]

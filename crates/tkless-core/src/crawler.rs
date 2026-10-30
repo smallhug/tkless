@@ -5,14 +5,21 @@ use scraper::{Html, Selector};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashSet, VecDeque};
 use std::sync::LazyLock;
-use tracing::{debug, warn};
 use url::Url;
+mod job;
 
 static A_HREF_SELECTOR: LazyLock<Selector> = LazyLock::new(|| Selector::parse("a[href]").unwrap());
 
 /// Configuration options for deep site crawling and sitemap-driven extraction.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CrawlOptions {
+    pub checkpoint: Option<std::path::PathBuf>,
+    pub resume: bool,
+    pub retry_failed: bool,
+    pub max_seconds: Option<u64>,
+    pub max_output_bytes: Option<u64>,
+    pub max_pending_urls: usize,
+    pub respect_robots: bool,
     /// Maximum link traversal depth (0: only seed URL, 1: direct child links, default: 2).
     pub max_depth: usize,
     /// Maximum number of unique pages to crawl [default: 20].
@@ -36,6 +43,8 @@ pub struct CrawlOptions {
 impl Default for CrawlOptions {
     fn default() -> Self {
         Self {
+            checkpoint: None, resume: false, retry_failed: false, max_seconds: None, max_output_bytes: None,
+            max_pending_urls: 10_000, respect_robots: false,
             max_depth: 2,
             max_pages: 20,
             concurrency: 5,
@@ -68,6 +77,9 @@ pub struct CrawledPage {
 /// The complete assembled site knowledge base.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SiteCrawlReport {
+    pub complete: bool,
+    pub stop_reason: crate::workflow::StopReason,
+    pub pending_urls: usize,
     pub seed_url: String,
     pub total_pages: usize,
     pub total_tokens: usize,
@@ -98,252 +110,19 @@ pub async fn crawl_site_with_progress<F>(
     seed_url: &str,
     crawl_options: &CrawlOptions,
     extraction_options: &ExtractionOptions,
-    mut on_progress: Option<F>,
+    on_progress: Option<F>,
 ) -> Result<SiteCrawlReport, TklessError>
 where
     F: FnMut(usize, usize, &str) + Send,
 {
-    let parsed_seed = Url::parse(seed_url)?;
-    let seed_host = parsed_seed.host_str().unwrap_or("").to_lowercase();
-    let seed_path = parsed_seed.path().to_string();
-
-    let exclude_regexes: Vec<regex::Regex> = crawl_options
-        .exclude_patterns
-        .iter()
-        .filter_map(|p| regex::Regex::new(p).ok())
-        .collect();
-
-    let mut visited: HashSet<String> = HashSet::new();
-    let mut queue: VecDeque<(Url, usize)> = VecDeque::new();
-
-    // Check if seed URL is a sitemap XML or if sitemap mode is enabled
-    let is_sitemap_target = crawl_options.sitemap
-        || seed_url.ends_with(".xml")
-        || parsed_seed.path().ends_with("sitemap")
-        || parsed_seed.path().ends_with("sitemap.xml");
-
-    if crawl_options.max_pages == 0 || crawl_options.concurrency == 0 {
-        return Err(TklessError::InvalidArgument(
-            "max_pages and concurrency must be positive".into(),
-        ));
-    }
-    if is_sitemap_target {
-        let mut pending_maps = VecDeque::from([seed_url.to_string()]);
-        let mut seen_maps = HashSet::new();
-        while let Some(map_url) = pending_maps.pop_front() {
-            if !seen_maps.insert(map_url.clone()) {
-                continue;
-            }
-            if seen_maps.len() > 10_000 {
-                return Err(TklessError::InvalidArgument(
-                    "Sitemap index exceeds 10000 maps".into(),
-                ));
-            }
-            let resp = engine.fetcher().fetch(&map_url).await?;
-            if resp.html.contains("<sitemapindex") {
-                pending_maps.extend(parse_sitemap_urls(&resp.html));
-                continue;
-            }
-            for loc in parse_sitemap_urls(&resp.html) {
-                if let Ok(parsed_loc) = Url::parse(&loc) {
-                    if should_enqueue_url(
-                        &parsed_loc,
-                        &seed_host,
-                        &seed_path,
-                        crawl_options,
-                        &exclude_regexes,
-                    ) && visited.insert(normalize_url(&parsed_loc))
-                    {
-                        queue.push_back((parsed_loc, 0));
-                    }
-                }
-                if queue.len() >= crawl_options.max_pages {
-                    break;
-                }
-            }
-            if queue.len() >= crawl_options.max_pages {
-                break;
-            }
-        }
-    }
-
-    if queue.is_empty() && !is_sitemap_target {
-        let normalized_seed_str = normalize_url(&parsed_seed);
-        visited.insert(normalized_seed_str);
-        queue.push_back((parsed_seed.clone(), 0));
-    }
-
-    let mut crawled_pages: Vec<CrawledPage> = Vec::new();
-    let mut seen_simhashes: Vec<u64> = Vec::new();
-    let mut tasks = tokio::task::JoinSet::new();
-    let mut scheduled = 0;
-    let mut next_launch = tokio::time::Instant::now();
-    loop {
-        while tasks.len() < crawl_options.concurrency && scheduled < crawl_options.max_pages {
-            let Some((current_url, depth)) = queue.pop_front() else {
-                break;
-            };
-            scheduled += 1;
-            let rank = scheduled;
-            let eng = engine.clone();
-            let opts = extraction_options.clone();
-            let launch_at = next_launch.max(tokio::time::Instant::now());
-            next_launch = launch_at + std::time::Duration::from_millis(crawl_options.delay_ms);
-            tasks.spawn(async move {
-                tokio::time::sleep_until(launch_at).await;
-                let url = current_url.to_string();
-                let result = async {
-                    if opts.cdp_endpoint.is_none() {
-                        match eng.fetcher().fetch(&url).await {
-                            Ok(resp)
-                                if !opts.auto_cdp
-                                    || !crate::cdp::is_anti_scraping_challenge(
-                                        &resp.html,
-                                        resp.status,
-                                    ) =>
-                            {
-                                return Ok((resp.html, resp.final_url, resp.status))
-                            }
-                            Err(error) if !opts.auto_cdp => return Err(error),
-                            _ => {}
-                        }
-                    }
-                    eng.fetcher().validate_ssrf(&current_url).await?;
-                    let endpoint = crate::cdp::resolve_cdp_endpoint(
-                        opts.cdp_endpoint.as_deref(),
-                        opts.auto_cdp,
-                    )
-                    .ok_or_else(|| {
-                        TklessError::CdpError("No browser endpoint configured".into())
-                    })?;
-                    let cdp_opts = crate::cdp::CdpOptions {
-                        endpoint,
-                        wait_ms: opts.cdp_wait_ms.or(Some(1000)),
-                        user_agent: eng.fetcher().options().user_agent.clone(),
-                        cookie: eng.fetcher().resolve_cookie_for_url(&current_url),
-                        block_resources: Some(opts.cdp_block_resources),
-                        auto_scroll: Some(opts.cdp_auto_scroll),
-                        ..Default::default()
-                    };
-                    let html = crate::cdp::fetch_html_via_cdp(&url, &cdp_opts).await?;
-                    Ok::<_, TklessError>((html, url.clone(), 200))
-                }
-                .await;
-                (current_url, depth, rank, result)
-            });
-        }
-        let Some(result) = tasks.join_next().await else {
-            break;
-        };
-        let (current_url, depth, rank, raw_html_res) =
-            result.map_err(|e| TklessError::CleaningError(format!("Crawl task failed: {e}")))?;
-        let url_str = current_url.to_string();
-        let eng = engine;
-        let opts = extraction_options;
-        match raw_html_res {
-            Ok((raw_html, final_url, status)) => {
-                let mut doc = match eng.process_html(&raw_html, Some(&final_url), opts) {
-                    Ok(d) => d,
-                    Err(e) => {
-                        debug!(url = %url_str, error = %e, "Failed to process HTML during crawl");
-                        crawled_pages.push(CrawledPage {
-                            rank,
-                            url: url_str.clone(),
-                            title: url_str.clone(),
-                            depth,
-                            content: String::new(),
-                            token_count: 0,
-                            status,
-                            error: Some(e.to_string()),
-                        });
-                        if let Some(ref mut cb) = on_progress {
-                            cb(crawled_pages.len(), crawl_options.max_pages, &url_str);
-                        }
-                        continue;
-                    }
-                };
-                doc.status = status;
-
-                let page_title = doc.title.clone().unwrap_or_else(|| url_str.clone());
-
-                // Discover child links directly from the single fetched HTML (ZERO secondary network request!)
-                if depth < crawl_options.max_depth && crawled_pages.len() < crawl_options.max_pages
-                {
-                    let links = extract_discovered_links(
-                        &raw_html,
-                        &Url::parse(&final_url).unwrap_or(current_url),
-                    );
-                    for child_url in links {
-                        if should_enqueue_url(
-                            &child_url,
-                            &seed_host,
-                            &seed_path,
-                            crawl_options,
-                            &exclude_regexes,
-                        ) {
-                            let norm_child = normalize_url(&child_url);
-                            if visited.insert(norm_child) {
-                                queue.push_back((child_url, depth + 1));
-                            }
-                        }
-                    }
-                }
-
-                // If deduplication is enabled, check for near-duplicates via SimHash
-                if crawl_options.dedup {
-                    let page_hash = crate::dedup::simhash(&doc.content);
-                    if seen_simhashes
-                        .iter()
-                        .any(|&prev| crate::dedup::is_near_duplicate(prev, page_hash, 3))
-                    {
-                        debug!(url = %url_str, "跳过内容高度近似的重复页面 (SimHash near-duplicate)");
-                        continue;
-                    }
-                    seen_simhashes.push(page_hash);
-                }
-
-                crawled_pages.push(CrawledPage {
-                    rank,
-                    url: url_str.clone(),
-                    title: page_title,
-                    depth,
-                    content: doc.content,
-                    token_count: doc.token_count,
-                    status: doc.status,
-                    error: None,
-                });
-                if let Some(ref mut cb) = on_progress {
-                    cb(crawled_pages.len(), crawl_options.max_pages, &url_str);
-                }
-            }
-            Err(err) => {
-                warn!(url = %url_str, error = %err, "Failed to crawl page");
-                crawled_pages.push(CrawledPage {
-                    rank,
-                    url: url_str.clone(),
-                    title: url_str.clone(),
-                    depth,
-                    content: String::new(),
-                    token_count: 0,
-                    status: 0,
-                    error: Some(err.to_string()),
-                });
-                if let Some(ref mut cb) = on_progress {
-                    cb(crawled_pages.len(), crawl_options.max_pages, &url_str);
-                }
-            }
-        }
-    }
-
-    crawled_pages.sort_by_key(|page| page.rank);
-    let total_tokens: usize = crawled_pages.iter().map(|p| p.token_count).sum();
-
-    Ok(SiteCrawlReport {
-        seed_url: seed_url.to_string(),
-        total_pages: crawled_pages.len(),
-        total_tokens,
-        pages: crawled_pages,
-    })
+    job::run(
+        engine,
+        seed_url,
+        crawl_options,
+        extraction_options,
+        on_progress,
+    )
+    .await
 }
 
 /// Normalizes URL by removing fragment and trailing slashes for deduplication.
@@ -448,6 +227,10 @@ pub fn format_crawl_report_markdown(report: &SiteCrawlReport) -> String {
 
     out.push_str(&format!("# 整站知识库汇编: {}\n\n", report.seed_url));
     out.push_str(&format!(
+        "> complete: {} | stop_reason: {} | pending_urls: {}\n\n",
+        report.complete, report.stop_reason, report.pending_urls
+    ));
+    out.push_str(&format!(
         "> 爬取页面总数: {} | 累计估算 Tokens: {}\n\n",
         report.total_pages, report.total_tokens
     ));
@@ -507,6 +290,8 @@ pub fn format_crawl_report_jsonl(report: &SiteCrawlReport) -> String {
             out.push('\n');
         }
     }
+    out.push_str(&serde_json::json!({"type":"summary","complete":report.complete,"stop_reason":report.stop_reason,"pending_urls":report.pending_urls,"total_pages":report.total_pages}).to_string());
+    out.push('\n');
     out
 }
 
@@ -590,6 +375,9 @@ mod tests {
     #[test]
     fn test_format_crawl_report_markdown() {
         let report = SiteCrawlReport {
+            complete: true,
+            stop_reason: crate::workflow::StopReason::Exhausted,
+            pending_urls: 0,
             seed_url: "https://example.com/docs".to_string(),
             total_pages: 2,
             total_tokens: 350,

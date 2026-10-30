@@ -227,7 +227,7 @@ impl DiscourseAdapter {
                 .await
             {
                 if resp.status().is_success() {
-                    if let Ok(val) = resp.json::<Value>().await {
+                    if let Ok(val) = fetcher.read_json::<Value>(resp).await {
                         let (content, title) = Self::parse_topic_json(&val, &domain, topic_id);
                         let token_count = count_tokens(&content, options.tokenizer);
                         return Ok(PageDocument {
@@ -266,7 +266,7 @@ impl DiscourseAdapter {
 
         // 2. HTML fallback if JSON API blocked or protected
         let resp = fetcher.get(url).send().await?;
-        let html = resp.text().await?;
+        let html = fetcher.read_text(resp).await?;
         let (content, title) = Self::parse_topic_html(&html, &domain, topic_id);
         let token_count = count_tokens(&content, options.tokenizer);
 

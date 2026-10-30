@@ -234,7 +234,7 @@ async fn test_mcp_protocol_lifecycle() {
     let tools_array = tools_val["tools"]
         .as_array()
         .expect("Tools should be an array");
-    assert_eq!(tools_array.len(), 23);
+    assert_eq!(tools_array.len(), 26);
 
     let tool_names: Vec<&str> = tools_array
         .iter()

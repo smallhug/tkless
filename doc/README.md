@@ -1,6 +1,6 @@
 # TkLess 开发与设计文档中心
 
-本目录说明当前工作区的使用方式、协议、开发标准与验证记录。文档对齐日期：2026-10-28；版本与迁移另见 [工作区更新说明](../RELEASE_NOTES.md) 和 [变更日志](../CHANGELOG.md)。
+本目录说明当前工作区的使用方式、协议、开发标准与验证记录。文档对齐日期：2026-10-30；版本与迁移另见 [工作区更新说明](../RELEASE_NOTES.md) 和 [变更日志](../CHANGELOG.md)。
 > **Spend less tokens, perceive more web.**
 
 ---
@@ -17,6 +17,8 @@
 | **[06-bing-search.md](./06-bing-search.md)** | **Bing 搜索** | HTTPS 连接预检、平台定向、精简参数与验证记录。 |
 | **[07-batch-jobs.md](./07-batch-jobs.md)** | **批量任务** | JSONL 流式输出、检查点、失败重试、单主机调度与 MCP 流式扩展。 |
 | **[08-skills-sh.md](./08-skills-sh.md)** | **Skills.sh** | 技能详情、折叠正文恢复、仓库列表、站内搜索、榜单自动翻页及公开接口边界。 |
+| **[09-security-hardening.md](./09-security-hardening.md)** | **安全加固** | 凭据隔离、HTML 转义、下载校验、资源上限及尚未覆盖的边界。 |
+| **[10-collection-workflows.md](./10-collection-workflows.md)** | **采集工作流** | 通用分页、列表详情、快照增量、爬虫恢复与预算、受限浏览器步骤。 |
 
 ---
 

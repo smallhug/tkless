@@ -35,7 +35,14 @@ async fn bing_browser_rendering_closes_only_its_task_tab() {
                 if n == 0 {
                     return;
                 }
-                let body="<title>Bing fixture</title><ol id='b_results'><li class='b_algo'><h2><a href='https://example.com/rust'>Rust language</a></h2><div class='b_caption'><p>Rust programming language fixture.</p></div></li></ol>";
+                let request = String::from_utf8_lossy(&bytes[..n]);
+                let body = if request.starts_with("GET /interactive ") {
+                    r#"<input id="query"><button id="expand" type="button" onclick="document.querySelector('#result').textContent=document.querySelector('#query').value;document.querySelector('#result').hidden=false">Expand</button><p id="result" hidden></p><a id="next" href="/next">Next</a>"#
+                } else if request.starts_with("GET /next ") {
+                    "<h1 id=loaded>Next page loaded</h1>"
+                } else {
+                    "<title>Bing fixture</title><ol id='b_results'><li class='b_algo'><h2><a href='https://example.com/rust'>Rust language</a></h2><div class='b_caption'><p>Rust programming language fixture.</p></div></li></ol>"
+                };
                 let response=format!("HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nCache-Control: no-store\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{body}",body.len());
                 let _ = stream.write_all(response.as_bytes()).await;
             });
@@ -61,7 +68,7 @@ async fn bing_browser_rendering_closes_only_its_task_tab() {
             .arg("about:blank")
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
+            .stderr(Stdio::inherit())
             .spawn()
             .unwrap(),
     );
@@ -90,6 +97,7 @@ async fn bing_browser_rendering_closes_only_its_task_tab() {
     }
     let initial = initial.expect("The unrelated initial browser tab must exist");
     let options = CdpOptions {
+        allow_private_addresses: true,
         endpoint: endpoint.clone(),
         wait_ms: Some(100),
         timeout_ms: Some(30_000),
@@ -105,6 +113,67 @@ async fn bing_browser_rendering_closes_only_its_task_tab() {
     let results = tkless_core::search::parse_bing_html_with_query(&html, "", 10).unwrap();
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].engine, "bing");
+    let screenshot = tkless_core::capture_screenshot_via_cdp(&origin, &options, Some("png"))
+        .await
+        .unwrap();
+    assert!(screenshot.starts_with(b"\x89PNG\r\n\x1a\n"));
+    let engine = tkless_core::TklessEngine::with_options(tkless_core::FetchOptions {
+        allow_private_addresses: true,
+        ..Default::default()
+    })
+    .unwrap();
+    use tkless_core::{
+        browser_workflow::{browse_page, BrowserPlan},
+        cdp::BrowserStep,
+    };
+    let mut plan = BrowserPlan {
+        endpoint: Some(endpoint.clone()),
+        steps: vec![
+            BrowserStep::WaitFor {
+                selector: "#query".into(),
+                timeout_ms: 3000,
+            },
+            BrowserStep::Fill {
+                selector: "#query".into(),
+                value: "Rust 工具 \"quoted\"".into(),
+            },
+            BrowserStep::Click {
+                selector: "#expand".into(),
+            },
+            BrowserStep::WaitFor {
+                selector: "#result".into(),
+                timeout_ms: 3000,
+            },
+        ],
+        ..Default::default()
+    };
+    let doc = browse_page(
+        &engine,
+        &format!("{origin}/interactive"),
+        &plan,
+        &tkless_core::ExtractionOptions::default(),
+    )
+    .await
+    .unwrap();
+    assert!(doc.content.contains("Rust 工具"));
+    plan.steps = vec![
+        BrowserStep::Click {
+            selector: "#next".into(),
+        },
+        BrowserStep::WaitFor {
+            selector: "#loaded".into(),
+            timeout_ms: 3000,
+        },
+    ];
+    let doc = browse_page(
+        &engine,
+        &format!("{origin}/interactive"),
+        &plan,
+        &tkless_core::ExtractionOptions::default(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(doc.final_url, format!("{origin}/next"));
     let remaining = client
         .get(format!("{endpoint}/json/list"))
         .send()

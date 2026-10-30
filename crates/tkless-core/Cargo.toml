@@ -2,6 +2,7 @@
 name = "tkless-core"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 description = "Core engine for tkless web content extraction"
@@ -35,6 +36,9 @@ lopdf = "0.34"
 [features]
 default = ["tiktoken"]
 tiktoken = ["dep:tiktoken-rs"]
+
+[lints]
+workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

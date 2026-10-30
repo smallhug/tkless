@@ -155,7 +155,7 @@ impl TwitterAdapter {
                 .await?;
 
             if resp.status().is_success() {
-                if let Ok(val) = resp.json::<Value>().await {
+                if let Ok(val) = fetcher.read_json::<Value>(resp).await {
                     let (content, title, author) = Self::parse_tweet_json(&val, &tweet_id);
                     let token_count = count_tokens(&content, options.tokenizer);
 
@@ -195,7 +195,7 @@ impl TwitterAdapter {
 
         // 2. Fallback to standard web fetching if Syndication fails
         let web_resp = fetcher.get(url).send().await?;
-        let html = web_resp.text().await?;
+        let html = fetcher.read_text(web_resp).await?;
         let cleaned = crate::cleaner::clean_html(&html, Some(url.as_str()), options.mode)?;
         let converter = crate::markdown::MarkdownConverter::new();
         let content =

@@ -1,3 +1,4 @@
+use crate::paths::distinct;
 use crate::{cli::CliFormat, output};
 use anyhow::{Context, Result};
 use std::{
@@ -18,29 +19,6 @@ pub struct BatchOutput<'a> {
     pub path: Option<&'a Path>,
     pub input: Option<&'a Path>,
     pub quiet: bool,
-}
-
-fn resolved(path: &Path) -> std::io::Result<PathBuf> {
-    if path.exists() {
-        return path.canonicalize();
-    }
-    let absolute = std::path::absolute(path)?;
-    let parent = absolute.parent().unwrap_or(Path::new("."));
-    Ok(parent
-        .canonicalize()?
-        .join(absolute.file_name().unwrap_or_default()))
-}
-
-fn distinct(left: Option<&Path>, right: Option<&Path>) -> Result<()> {
-    if let (Some(left), Some(right)) = (left, right) {
-        if resolved(left)? == resolved(right)? {
-            return Err(TklessError::InvalidArgument(
-                "Batch input, output and checkpoint must be different files".into(),
-            )
-            .into());
-        }
-    }
-    Ok(())
 }
 
 struct JsonlSink {

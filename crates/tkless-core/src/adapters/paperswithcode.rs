@@ -164,7 +164,7 @@ impl PapersWithCodeAdapter {
         debug!(url = %url, "Executing Papers With Code adapter extraction");
 
         let resp = fetcher.get(url).send().await?;
-        let html = resp.text().await?;
+        let html = fetcher.read_text(resp).await?;
 
         let (content, title, author) = Self::parse_paper_html(&html, url.as_str());
         let token_count = count_tokens(&content, options.tokenizer);
