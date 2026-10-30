@@ -7,6 +7,7 @@
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::{LazyLock, Mutex};
@@ -248,6 +249,15 @@ pub struct CdpOptions {
     pub auto_scroll: Option<bool>,
     /// Maximum scroll increments for auto-scroll. Default: 5.
     pub scroll_count: Option<u32>,
+    /// Include open shadow roots in the extracted snapshot. Default: false.
+    #[serde(default)]
+    pub include_shadow_dom: bool,
+    /// Inline same-origin iframe content in the extracted snapshot. Default: false.
+    #[serde(default)]
+    pub include_frames: bool,
+    /// Opt-in capture of XHR/fetch JSON responses. Default: disabled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capture: Option<NetworkCapture>,
 }
 
 impl Default for CdpOptions {
@@ -266,8 +276,84 @@ impl Default for CdpOptions {
             block_resources: Some(true),
             auto_scroll: Some(false),
             scroll_count: Some(5),
+            include_shadow_dom: false,
+            include_frames: false,
+            capture: None,
         }
     }
+}
+
+/// Opt-in, bounded capture of XHR/fetch JSON responses.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct NetworkCapture {
+    /// MIME prefixes to keep, e.g. `["application/json"]`.
+    pub mime_prefixes: Vec<String>,
+    pub max_responses: usize,
+    pub max_body_bytes: usize,
+    /// Restrict capture to the navigation origin. Default: true.
+    pub same_origin_only: bool,
+}
+
+impl Default for NetworkCapture {
+    fn default() -> Self {
+        Self {
+            mime_prefixes: vec!["application/json".into()],
+            max_responses: crate::limits::BROWSER_CAPTURE_DEFAULT_RESPONSES,
+            max_body_bytes: crate::limits::BROWSER_CAPTURE_DEFAULT_BODY_BYTES,
+            same_origin_only: true,
+        }
+    }
+}
+
+impl NetworkCapture {
+    pub fn validate(&self) -> Result<(), TklessError> {
+        if self.mime_prefixes.is_empty()
+            || self.mime_prefixes.len() > crate::limits::BROWSER_CAPTURE_MAX_MIME_PREFIXES
+            || self
+                .mime_prefixes
+                .iter()
+                .any(|prefix| prefix.trim().is_empty() || prefix.len() > 64)
+        {
+            return Err(TklessError::InvalidArgument(
+                "capture.mime_prefixes supports 1..8 non-empty entries of at most 64 bytes".into(),
+            ));
+        }
+        if !(1..=crate::limits::BROWSER_CAPTURE_MAX_RESPONSES).contains(&self.max_responses) {
+            return Err(TklessError::InvalidArgument(format!(
+                "capture.max_responses must be 1..{}",
+                crate::limits::BROWSER_CAPTURE_MAX_RESPONSES
+            )));
+        }
+        if !(crate::limits::BROWSER_CAPTURE_MIN_BODY_BYTES
+            ..=crate::limits::BROWSER_CAPTURE_MAX_BODY_BYTES)
+            .contains(&self.max_body_bytes)
+        {
+            return Err(TklessError::InvalidArgument(format!(
+                "capture.max_body_bytes must be {}..={}",
+                crate::limits::BROWSER_CAPTURE_MIN_BODY_BYTES,
+                crate::limits::BROWSER_CAPTURE_MAX_BODY_BYTES
+            )));
+        }
+        Ok(())
+    }
+
+    fn matches_mime(&self, mime_type: &str) -> bool {
+        let mime_type = mime_type.to_ascii_lowercase();
+        self.mime_prefixes
+            .iter()
+            .any(|prefix| mime_type.starts_with(&prefix.trim().to_ascii_lowercase()))
+    }
+}
+
+/// A single XHR/fetch response captured during a browser session.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CapturedResponse {
+    pub url: String,
+    pub status: u16,
+    pub mime_type: String,
+    pub body: String,
+    pub truncated: bool,
 }
 
 /// Target description returned by Chrome DevTools HTTP `/json/new` or `/json/list`.
@@ -301,6 +387,10 @@ pub async fn fetch_html_via_cdp(url: &str, options: &CdpOptions) -> Result<Strin
 pub struct RenderedPage {
     pub html: String,
     pub final_url: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub network: Vec<CapturedResponse>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scroll_stopped_reason: Option<String>,
 }
 
 pub async fn fetch_rendered_page(
@@ -582,15 +672,17 @@ async fn connect_and_extract_html(
         .await;
     }
 
-    steps::execute(&mut ws_stream, &mut guard, &mut message_id, &options.steps).await?;
+    let scroll_reason =
+        steps::execute(&mut ws_stream, &mut guard, &mut message_id, &options.steps).await?;
     // 7. Capture content and its actual browser URL in the same evaluation.
+    let expression = snapshot_expression(options.include_shadow_dom, options.include_frames);
     let eval_cmd_id = message_id;
     send_cdp_cmd(
         &mut ws_stream,
         eval_cmd_id,
         "Runtime.evaluate",
         json!({
-            "expression": "({html: document.documentElement.outerHTML, final_url: location.href})",
+            "expression": expression,
             "returnByValue": true,
             "awaitPromise": true,
         }),
@@ -627,7 +719,78 @@ async fn connect_and_extract_html(
             "Blocked browser navigation: {url}"
         )));
     }
-    Ok(html)
+    if html.html.len() > crate::limits::BROWSER_MAX_SNAPSHOT_BYTES {
+        return Err(TklessError::ResponseTooLarge {
+            limit: crate::limits::BROWSER_MAX_SNAPSHOT_BYTES,
+            received: html.html.len(),
+        });
+    }
+    let mut page = html;
+    if options.capture.is_some() {
+        let _ = timeout(Duration::from_millis(800), async {
+            while guard.capture_in_flight() {
+                if guard.next(&mut ws_stream).await.is_none() {
+                    break;
+                }
+            }
+        })
+        .await;
+    }
+    page.network = guard.take_captures();
+    page.scroll_stopped_reason = scroll_reason;
+    Ok(page)
+}
+
+/// Builds the fixed snapshot expression. Shadow roots and iframes are opt-in
+/// because inlining them changes the serialized DOM.
+fn snapshot_expression(include_shadow_dom: bool, include_frames: bool) -> String {
+    if !include_shadow_dom && !include_frames {
+        return "({html: document.documentElement.outerHTML, final_url: location.href})".into();
+    }
+    format!(
+        r#"(() => {{
+            const includeShadow = {include_shadow_dom};
+            const includeFrames = {include_frames};
+            const VOID = new Set(['area','base','br','col','embed','hr','img','input','link','meta','param','source','track','wbr']);
+            const escText = (s) => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+            const escAttr = (s) => s.replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+            const out = [];
+            const walk = (node) => {{
+                if (node.nodeType === 3) {{ out.push(escText(node.nodeValue || '')); return; }}
+                if (node.nodeType !== 1) {{ return; }}
+                const tag = node.tagName.toLowerCase();
+                if (includeFrames && tag === 'iframe') {{
+                    let inlined = false;
+                    try {{
+                        const frame = node.contentDocument;
+                        if (frame && frame.documentElement) {{
+                            out.push('<div data-frame-url="' + escAttr(node.getAttribute('src') || '') + '">');
+                            walk(frame.documentElement);
+                            out.push('</div>');
+                            inlined = true;
+                        }}
+                    }} catch (error) {{}}
+                    if (inlined) {{ return; }}
+                }}
+                out.push('<' + tag);
+                for (const attribute of node.attributes) {{
+                    out.push(' ' + attribute.name + '="' + escAttr(attribute.value) + '"');
+                }}
+                out.push('>');
+                if (VOID.has(tag)) {{ return; }}
+                if (tag === 'script' || tag === 'style') {{
+                    out.push(node.textContent || '');
+                }} else if (includeShadow && node.shadowRoot) {{
+                    for (const child of node.shadowRoot.childNodes) {{ walk(child); }}
+                }} else {{
+                    for (const child of node.childNodes) {{ walk(child); }}
+                }}
+                out.push('</' + tag + '>');
+            }};
+            walk(document.documentElement);
+            return {{html: out.join(''), final_url: location.href}};
+        }})()"#
+    )
 }
 
 type BrowserSocket =
@@ -640,6 +803,127 @@ struct BrowserRequestGuard {
     fetcher: crate::fetcher::Fetcher,
     next_id: u64,
     pending: Option<Value>,
+    capture: Option<CaptureState>,
+}
+
+struct PendingCapture {
+    url: String,
+    status: u16,
+    mime_type: String,
+}
+
+/// Bounded, opt-in accumulator for XHR/fetch responses.
+#[derive(Default)]
+struct CaptureState {
+    policy: NetworkCapture,
+    origin: Option<String>,
+    sensitive: HashSet<String>,
+    pending: HashMap<String, PendingCapture>,
+    bodies: HashMap<u64, String>,
+    responses: Vec<CapturedResponse>,
+}
+
+impl CaptureState {
+    fn new(policy: NetworkCapture, origin: Option<String>) -> Self {
+        Self {
+            policy,
+            origin,
+            ..Default::default()
+        }
+    }
+
+    fn observe_request(&mut self, params: &Value) {
+        let Some(request_id) = params["requestId"].as_str() else {
+            return;
+        };
+        let sensitive = params["request"]["headers"]
+            .as_object()
+            .is_some_and(|headers| {
+                headers
+                    .keys()
+                    .any(|name| crate::fetcher::is_sensitive_header(name))
+            });
+        if sensitive {
+            self.sensitive.insert(request_id.to_string());
+        }
+    }
+
+    fn observe_response(&mut self, params: &Value) {
+        let Some(request_id) = params["requestId"].as_str() else {
+            return;
+        };
+        if !matches!(params["type"].as_str(), Some("XHR" | "Fetch")) {
+            return;
+        }
+        let url = params["response"]["url"].as_str().unwrap_or_default();
+        let mime_type = params["response"]["mimeType"].as_str().unwrap_or_default();
+        if !self.policy.matches_mime(mime_type) || self.sensitive.contains(request_id) {
+            return;
+        }
+        if self.policy.same_origin_only {
+            let Some(origin) = &self.origin else {
+                return;
+            };
+            match Url::parse(url) {
+                Ok(parsed) if &parsed.origin().ascii_serialization() == origin => {}
+                _ => return,
+            }
+        }
+        self.pending.insert(
+            request_id.to_string(),
+            PendingCapture {
+                url: url.to_string(),
+                status: params["response"]["status"].as_u64().unwrap_or(0) as u16,
+                mime_type: mime_type.to_string(),
+            },
+        );
+    }
+
+    fn should_fetch(&self, request_id: &str) -> bool {
+        self.pending.contains_key(request_id)
+            && !self.sensitive.contains(request_id)
+            && self.responses.len() + self.bodies.len() < self.policy.max_responses
+    }
+
+    fn drop_request(&mut self, request_id: &str) {
+        self.pending.remove(request_id);
+    }
+
+    fn complete(&mut self, request_id: &str, value: &Value) {
+        let Some(meta) = self.pending.remove(request_id) else {
+            return;
+        };
+        if value.get("error").is_some()
+            || value
+                .pointer("/result/base64Encoded")
+                .and_then(Value::as_bool)
+                == Some(true)
+        {
+            return;
+        }
+        let Some(body) = value.pointer("/result/body").and_then(Value::as_str) else {
+            return;
+        };
+        let (body, truncated) = truncate_utf8(body, self.policy.max_body_bytes);
+        self.responses.push(CapturedResponse {
+            url: meta.url,
+            status: meta.status,
+            mime_type: meta.mime_type,
+            body,
+            truncated,
+        });
+    }
+}
+
+fn truncate_utf8(value: &str, limit: usize) -> (String, bool) {
+    if value.len() <= limit {
+        return (value.to_string(), false);
+    }
+    let mut end = limit;
+    while end > 0 && !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    (value[..end].to_string(), true)
 }
 
 impl BrowserRequestGuard {
@@ -698,7 +982,28 @@ impl BrowserRequestGuard {
             fetcher,
             next_id: ENABLE_ID + 2,
             pending: None,
+            capture: options.capture.as_ref().map(|policy| {
+                CaptureState::new(
+                    policy.clone(),
+                    Url::parse(target_url)
+                        .ok()
+                        .map(|url| url.origin().ascii_serialization()),
+                )
+            }),
         })
+    }
+
+    fn capture_in_flight(&self) -> bool {
+        self.capture
+            .as_ref()
+            .is_some_and(|capture| !capture.bodies.is_empty())
+    }
+
+    fn take_captures(&mut self) -> Vec<CapturedResponse> {
+        self.capture
+            .as_mut()
+            .map(|capture| std::mem::take(&mut capture.responses))
+            .unwrap_or_default()
     }
 
     async fn next(
@@ -713,62 +1018,115 @@ impl BrowserRequestGuard {
             };
             if let Ok(Message::Text(text)) = &message {
                 if let Ok(value) = serde_json::from_str::<Value>(text) {
-                    if value.get("method").and_then(Value::as_str) == Some("Fetch.requestPaused") {
-                        self.pending = Some(value.clone());
-                        let params = &value["params"];
-                        let mut allowed = match params["request"]["url"]
-                            .as_str()
-                            .and_then(|s| Url::parse(s).ok())
-                        {
-                            Some(url) => matches!(
-                                timeout(Duration::from_secs(5), self.fetcher.validate_ssrf(&url))
-                                    .await,
-                                Ok(Ok(()))
-                            ),
-                            None => false,
-                        };
-                        if self.read_only_requests
-                            && !matches!(
-                                params["request"]["method"].as_str(),
-                                Some("GET" | "HEAD" | "OPTIONS")
-                            )
-                        {
-                            allowed = false;
+                    if let Some(id) = value.get("id").and_then(Value::as_u64) {
+                        if let Some(capture) = &mut self.capture {
+                            if let Some(request_id) = capture.bodies.remove(&id) {
+                                capture.complete(&request_id, &value);
+                                continue;
+                            }
                         }
-                        if params["resourceType"] == "Document" {
-                            if let Some(origin) = &self.navigation_origin {
-                                if params["request"]["url"]
-                                    .as_str()
-                                    .and_then(|s| Url::parse(s).ok())
-                                    .is_none_or(|u| u.origin().ascii_serialization() != *origin)
-                                {
-                                    allowed = false;
+                    }
+                    match value.get("method").and_then(Value::as_str) {
+                        Some("Fetch.requestPaused") => {
+                            self.pending = Some(value.clone());
+                            let params = &value["params"];
+                            let mut allowed = match params["request"]["url"]
+                                .as_str()
+                                .and_then(|s| Url::parse(s).ok())
+                            {
+                                Some(url) => matches!(
+                                    timeout(
+                                        Duration::from_secs(5),
+                                        self.fetcher.validate_ssrf(&url)
+                                    )
+                                    .await,
+                                    Ok(Ok(()))
+                                ),
+                                None => false,
+                            };
+                            if self.read_only_requests
+                                && !matches!(
+                                    params["request"]["method"].as_str(),
+                                    Some("GET" | "HEAD" | "OPTIONS")
+                                )
+                            {
+                                allowed = false;
+                            }
+                            if params["resourceType"] == "Document" {
+                                if let Some(origin) = &self.navigation_origin {
+                                    if params["request"]["url"]
+                                        .as_str()
+                                        .and_then(|s| Url::parse(s).ok())
+                                        .is_none_or(|u| u.origin().ascii_serialization() != *origin)
+                                    {
+                                        allowed = false;
+                                    }
+                                }
+                                if !allowed {
+                                    self.blocked_navigation =
+                                        params["request"]["url"].as_str().map(str::to_owned);
                                 }
                             }
-                            if !allowed {
-                                self.blocked_navigation =
-                                    params["request"]["url"].as_str().map(str::to_owned);
+                            let (method, args) = if allowed {
+                                (
+                                    "Fetch.continueRequest",
+                                    json!({"requestId":params["requestId"]}),
+                                )
+                            } else {
+                                (
+                                    "Fetch.failRequest",
+                                    json!({"requestId":params["requestId"],"errorReason":"BlockedByClient"}),
+                                )
+                            };
+                            self.next_id += 1;
+                            if let Err(e) = send_cdp_cmd(ws, self.next_id, method, args).await {
+                                return Some(Err(tokio_tungstenite::tungstenite::Error::Io(
+                                    std::io::Error::other(e.to_string()),
+                                )));
+                            }
+                            self.pending = None;
+                            continue;
+                        }
+                        Some("Network.requestWillBeSent") => {
+                            if let Some(capture) = &mut self.capture {
+                                capture.observe_request(&value["params"]);
                             }
                         }
-                        let (method, args) = if allowed {
-                            (
-                                "Fetch.continueRequest",
-                                json!({"requestId":params["requestId"]}),
-                            )
-                        } else {
-                            (
-                                "Fetch.failRequest",
-                                json!({"requestId":params["requestId"],"errorReason":"BlockedByClient"}),
-                            )
-                        };
-                        self.next_id += 1;
-                        if let Err(e) = send_cdp_cmd(ws, self.next_id, method, args).await {
-                            return Some(Err(tokio_tungstenite::tungstenite::Error::Io(
-                                std::io::Error::other(e.to_string()),
-                            )));
+                        Some("Network.responseReceived") => {
+                            if let Some(capture) = &mut self.capture {
+                                capture.observe_response(&value["params"]);
+                            }
                         }
-                        self.pending = None;
-                        continue;
+                        Some("Network.loadingFinished") => {
+                            let request_id =
+                                value["params"]["requestId"].as_str().map(str::to_owned);
+                            let should_fetch = match (&self.capture, &request_id) {
+                                (Some(capture), Some(request_id)) => {
+                                    capture.should_fetch(request_id)
+                                }
+                                _ => false,
+                            };
+                            if let (Some(request_id), true) = (request_id, should_fetch) {
+                                self.next_id += 1;
+                                let command_id = self.next_id;
+                                if send_cdp_cmd(
+                                    ws,
+                                    command_id,
+                                    "Network.getResponseBody",
+                                    json!({"requestId": request_id}),
+                                )
+                                .await
+                                .is_err()
+                                {
+                                    if let Some(capture) = &mut self.capture {
+                                        capture.drop_request(&request_id);
+                                    }
+                                } else if let Some(capture) = &mut self.capture {
+                                    capture.bodies.insert(command_id, request_id);
+                                }
+                            }
+                        }
+                        _ => {}
                     }
                 }
             }
@@ -1352,5 +1710,43 @@ mod tests {
         assert_eq!(custom_opts.block_resources, Some(false));
         assert_eq!(custom_opts.auto_scroll, Some(true));
         assert_eq!(custom_opts.scroll_count, Some(10));
+    }
+
+    #[test]
+    fn network_capture_bounds_are_enforced() {
+        assert!(NetworkCapture::default().validate().is_ok());
+        assert!(NetworkCapture {
+            max_responses: 0,
+            ..Default::default()
+        }
+        .validate()
+        .is_err());
+        assert!(NetworkCapture {
+            max_body_bytes: 10,
+            ..Default::default()
+        }
+        .validate()
+        .is_err());
+        assert!(NetworkCapture {
+            mime_prefixes: Vec::new(),
+            ..Default::default()
+        }
+        .validate()
+        .is_err());
+
+        let capture = NetworkCapture {
+            mime_prefixes: vec!["application/json".into(), "text/event-stream".into()],
+            ..Default::default()
+        };
+        assert!(capture.validate().is_ok());
+        assert!(capture.matches_mime("application/json; charset=utf-8"));
+        assert!(!capture.matches_mime("text/html"));
+    }
+
+    #[test]
+    fn capture_truncation_respects_utf8_boundaries() {
+        assert_eq!(truncate_utf8("abcdef", 3), ("abc".to_string(), true));
+        assert_eq!(truncate_utf8("a你", 2), ("a".to_string(), true));
+        assert_eq!(truncate_utf8("abc", 3), ("abc".to_string(), false));
     }
 }

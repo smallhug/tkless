@@ -13,6 +13,7 @@
 - 微信公众号公开内容采集：新增 `wechat` 命令与 `list_wechat_articles` MCP 工具，支持按名称发现、文章身份提取、关联合集与游标自动翻页，以及可选正文抓取。
 - 合集增加账号约束、跨页去重、数量/页数预算、续取入口及部分失败保留；明确区分合集范围完成与全账号历史，验证页不会作为成功正文返回。
 - 采集支持模板化请求：`CollectionConfig.request` 可配置 GET/POST/PUT、请求头与请求体，请求体可用 `{{page}}`、`{{offset}}`、`{{cursor}}`、`{{limit}}` 占位符，游标可放在请求体中；请求体上限 64 KiB，禁止在模板头中写凭据，模板请求不跟随重定向。
+- 浏览器工作流新增 `scroll_until_stable` 步骤、`include_shadow_dom`/`include_frames` 序列化选项，以及受条数与字节上限约束的 XHR/fetch 响应捕获（默认关闭，带凭据请求不捕获）。
 
 ### Fixed
 
