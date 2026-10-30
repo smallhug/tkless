@@ -1,5 +1,7 @@
 //! Binary self-upgrade mechanism from GitHub Releases.
 
+mod install;
+
 use anyhow::{bail, Context, Result};
 use sha2::{Digest, Sha256};
 use tkless_core::TklessEngine;
@@ -83,7 +85,19 @@ pub async fn run_upgrade(engine: &TklessEngine, args: &crate::cli::UpgradeArgs) 
         .context("下载链接缺失")?;
 
     eprintln!("[TkLess] 正在下载最新二进制: {download_url}...");
-    let bytes = download_release_bytes(engine, download_url).await?;
+    let expected_size = asset["size"]
+        .as_u64()
+        .context("Release 产物缺少 size 字段")?;
+    if expected_size == 0 || expected_size > install::MAX_BINARY_BYTES as u64 {
+        bail!("Release 产物为空或超过 100 MiB，拒绝更新");
+    }
+    let bytes = download_release_bytes(
+        engine,
+        download_url,
+        install::MAX_BINARY_BYTES,
+        Some(expected_size),
+    )
+    .await?;
     let expected = if let Some(digest) = asset
         .get("digest")
         .and_then(|v| v.as_str())
@@ -97,7 +111,7 @@ pub async fn run_upgrade(engine: &TklessEngine, args: &crate::cli::UpgradeArgs) 
         let checksum_url = checksum_asset["browser_download_url"]
             .as_str()
             .context("Missing checksum download URL")?;
-        let checksum_bytes = download_release_bytes(engine, checksum_url).await?;
+        let checksum_bytes = download_release_bytes(engine, checksum_url, 16 * 1024, None).await?;
         let checksum = std::str::from_utf8(&checksum_bytes).context("Invalid checksum encoding")?;
         checksum
             .split_whitespace()
@@ -110,98 +124,84 @@ pub async fn run_upgrade(engine: &TklessEngine, args: &crate::cli::UpgradeArgs) 
     let current_exe = std::env::current_exe().context("无法确定当前执行程序的物理路径")?;
     eprintln!("[TkLess] 当前执行程序路径: {}", current_exe.display());
 
-    #[cfg(target_os = "macos")]
-    {
-        let tmp_dmg = std::env::temp_dir().join(format!("tkless_upgrade_{}.dmg", uuid_simple()));
-        std::fs::write(&tmp_dmg, &bytes)?;
-        let mount_point = std::env::temp_dir().join(format!("tkless_mnt_{}", uuid_simple()));
-        let _ = std::fs::create_dir_all(&mount_point);
-
-        let attach_status = std::process::Command::new("hdiutil")
-            .args([
-                "attach",
-                tmp_dmg.to_str().unwrap(),
-                "-mountpoint",
-                mount_point.to_str().unwrap(),
-                "-nobrowse",
-                "-quiet",
-            ])
-            .status()?;
-        if !attach_status.success() {
-            let _ = std::fs::remove_file(&tmp_dmg);
-            bail!("无法挂载下载的 DMG 镜像包");
-        }
-
-        let inner_bin = mount_point.join("tkless");
-        let temp_exe = current_exe.with_extension("new.tmp");
-        std::fs::copy(&inner_bin, &temp_exe)?;
-
-        let _ = std::process::Command::new("hdiutil")
-            .args(["detach", mount_point.to_str().unwrap(), "-quiet"])
-            .status();
-        let _ = std::fs::remove_file(&tmp_dmg);
-        let _ = std::fs::remove_dir_all(&mount_point);
-
-        std::fs::rename(&temp_exe, &current_exe)?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let _ = std::fs::set_permissions(&current_exe, std::fs::Permissions::from_mode(0o755));
-        }
+    let version = latest_version.to_owned();
+    let backup = tokio::task::spawn_blocking(move || {
+        #[cfg(target_os = "macos")]
+        let (bytes, expected) = {
+            let binary = extract_dmg_binary(&bytes)?;
+            let digest = format!("{:x}", Sha256::digest(&binary));
+            (binary, digest)
+        };
+        install::install(&current_exe, &bytes, &expected, &version)
+    })
+    .await
+    .context("升级安装任务异常")??;
+    if let Some(path) = backup {
+        eprintln!(
+            "[TkLess] 原程序仍被进程占用，备份保留在：{}",
+            path.display()
+        );
     }
-
-    #[cfg(not(target_os = "macos"))]
-    {
-        let temp_exe = current_exe.with_extension("new.tmp");
-        std::fs::write(&temp_exe, &bytes)?;
-
-        #[cfg(target_os = "windows")]
-        {
-            let old_exe = current_exe.with_extension("old.tmp");
-            let _ = std::fs::remove_file(&old_exe);
-            std::fs::rename(&current_exe, &old_exe)
-                .context("重命名当前运行中程序失败，可能被杀毒软件或其它进程锁定")?;
-            if let Err(e) = std::fs::rename(&temp_exe, &current_exe) {
-                // Rollback on failure
-                let _ = std::fs::rename(&old_exe, &current_exe);
-                return Err(e).context("替换新版本二进制失败");
-            }
-            let _ = std::fs::remove_file(&old_exe);
-        }
-
-        #[cfg(not(target_os = "windows"))]
-        {
-            std::fs::rename(&temp_exe, &current_exe).context("替换新版本二进制失败")?;
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                let _ =
-                    std::fs::set_permissions(&current_exe, std::fs::Permissions::from_mode(0o755));
-            }
-        }
-    }
-
-    println!("恭喜！TkLess 已成功自动升级至 {}！", tag_name);
+    println!("TkLess 已成功升级至 {tag_name}，文件完整性与启动版本检查均已通过。");
     Ok(())
 }
 
 #[cfg(target_os = "macos")]
-fn uuid_simple() -> u128 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos()
+fn extract_dmg_binary(bytes: &[u8]) -> Result<Vec<u8>> {
+    use std::io::Read;
+    let stage = install::Stage::new(&std::env::temp_dir())?;
+    let dmg = stage.path().join("download.dmg");
+    let mount = stage.path().join("mount");
+    std::fs::write(&dmg, bytes)?;
+    std::fs::create_dir(&mount)?;
+    let status = std::process::Command::new("hdiutil")
+        .arg("attach")
+        .arg(&dmg)
+        .arg("-mountpoint")
+        .arg(&mount)
+        .args(["-readonly", "-nobrowse", "-quiet"])
+        .status()?;
+    if !status.success() {
+        bail!("无法挂载下载的 DMG 镜像包");
+    }
+    let extracted = (|| -> Result<Vec<u8>> {
+        let file = std::fs::File::open(mount.join("tkless"))?;
+        let mut binary = Vec::new();
+        file.take(install::MAX_BINARY_BYTES as u64 + 1)
+            .read_to_end(&mut binary)?;
+        install::validate_binary(&binary)?;
+        Ok(binary)
+    })();
+    let detached = std::process::Command::new("hdiutil")
+        .arg("detach")
+        .arg(&mount)
+        .arg("-quiet")
+        .status()?;
+    if !detached.success() {
+        bail!("无法卸载 DMG，停止更新；挂载点：{}", mount.display());
+    }
+    extracted
 }
 
 /// Public release assets may redirect; validate each hop and bound the download.
-async fn download_release_bytes(engine: &TklessEngine, url: &str) -> Result<Vec<u8>> {
+async fn download_release_bytes(
+    engine: &TklessEngine,
+    url: &str,
+    limit: usize,
+    expected_size: Option<u64>,
+) -> Result<Vec<u8>> {
     let mut current = url::Url::parse(url)?;
     for _ in 0..=10 {
         if current.scheme() != "https" {
             bail!("Release downloads require HTTPS");
         }
         engine.fetcher().validate_ssrf(&current).await?;
-        let mut response = engine.client().get(current.clone()).send().await?;
+        let mut response = engine
+            .client()
+            .get(current.clone())
+            .header(reqwest::header::ACCEPT_ENCODING, "identity")
+            .send()
+            .await?;
         if response.status().is_redirection() {
             let location = response
                 .headers()
@@ -212,19 +212,41 @@ async fn download_release_bytes(engine: &TklessEngine, url: &str) -> Result<Vec<
             continue;
         }
         response.error_for_status_ref()?;
+        if response.status() != reqwest::StatusCode::OK {
+            bail!("Release 下载未返回完整的 HTTP 200 响应");
+        }
+        let content_length = response.content_length();
+        if content_length.is_some_and(|size| size > limit as u64) {
+            bail!("Release 响应超过大小限制");
+        }
         let mut bytes = Vec::new();
         while let Some(chunk) = response.chunk().await? {
-            if bytes.len().saturating_add(chunk.len()) > 100 * 1024 * 1024 {
-                bail!("Release asset exceeds 100 MB");
+            if bytes.len().saturating_add(chunk.len()) > limit {
+                bail!("Release 响应超过大小限制");
             }
             bytes.extend_from_slice(&chunk);
         }
+        validate_download_size(bytes.len(), expected_size.or(content_length))?;
         return Ok(bytes);
     }
     bail!("Too many release download redirects")
 }
 
+fn validate_download_size(actual: usize, expected: Option<u64>) -> Result<()> {
+    if actual == 0 {
+        bail!("下载结果为空，拒绝替换程序");
+    }
+    if expected.is_some_and(|size| size != actual as u64) {
+        bail!(
+            "下载文件大小不匹配：预期 {:?} 字节，实际 {actual} 字节",
+            expected
+        );
+    }
+    Ok(())
+}
+
 fn verify_sha256(bytes: &[u8], expected: &str) -> Result<()> {
+    validate_download_size(bytes.len(), None)?;
     if expected.len() != 64 || !expected.bytes().all(|b| b.is_ascii_hexdigit()) {
         bail!("Invalid SHA-256 checksum");
     }
@@ -244,5 +266,46 @@ mod tests {
         assert!(verify_sha256(b"release", &digest).is_ok());
         assert!(verify_sha256(b"corrupted", &digest).is_err());
         assert!(verify_sha256(b"release", "bad").is_err());
+        let empty_hash = format!("{:x}", Sha256::digest(b""));
+        assert!(verify_sha256(b"", &empty_hash).is_err());
+    }
+
+    #[test]
+    fn rejects_empty_and_incomplete_downloads() {
+        assert!(validate_download_size(0, Some(0)).is_err());
+        assert!(validate_download_size(64, Some(128)).is_err());
+        assert!(validate_download_size(128, Some(64)).is_err());
+        assert!(validate_download_size(128, Some(128)).is_ok());
+    }
+
+    #[tokio::test]
+    async fn legacy_nonfollowing_client_receives_empty_redirect_body() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = [0; 4096];
+            let received = stream.read(&mut request).await.unwrap();
+            assert!(received > 0);
+            stream.write_all(b"HTTP/1.1 302 Found\r\nLocation: https://example.com/asset\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await.unwrap();
+        });
+        let engine = TklessEngine::with_options(tkless_core::FetchOptions {
+            allow_private_addresses: true,
+            ..Default::default()
+        })
+        .unwrap();
+        let response = engine
+            .client()
+            .get(format!("http://{address}/asset"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::FOUND);
+        let bytes = response.bytes().await.unwrap();
+        assert!(bytes.is_empty());
+        assert!(validate_download_size(bytes.len(), Some(1024)).is_err());
+        assert!(install::validate_binary(&bytes).is_err());
+        server.await.unwrap();
     }
 }
