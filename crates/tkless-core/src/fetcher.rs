@@ -31,6 +31,7 @@ pub struct Fetcher {
     search_preflight: crate::search_preflight::HttpState,
     credentials: crate::credentials::CredentialsFile,
     retry_budget: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    cookie_jar: Option<std::sync::Arc<crate::cookie_jar::CookieJar>>,
 }
 
 impl Fetcher {
@@ -96,12 +97,19 @@ impl Fetcher {
         let client = client_builder.build()?;
 
         let retry_budget = options.max_total_retries.map(u64::from).unwrap_or(u64::MAX);
+        let cookie_jar = match options.cookie_jar.as_deref() {
+            Some(path) => Some(std::sync::Arc::new(crate::cookie_jar::CookieJar::open(
+                path,
+            )?)),
+            None => None,
+        };
         Ok(Self {
             client,
             options,
             search_preflight: Default::default(),
             credentials: crate::credentials::load(),
             retry_budget: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(retry_budget)),
+            cookie_jar,
         })
     }
 
@@ -294,12 +302,27 @@ impl Fetcher {
             None
         };
 
-        match (resolved_file_cookie, resolved_cli_cookie) {
+        let explicit = match (resolved_file_cookie, resolved_cli_cookie) {
             (Some(fc), Some(cc)) => Some(merge_cookies(&fc, &cc)),
             (Some(fc), None) => Some(fc),
             (None, Some(cc)) => Some(cc),
             (None, None) => detect_platform_from_url(url.as_str())
                 .and_then(|platform| self.credentials.get(platform).cloned()),
+        };
+        let jar_cookie = self.cookie_jar.as_ref().and_then(|jar| jar.header_for(url));
+        match (jar_cookie, explicit) {
+            (Some(jar), Some(explicit)) => Some(merge_cookies(&jar, &explicit)),
+            (Some(jar), None) => Some(jar),
+            (None, explicit) => explicit,
+        }
+    }
+
+    /// Stores response cookies when a jar is configured; jar write failures never fail the fetch.
+    fn store_response_cookies(&self, url: &Url, headers: &HeaderMap) {
+        if let Some(jar) = &self.cookie_jar {
+            if let Err(error) = jar.store_from_headers(url, headers) {
+                warn!(url = %url, error = %error, "Failed to persist response cookies");
+            }
         }
     }
 
@@ -422,6 +445,8 @@ impl Fetcher {
                 }
             }
         };
+
+        self.store_response_cookies(&url, response.headers());
 
         if response.status().is_redirection() {
             return Err(TklessError::InvalidArgument(
@@ -558,6 +583,8 @@ impl Fetcher {
                     }
                 }
             };
+
+            self.store_response_cookies(&current_url, resp.headers());
 
             // Check if server returned 304 Not Modified
             if resp.status() == reqwest::StatusCode::NOT_MODIFIED {

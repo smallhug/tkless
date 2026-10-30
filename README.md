@@ -280,6 +280,8 @@ tkless auth remove bilibili
 
 存储优先使用 `--cookie`/`--cookie-file`；二者均未提供时才按平台读取凭据库。库文件在 Unix 下以 `0600` 写入，单平台 Cookie 上限 64 KiB、最多 32 个平台；进程启动时读取一次，修改后需重启长任务。
 
+可选持久化 Cookie Jar：`--cookie-jar ./jar.json`（或环境变量 `TKLESS_COOKIE_JAR`）。启用后把响应的 `Set-Cookie` 按**精确主机**、路径、过期时间与 `Secure` 属性保存到 JSON，并在同一主机的后续请求中回放；`Domain` 属性被忽略，不做跨子域扩展，避免在没有公共后缀列表时把一个站点的 Cookie 注入到无关域。Jar 上限 1024 条、单条值 4 KiB、文件 4 MiB，Unix 下以 `0600` 写入；损坏或不支持版本的文件会让启动明确报错。它与 `--cookie`/`--cookie-file` 可同时使用，显式凭据在同名 cookie 上优先。
+
 ### 动态网页、截图与网络选项
 
 ```bash
@@ -440,7 +442,7 @@ tkless [OPTIONS] [TARGET] [COMMAND]
 | `--extract-links` / `--extract-images` / `--extract-tables` | 附带结构化资产 |
 | `--chunk` / `--summarize` / `--out-dir` | 分块 / 摘要 / 按标题导出 |
 | `--no-adapter` | 跳过平台接口，走通用抓取路径 |
-| `--cookie` / `--cookie-file` | Cookie 字符串 / 凭据文件 |
+| `--cookie` / `--cookie-file` / `--cookie-jar` | Cookie 字符串 / 凭据文件 / 可选持久化 Jar |
 | `-H, --header` / `-u, --user-agent` | 自定义 HTTP 头 / UA |
 | `--timeout` / `--connect-timeout` / `--retries` | 默认 15 秒 / 10 秒 / 0 次 |
 | `--max-size` / `--on-too-large` | 默认 10 MB；超限默认报错，可选择截断 |

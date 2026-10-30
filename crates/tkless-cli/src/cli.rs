@@ -732,6 +732,14 @@ pub struct CliArgs {
     )]
     pub cookie_file: Option<PathBuf>,
 
+    /// Optional persistent cookie jar: saves Set-Cookie responses and replays them to the same host
+    #[arg(
+        long = "cookie-jar",
+        value_name = "PATH",
+        help_heading = "网络与身份认证 (Network & Auth)"
+    )]
+    pub cookie_jar: Option<PathBuf>,
+
     /// Custom User-Agent header
     #[arg(
         short = 'u',
