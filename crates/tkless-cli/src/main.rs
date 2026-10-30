@@ -244,6 +244,7 @@ async fn run(args: CliArgs) -> Result<()> {
         allow_http_errors: args.allow_http_errors,
         proxy: args.proxy.clone(),
         mobile: args.mobile,
+        circuit_breaker_failures: args.circuit_breaker,
     };
 
     // Build extraction options

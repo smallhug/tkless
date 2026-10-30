@@ -298,10 +298,13 @@ tkless https://example.com/page --screenshot ./page.png
 tkless https://example.com/report --pdf ./report.pdf
 
 # 代理、移动端 UA、超时和重试
-tkless https://example.com/page --proxy http://127.0.0.1:7890 --mobile --timeout 30 --retries 2
+# 同一主机连续失败 3 次后熔断 30 秒
+tkless https://example.com/page --proxy http://127.0.0.1:7890 --mobile --timeout 30 --retries 2 --circuit-breaker 3
 ```
 
 常规 HTTP 抓取包含私网地址、DNS 结果和重定向检查，默认阻止本地及内网目标；`--allow-private-addresses` 可显式放开。CDP 会执行页面脚本，浏览器产生的后续网络请求不应视为已被普通 HTTP 抓取器的地址检查完全隔离。
+
+`--circuit-breaker N` 启用每主机熔断：同一主机连续 N 次传输错误、超时、5xx 或 429 后，本进程后续请求直接返回 `circuit_open`（退出码 3，带 `retry_after_secs`），不再访问网络。冷却 30 秒后放行一个半开探测；成功则重置，失败则退避翻倍至最长 5 分钟。默认 `0` 禁用；MCP 服务读取 `TKLESS_CIRCUIT_BREAKER`。
 
 ### PDF、调研与辅助命令
 
@@ -448,6 +451,7 @@ tkless [OPTIONS] [TARGET] [COMMAND]
 | `--max-size` / `--on-too-large` | 默认 10 MB；超限默认报错，可选择截断 |
 | `--cdp` / `--auto-cdp` / `--screenshot` | 浏览器端点 / 挑战回退 / 截图（另支持 `--pdf` 打印） |
 | `--retry-budget N` | 整个运行共享的重试次数上限；省略时不限制 |
+| `--circuit-breaker N` | 同一主机连续失败 N 次后熔断；默认 `0` 禁用 |
 | `--log-format plain\|json` | stderr 日志格式；json 每行一个对象 |
 | `-p, --proxy` / `--mobile` | 代理 / 移动端 UA |
 | `--cache` / `--cache-ttl` / `--cache-dir` | 缓存开关 / TTL / 目录 |

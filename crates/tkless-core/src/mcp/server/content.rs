@@ -277,6 +277,10 @@ impl McpServer {
             allow_http_errors,
             proxy,
             mobile,
+            circuit_breaker_failures: std::env::var("TKLESS_CIRCUIT_BREAKER")
+                .ok()
+                .and_then(|value| value.parse().ok())
+                .unwrap_or(0),
         };
 
         let engine = match TklessEngine::with_options(fetch_options) {

@@ -75,6 +75,9 @@ pub enum TklessError {
     #[error("Connection timed out: {0}")]
     ConnectionTimeout(String),
 
+    #[error("Circuit open for {host}; retry after {retry_after_secs} seconds")]
+    CircuitOpen { host: String, retry_after_secs: u64 },
+
     #[error("CDP browser error: {0}")]
     CdpError(String),
 
@@ -130,6 +133,7 @@ impl TklessError {
             Self::McpError { .. } => "protocol_error",
             Self::HttpStatusError { .. } => "http_error",
             Self::ConnectionTimeout(_) => "timeout",
+            Self::CircuitOpen { .. } => "circuit_open",
             Self::CdpError(_) => "browser_error",
             Self::SchemaError(_) => "schema_error",
             Self::SearchAntiScraping(_) => "verification_required",
@@ -149,11 +153,15 @@ impl TklessError {
                 Self::Network(_)
                     | Self::StateBusy(_)
                     | Self::ConnectionTimeout(_)
+                    | Self::CircuitOpen { .. }
                     | Self::SearchConnectionError(_)
                     | Self::SearchRateLimited { .. }
             ) || matches!(self, Self::HttpStatusError { status, .. } if *status >= 500 || *status == 429),
             retry_after_secs: match self {
                 Self::SearchRateLimited {
+                    retry_after_secs, ..
+                } => Some(*retry_after_secs),
+                Self::CircuitOpen {
                     retry_after_secs, ..
                 } => Some(*retry_after_secs),
                 _ => None,
@@ -167,6 +175,7 @@ impl TklessError {
             Self::InvalidArgument(_) | Self::UrlParse(_) => 2,
             Self::Network(_)
             | Self::ConnectionTimeout(_)
+            | Self::CircuitOpen { .. }
             | Self::SearchEngineError(_)
             | Self::SearchConnectionError(_)
             | Self::SearchRateLimited { .. } => 3,

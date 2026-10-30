@@ -75,7 +75,7 @@ TKLESS_MCP_TOKEN=... tkless mcp --http 0.0.0.0:8787 --allow-public-bind --auth-t
 
 文档工具结构为 `{document: PageDocument}`；搜索结构为 `{query, effective_query, status, results, diagnostics, warnings?}`；批量结构为 `{total, succeeded, failed, resumed, fetched, results}`。`diagnostics` 仅控制 Markdown 诊断展示。服务端按内置契约校验这些结构化结果。远程 PDF、DOCX、PPTX 响应由原生解析器处理（`extraction.method` 分别为 `pdf`、`office`）；XLSX 返回 `office_error`，需先导出为 CSV。
 
-服务进程读取 `TKLESS_COOKIE_JAR`：设置后 `Set-Cookie` 按精确主机/路径保存到本地 Jar 并在后续请求回放，不扩展到子域；`Domain` 属性被忽略以避免公共后缀列表缺失带来的 cookie 注入风险。
+服务进程读取 `TKLESS_COOKIE_JAR`：设置后 `Set-Cookie` 按精确主机/路径保存到本地 Jar 并在后续请求回放，不扩展到子域；`Domain` 属性被忽略以避免公共后缀列表缺失带来的 cookie 注入风险。`TKLESS_CIRCUIT_BREAKER=N` 可为 `fetch_webpage` 等服务端请求启用每主机熔断（0 禁用）。
 
 参数统一检查声明中的类型、枚举、必填项及数值范围，工具别名和 `execute_tool` 使用同一校验路径。四个工具及搜索/调研拒绝未声明参数。Schema 严格模式禁止回退，但不要求所有字段非空。
 
