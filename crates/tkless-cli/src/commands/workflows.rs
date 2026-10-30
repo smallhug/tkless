@@ -38,6 +38,38 @@ pub async fn run(
         }
         return Ok(true);
     }
+    if let SubCommand::Watch(watch) = command {
+        crate::paths::distinct(Some(&watch.config), watch.output.as_deref())?;
+        if watch.interval.is_some() && watch.output.is_some() {
+            bail!("--interval prints one JSON line per round and cannot be combined with --output");
+        }
+        let config: tkless_core::watch::WatchConfig =
+            serde_json::from_slice(&std::fs::read(&watch.config)?)?;
+        config.validate()?;
+        let engine = TklessEngine::with_options(fetch_options.clone())?;
+        loop {
+            let report =
+                tkless_core::watch::run_once(&engine, &config, extraction_options, &watch.state)
+                    .await?;
+            let payload = if watch.interval.is_some() || watch.output.is_none() {
+                serde_json::to_string(&report)?
+            } else {
+                serde_json::to_string_pretty(&report)?
+            };
+            output::write_payload(&payload, watch.output.as_deref())?;
+            if !report.complete && !watch.allow_partial {
+                bail!(
+                    "Watch round incomplete: {} job error(s); inspect the report or use --allow-partial",
+                    report.errors.len()
+                );
+            }
+            let Some(interval) = watch.interval else {
+                break;
+            };
+            tokio::time::sleep(std::time::Duration::from_secs(interval)).await;
+        }
+        return Ok(true);
+    }
     if let SubCommand::Browse(browse) = command {
         crate::paths::distinct(browse.output.as_deref(), Some(&browse.plan))?;
         let plan: tkless_core::browser_workflow::BrowserPlan =
