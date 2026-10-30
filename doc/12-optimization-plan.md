@@ -208,7 +208,9 @@ tkless watch --config ./watch.json --state ./watch-state --interval 3600
 - MCP 契约测试覆盖：未知参数拒绝、Token 缺失、非回环绑定拒绝、`jobs_*` 生命周期、取消后资源释放；
 - `scripts/check-docs.cjs` 的工具目录与实际 `tools/list` 一致。
 
-### WS5 搜索质量与多引擎（P1）
+### WS5 搜索质量与多引擎（P1，部分实施）
+
+> 实施状态（2026-10-30）：已落地时间/语言/地区筛选（CLI `--since/--until/--lang/--region`、MCP 同名参数），映射为 Bing 未公开参数并在报告附加 `search_filters_best_effort` 警告；非法日期与地区在发请求前拒绝。多引擎抽象与跨查询持久指纹未实现。
 
 **现状与证据**：`search.rs::SearchOptions` 只有 `scope/limit/cdp/auto_cdp`；`apply_search_scope` 仅做 `site:`；最多取 2 页。
 
@@ -414,3 +416,4 @@ tkless watch --config ./watch.json --state ./watch-state --interval 3600
 | 2026-10-30 | WS2 部分实施：滚动收敛、Shadow DOM/同源 iframe 序列化、可选 XHR 捕获与边界 |
 | 2026-10-30 | WS3 部分实施：`watch` 单轮/循环、轮次预算、文件与 Webhook 通知、HMAC 签名与失败隔离 |
 | 2026-10-30 | WS4 部分实施：可选 HTTP JSON-RPC 传输、Bearer Token、可配置工具超时 |
+| 2026-10-30 | WS5 部分实施：搜索时间/语言/地区筛选与尽力而为告警 |

@@ -499,6 +499,10 @@ pub fn get_available_tools() -> Vec<McpTool> {
                     "schema_strict": { "type": "boolean", "default": false, "description": "Fail on Schema parsing or extraction errors instead of returning fallback content; requires schema" },
                     "proxy": { "type": "string", "description": "HTTP/HTTPS proxy URL" },
                     "mobile": { "type": "boolean", "default": false, "description": "Emulate mobile browser during fetch" },
+                    "since": { "type": "string", "maxLength": 10, "description": "Inclusive lower date bound (YYYY-MM-DD); best-effort Bing filter" },
+                    "until": { "type": "string", "maxLength": 10, "description": "Inclusive upper date bound (YYYY-MM-DD); best-effort Bing filter" },
+                    "language": { "type": "string", "maxLength": 16, "description": "Result language, e.g. zh-CN; best-effort Bing filter" },
+                    "region": { "type": "string", "maxLength": 2, "description": "Two-letter region code, e.g. cn; best-effort Bing filter" },
                     "format": { "type": "string", "enum": ["markdown", "json"], "default": "markdown", "description": "Output format" }
                 },
                 "required": ["query"]

@@ -54,6 +54,8 @@ TKLESS_MCP_TOKEN=... tkless mcp --http 0.0.0.0:8787 --allow-public-bind --auth-t
 {"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"web_search","arguments":{"query":"Tokio","scope":"github","limit":10,"format":"json"}}}
 ```
 
+可选筛选参数：`since` / `until`（`YYYY-MM-DD`）、`language`（如 `zh-CN`）、`region`（两字母地区码）。它们使用 Bing 未公开参数，属于尽力而为；报告会附加 `search_filters_best_effort` 警告，宿主不应假定已严格生效。
+
 | 参数 | 当前行为 |
 |---|---|
 | `query` | 必填，非空关键词 |

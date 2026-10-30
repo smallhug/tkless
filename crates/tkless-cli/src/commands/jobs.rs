@@ -62,6 +62,12 @@ pub async fn run(
                 limit: search_args.limit,
                 cdp: cdp_opts,
                 auto_cdp: args.auto_cdp,
+                filters: tkless_core::search::SearchFilters {
+                    since: search_args.since.clone(),
+                    until: search_args.until.clone(),
+                    language: search_args.language.clone(),
+                    region: search_args.region.clone(),
+                },
             },
         )
         .await?;
