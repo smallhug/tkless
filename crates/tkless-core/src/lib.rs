@@ -12,6 +12,7 @@ pub mod chunker;
 pub mod cleaner;
 pub mod collection;
 pub mod crawler;
+pub mod credentials;
 pub mod dedup;
 pub mod diff;
 pub mod downloader;

@@ -952,6 +952,8 @@ pub enum SubCommand {
     Collect(CollectionArgs),
     /// 保存采集快照，输出新增、更新和删除事件
     Sync(SyncArgs),
+    /// 管理本地凭据存储（set 从 stdin 读取 Cookie）
+    Auth(AuthArgs),
     /// 执行一轮或多轮采集并输出变更事件（可配合 cron 定时执行）
     Watch(WatchArgs),
     /// 执行受限浏览器步骤后提取网页，输出 PageDocument JSON
@@ -1076,6 +1078,16 @@ pub struct SyncArgs {
     pub state: PathBuf,
     #[arg(long, default_value_t = tkless_core::limits::SYNC_DEFAULT_STATE_MB, value_parser = clap::value_parser!(u64).range(1..=tkless_core::limits::SYNC_MAX_STATE_MB))]
     pub max_state_mb: u64,
+}
+
+#[derive(clap::Args, Debug, Clone)]
+pub struct AuthArgs {
+    /// set、list 或 remove
+    #[arg(value_name = "ACTION")]
+    pub action: String,
+    /// 平台名称（set / remove 必填）
+    #[arg(value_name = "PLATFORM")]
+    pub platform: Option<String>,
 }
 
 #[derive(clap::Args, Debug, Clone)]
