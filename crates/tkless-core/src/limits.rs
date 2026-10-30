@@ -34,6 +34,17 @@ pub const BROWSER_CAPTURE_MIN_BODY_BYTES: usize = 1024;
 pub const BROWSER_CAPTURE_MAX_MIME_PREFIXES: usize = 8;
 pub const BROWSER_MAX_SNAPSHOT_BYTES: usize = 16 * 1024 * 1024;
 
+pub const WATCH_MAX_JOBS: usize = 64;
+pub const WATCH_MIN_ROUND_TIMEOUT_MS: u64 = 1_000;
+pub const WATCH_DEFAULT_ROUND_TIMEOUT_MS: u64 = 300_000;
+pub const WATCH_MAX_ROUND_TIMEOUT_MS: u64 = 3_600_000;
+pub const WATCH_MAX_SINKS_PER_JOB: usize = 4;
+pub const WATCH_MIN_INTERVAL_SECS: u64 = 5;
+pub const WATCH_DEFAULT_HTTP_TIMEOUT_MS: u64 = 10_000;
+pub const WATCH_MAX_HTTP_TIMEOUT_MS: u64 = 60_000;
+pub const WATCH_MAX_HTTP_ATTEMPTS: u32 = 3;
+pub const WATCH_MAX_PAYLOAD_BYTES: usize = 4 * 1024 * 1024;
+
 pub fn sync_state_bytes(megabytes: u64) -> Result<u64, crate::TklessError> {
     if !(1..=SYNC_MAX_STATE_MB).contains(&megabytes) {
         return Err(crate::TklessError::InvalidArgument(format!(

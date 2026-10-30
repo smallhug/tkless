@@ -1,6 +1,6 @@
 # 通用采集、增量同步与浏览器工作流
 
-本轮按顺序实现了通用分页、快照同步、爬虫恢复与预算、受限浏览器步骤。CLI 与 MCP 共用 Rust 核心，无新增 Python 或 Node.js 运行依赖。浏览器功能需要 Chrome/Edge/Chromium 或远程 CDP。
+本轮按顺序实现了通用分页、快照同步、单轮监控通知、爬虫恢复与预算、受限浏览器步骤。CLI 与 MCP 共用 Rust 核心，无新增 Python 或 Node.js 运行依赖。浏览器功能需要 Chrome/Edge/Chromium 或远程 CDP。
 
 ## 1. 通用分页和列表详情
 
@@ -181,6 +181,52 @@ tkless browse https://example.com/search --plan ./browser.json -o rendered.json
 - 可将 BrowserPlan 放在采集配置的 `browser` 中，作用于每个 HTML 列表页；详情页独立使用 `details.browser`。游标 JSON API 仍走 HTTP。
 - 浏览器网络隔离仍有前述边界，见 [安全加固记录](09-security-hardening.md)。固定动作和 HTTP 方法限制并不能保证网站本身没有 GET 副作用，也不替代系统级出口隔离。
 
+## 5. 定时监控与变更通知
+
+`watch` 把 `sync` 的快照能力扩展到多个任务，一次运行一轮，调度交给 cron / Task Scheduler / systemd timer，不内建守护进程。
+
+```json
+{
+  "round_timeout_ms": 300000,
+  "jobs": [
+    {
+      "id": "rust-blog",
+      "target": {
+        "url": "https://example.com/blog",
+        "schema": {"items_selector": "article", "fields": {"title": "h2", "url": "a@href"}},
+        "id_pointer": "/url",
+        "pagination": {"kind": "next_link", "selector": "a[rel=next]"},
+        "max_pages": 3
+      },
+      "max_state_mb": 64,
+      "notify": [
+        {"kind": "file", "path": "./changes.jsonl"},
+        {"kind": "http", "url": "https://hooks.example.com/tkless", "timeout_ms": 10000, "max_attempts": 2, "secret_env": "TKLESS_WEBHOOK_SECRET"}
+      ]
+    }
+  ]
+}
+```
+
+```bash
+# 单轮（推荐由 cron 调用），报告写到 stdout 或 -o 文件
+tkless watch --config ./watch.json --state ./watch-state --once -o ./round.json
+
+# 前台循环，每 3600 秒一轮；每轮输出一行 JSON
+TKLESS_WEBHOOK_SECRET=... tkless watch --config ./watch.json --state ./watch-state --interval 3600
+```
+
+行为与边界：
+
+- 每个 job 使用 `state/<job-id>` 独立状态目录：身份校验、独占锁、原子提交、状态预算均沿用 `sync`；某个 job 失败不会删除或阻塞其他 job 的记录。
+- 只通知非 `unchanged` 事件（`send_unchanged=true` 可改成全量）；无变更时不发出任何通知。
+- `file` sink 按 JSONL 追加一行 `{job, generation, captured_at, complete, stop_reason, events}`；父目录不存在时自动创建。
+- `http` sink 以 POST JSON 发送同一载荷，不跟随重定向；默认拒绝私网/回环地址，需显式 `allow_private_addresses=true`；设 `secret_env` 时附带 `X-Tkless-Signature: sha256=<HMAC-SHA256>`，环境变量缺失则拒绝发送而不是降级为无签名。
+- 通知失败写入该 job 的 `notify_errors`，不改变轮次 `complete`（采集语义与投递结果分开）；退出码只看采集结果。
+- 轮次预算 `round_timeout_ms` 为 1s–1h；超时的 job 返回 `complete=false` 与错误，已完成 job 的结果保留。
+- job `id` 仅允许 `[a-z0-9][a-z0-9_-]{0,63}`，同时作为状态子目录名，阻止路径穿越；最多 64 个 job、每个 job 最多 4 个 sink。
+- `--interval` 与 `--output` 不能同时使用（循环模式每轮一行 JSON 到 stdout）。
+
 ## MCP 与验证
 
 新增 `collect_pages`、`sync_collection`、`browse_page` 三个工具，完整模式共 27 个业务工具；动态模式仍初始返回 6 个工具，可通过发现接口按需启用。新工具返回 `structuredContent`，参数 JSON Schema 与核心校验共同限制配置。`crawl_site` 扩展了对应检查点与预算参数，成功返回的结构化报告包含完成状态。MCP 传输层单次工具调用仍受 300 秒超时约束，长爬取任务可通过检查点分次恢复。
@@ -189,7 +235,7 @@ tkless browse https://example.com/search --plan ./browser.json -o rendered.json
 {"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"collect_pages","arguments":{"config":{"url":"https://example.com/articles","schema":{"items_selector":".article-card","fields":{"title":"h2","url":"a@href"}},"pagination":{"kind":"next_link","selector":"a[rel=next]"}}}}}
 ```
 
-本地回归覆盖分页与详情、游标编码、重复页和错误保留、同步不误删、爬虫恢复、时间与输出预算、robots.txt、CLI 文件保护及 MCP 参数校验。真实浏览器测试覆盖填写、点击、等待、实际导航 URL、截图、标签页清理及 WS2 的 shadow DOM/iframe/滚动收敛/XHR 捕获（默认 `#[ignore]`）：
+本地回归覆盖分页与详情、游标编码、重复页和错误保留、同步不误删、监控轮次事件与通知去重、通知失败不回写采集结论、不可达 job 的诚实报告、爬虫恢复、时间与输出预算、robots.txt、CLI 文件保护及 MCP 参数校验。真实浏览器测试覆盖填写、点击、等待、实际导航 URL、截图、标签页清理及 WS2 的 shadow DOM/iframe/滚动收敛/XHR 捕获（默认 `#[ignore]`）：
 
 ```bash
 cargo test --workspace

@@ -952,6 +952,8 @@ pub enum SubCommand {
     Collect(CollectionArgs),
     /// 保存采集快照，输出新增、更新和删除事件
     Sync(SyncArgs),
+    /// 执行一轮或多轮采集并输出变更事件（可配合 cron 定时执行）
+    Watch(WatchArgs),
     /// 执行受限浏览器步骤后提取网页，输出 PageDocument JSON
     Browse(BrowseArgs),
     /// 启动原生 Model Context Protocol (MCP) stdio 服务端 (供 Claude Desktop / Cursor 直连)
@@ -1074,6 +1076,24 @@ pub struct SyncArgs {
     pub state: PathBuf,
     #[arg(long, default_value_t = tkless_core::limits::SYNC_DEFAULT_STATE_MB, value_parser = clap::value_parser!(u64).range(1..=tkless_core::limits::SYNC_MAX_STATE_MB))]
     pub max_state_mb: u64,
+}
+
+#[derive(clap::Args, Debug, Clone)]
+pub struct WatchArgs {
+    /// JSON 监控配置文件（jobs、diff 与通知目标）
+    #[arg(long, short = 'c')]
+    pub config: PathBuf,
+    /// 快照与事件状态目录，每个 job 使用独立子目录
+    #[arg(long)]
+    pub state: PathBuf,
+    /// 前台循环执行间隔秒数；不指定则只执行一轮
+    #[arg(long, value_parser = clap::value_parser!(u64).range(tkless_core::limits::WATCH_MIN_INTERVAL_SECS..=86400))]
+    pub interval: Option<u64>,
+    #[arg(long, short = 'o')]
+    pub output: Option<PathBuf>,
+    /// 允许部分结果并返回成功退出码，报告保留停止原因
+    #[arg(long)]
+    pub allow_partial: bool,
 }
 
 #[derive(clap::Args, Debug, Clone)]
