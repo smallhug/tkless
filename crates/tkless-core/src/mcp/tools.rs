@@ -14,6 +14,18 @@ pub struct ToolCatalogEntry {
 /// Returns the complete catalog metadata for all specialized TkLess tools.
 pub fn get_tool_catalog() -> Vec<ToolCatalogEntry> {
     vec![
+        ToolCatalogEntry {
+            name: "browse_page", category: "content", summary: "Extract browser-rendered content after bounded wait_for, fill, click, and scroll actions.",
+            keywords: &["browser", "interactive", "click", "fill", "wait", "dynamic"], is_core: false,
+        },
+        ToolCatalogEntry {
+            name: "sync_collection", category: "content", summary: "Persist snapshots and incremental added/updated/removed events; incomplete runs never delete missing records.",
+            keywords: &["sync", "snapshot", "incremental", "updates", "knowledge-base"], is_core: false,
+        },
+        ToolCatalogEntry {
+            name: "collect_pages", category: "content", summary: "Collect paginated HTML or cursor JSON lists and linked details with explicit completion status.",
+            keywords: &["pagination", "cursor", "list", "details", "collect"], is_core: false,
+        },
         // Core tools
         ToolCatalogEntry {
             name: "fetch_webpage",
@@ -266,6 +278,31 @@ pub fn get_initial_dynamic_tools() -> Vec<McpTool> {
 /// Returns the complete registry of MCP tools exposed by TkLess.
 pub fn get_available_tools() -> Vec<McpTool> {
     let mut tools = vec![
+        McpTool {
+            output_schema: None, name: "browse_page".into(),
+            description: "Execute at most 32 declarative browser steps then extract content. Blocks non-GET/HEAD/OPTIONS requests and cross-origin navigation by default. No arbitrary JavaScript. Use wait_for after actions that load content.".into(),
+            input_schema: serde_json::json!({"type":"object","additionalProperties":false,"required":["url","plan"],"properties":{
+                "url":{"type":"string"},"plan":{"type":"object","description":"BrowserPlan: endpoint, timeout_ms (1..120000), wait_ms, allow_cross_origin_navigation, steps [{action:wait_for,selector,timeout_ms}|{action:fill,selector,value}|{action:click,selector}|{action:scroll,pixels}]"},
+                "allow_private_addresses":{"type":"boolean","default":false}
+            }}),
+        },
+        McpTool {
+            output_schema: None, name: "sync_collection".into(),
+            description: "Run collection and store versioned snapshots and a durable manifest in state_dir. Requires config.id_pointer or details.url_pointer. Emits changes; incomplete runs preserve unseen records. This tool writes local files.".into(),
+            input_schema: serde_json::json!({"type":"object","additionalProperties":false,"required":["config","state_dir"],"properties":{
+                "config":{"type":"object","description":"Same configuration as collect_pages"},"state_dir":{"type":"string"},
+                "max_state_mb":{"type":"integer","minimum":1,"maximum":crate::limits::SYNC_MAX_STATE_MB,"default":crate::limits::SYNC_DEFAULT_STATE_MB},"allow_private_addresses":{"type":"boolean","default":false}
+            }}),
+        },
+        McpTool {
+            output_schema: None,
+            name: "collect_pages".into(),
+            description: "Collect HTML lists using schema.items_selector and fields with next_link or page_number pagination; cursor mode reads JSON pointers. Optional details.url_pointer fetches linked pages. Returns partial results and a stop reason on failure or limits.".into(),
+            input_schema: serde_json::json!({"type":"object","additionalProperties":false,"required":["config"],"properties":{
+                "config":{"type":"object","description":"CollectionConfig: url, schema, pagination {kind:none|next_link|page_number|cursor}, optional details {url_pointer,schema}, id_pointer, max_pages (1..1000), max_items (1..100000), delay_ms, allow_cross_origin"},
+                "allow_private_addresses":{"type":"boolean","default":false}
+            }}),
+        },
         McpTool {
             output_schema: None,
             name: "fetch_webpage".to_string(),
@@ -772,6 +809,23 @@ pub fn get_available_tools() -> Vec<McpTool> {
         }
     ];
     for tool in &mut tools {
+        if tool.name == "collect_pages" || tool.name == "sync_collection" {
+            tool.input_schema["properties"]["config"] = crate::collection::config_schema();
+        }
+        if tool.name == "browse_page" {
+            tool.input_schema["properties"]["plan"] = crate::browser_workflow::plan_schema();
+        }
+        if tool.name == "crawl_site" {
+            let properties = tool.input_schema["properties"].as_object_mut().unwrap();
+            properties.extend(serde_json::json!({
+                "checkpoint":{"type":"string","minLength":1},"resume":{"type":"boolean","default":false},
+                "retry_failed":{"type":"boolean","default":false},
+                "max_seconds":{"type":"integer","minimum":1,"maximum":86400},
+                "max_output_bytes":{"type":"integer","minimum":1},
+                "max_pending_urls":{"type":"integer","minimum":1,"maximum":100000},
+                "respect_robots":{"type":"boolean","default":false}
+            }).as_object().unwrap().clone());
+        }
         tool.output_schema = super::contracts::output_schema(&tool.name);
         if matches!(
             tool.name.as_str(),

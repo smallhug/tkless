@@ -94,6 +94,267 @@ impl Site {
 }
 
 struct UnavailableAdapter;
+
+#[tokio::test]
+async fn ignored_range_responses_fall_back_without_corrupting_output() {
+    let site = Site::start(|request, _| {
+        if request
+            .to_ascii_lowercase()
+            .contains("range: bytes=0-0\r\n")
+        {
+            Reply {
+                status: 206,
+                headers: "Content-Range: bytes 0-0/4194304\r\n".into(),
+                body: vec![b'W'],
+                delay_ms: 0,
+            }
+        } else {
+            Reply::html("WHOLE")
+        }
+    })
+    .await;
+    let destination = std::env::temp_dir().join(format!(
+        "tkless-range-{}-{}",
+        std::process::id(),
+        site.url.rsplit(':').next().unwrap()
+    ));
+    let bytes = tkless_core::download_file(
+        &reqwest::Client::new(),
+        tkless_core::DownloadOptions {
+            url: &site.url,
+            destination: &destination,
+            referer: None,
+            cookie: None,
+            reporter: None,
+            concurrency: Some(2),
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(bytes, 5);
+    assert_eq!(std::fs::read(&destination).unwrap(), b"WHOLE");
+    assert!(!destination.with_extension("part0").exists());
+    std::fs::remove_file(destination).unwrap();
+}
+
+#[tokio::test]
+async fn adapter_reader_rejects_oversized_json() {
+    let site = Site::start(|_, _| Reply::html(r#"{"value":"long response"}"#)).await;
+    let fetcher = tkless_core::fetcher::Fetcher::new(FetchOptions {
+        allow_private_addresses: true,
+        max_bytes: 8,
+        ..Default::default()
+    })
+    .unwrap();
+    let response = fetcher.get_str(&site.url).send().await.unwrap();
+    assert!(matches!(
+        fetcher.read_json::<serde_json::Value>(response).await,
+        Err(tkless_core::TklessError::ResponseTooLarge { .. })
+    ));
+}
+
+#[tokio::test]
+async fn mcp_rejects_oversized_unterminated_messages() {
+    let server =
+        tkless_core::McpServer::new(TklessEngine::new().unwrap(), DocumentCache::memory_only(60));
+    let input = vec![b' '; 1024 * 1024 + 1];
+    let error = server
+        .run_transport(&input[..], tokio::io::sink())
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("exceeds 1 MiB"));
+}
+
+#[test]
+fn memory_cache_has_entry_and_document_size_bounds() {
+    let engine = TklessEngine::new().unwrap();
+    let mut doc = engine
+        .process_html("<p>cache</p>", None, &ExtractionOptions::default())
+        .unwrap();
+    let cache = DocumentCache::memory_only(60);
+    for i in 0..100 {
+        cache.set(&format!("entry-{i}"), &doc, None).unwrap();
+    }
+    assert_eq!(cache.stats().memory_entries, 64);
+    doc.content = "x".repeat(1024 * 1024 + 1);
+    cache.set("large", &doc, None).unwrap();
+    assert!(cache.get("large").is_none());
+}
+
+#[test]
+fn transient_catalog_failures_are_not_cached_but_intentional_limits_are() {
+    let mut doc = TklessEngine::new()
+        .unwrap()
+        .process_html("<p>partial</p>", None, &ExtractionOptions::default())
+        .unwrap();
+    doc.truncated = true;
+    doc.warnings.push(tkless_core::DiagnosticWarning::new(
+        "skills_page_failed",
+        "temporary failure",
+    ));
+    let cache = DocumentCache::memory_only(60);
+    cache.set("partial", &doc, None).unwrap();
+    assert!(cache.get("partial").is_none());
+    doc.warnings[0].code = "skills_pagination_incomplete".into();
+    cache.set("limited", &doc, None).unwrap();
+    assert!(cache.get("limited").is_some());
+}
+
+#[tokio::test]
+async fn failed_download_preserves_existing_destination() {
+    let site = Site::start(|_, _| Reply {
+        status: 500,
+        headers: String::new(),
+        body: vec![],
+        delay_ms: 0,
+    })
+    .await;
+    let path = std::env::temp_dir().join(format!(
+        "tkless-existing-{}-{}",
+        std::process::id(),
+        site.url.rsplit(':').next().unwrap()
+    ));
+    std::fs::write(&path, b"original").unwrap();
+    assert!(tkless_core::download_file(
+        &reqwest::Client::new(),
+        tkless_core::DownloadOptions {
+            url: &site.url,
+            destination: &path,
+            referer: None,
+            cookie: None,
+            reporter: None,
+            concurrency: None,
+        }
+    )
+    .await
+    .is_err());
+    assert_eq!(std::fs::read(&path).unwrap(), b"original");
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn custom_credentials_never_follow_scheme_downgrades_or_host_changes() {
+    let fetcher = tkless_core::fetcher::Fetcher::new(FetchOptions {
+        initial_target_origin: Some("https://example.com".into()),
+        headers: vec![("Authorization".into(), "Bearer FAKE".into())],
+        ..Default::default()
+    })
+    .unwrap();
+    for (url, expected) in [
+        ("https://example.com/page", true),
+        ("http://example.com/page", false),
+        ("https://other.example/page", false),
+        ("https://example.com:8443/page", false),
+    ] {
+        let request = fetcher.get_str(url).build().unwrap();
+        assert_eq!(request.headers().contains_key("authorization"), expected);
+    }
+}
+
+#[tokio::test]
+async fn credentials_are_scoped_to_origin_across_redirects() {
+    let destination = Site::start(|request, _| {
+        let lower = request.to_ascii_lowercase();
+        assert!(!lower.contains("authorization:"));
+        assert!(!lower.contains("cookie:"));
+        assert!(!lower.contains("x-api-key:"));
+        Reply::html("<p>destination</p>")
+    })
+    .await;
+    let target = destination.url.clone();
+    let origin = Site::start(move |request, _| {
+        let lower = request.to_ascii_lowercase();
+        assert!(lower.contains("authorization: bearer fake"));
+        assert!(lower.contains("cookie: fake=value"));
+        assert!(lower.contains("x-api-key: fake-key"));
+        if request.starts_with("GET /same ") {
+            Reply {
+                status: 302,
+                headers: format!("Location: {target}/end\r\n"),
+                body: vec![],
+                delay_ms: 0,
+            }
+        } else {
+            Reply {
+                status: 302,
+                headers: "Location: /same\r\n".into(),
+                body: vec![],
+                delay_ms: 0,
+            }
+        }
+    })
+    .await;
+    let fetcher = tkless_core::fetcher::Fetcher::new(FetchOptions {
+        allow_private_addresses: true,
+        initial_target_origin: Some(origin.url.clone()),
+        headers: vec![
+            ("Authorization".into(), "Bearer FAKE".into()),
+            ("Cookie".into(), "fake=value".into()),
+            ("X-API-Key".into(), "fake-key".into()),
+        ],
+        ..Default::default()
+    })
+    .unwrap();
+    assert!(fetcher
+        .fetch(&origin.url)
+        .await
+        .unwrap()
+        .html
+        .contains("destination"));
+    assert_eq!(destination.hits.load(Ordering::SeqCst), 1);
+    assert_eq!(origin.hits.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn images_do_not_overwrite_other_documents_and_obey_size_limit() {
+    let site = Site::start(|request, _| {
+        let mut reply = Reply::html(if request.starts_with("GET /a ") {
+            "IMAGE_A"
+        } else {
+            "IMAGE_B"
+        });
+        reply.headers = "Content-Type: image/png\r\n".into();
+        reply
+    })
+    .await;
+    let dir = std::env::temp_dir().join(format!(
+        "tkless-security-images-{}-{}",
+        std::process::id(),
+        site.url.rsplit(':').next().unwrap()
+    ));
+    let fetcher = tkless_core::fetcher::Fetcher::new(FetchOptions {
+        allow_private_addresses: true,
+        max_bytes: 7,
+        ..Default::default()
+    })
+    .unwrap();
+    let a = format!("![a]({}/a)", site.url);
+    let b = format!("![b]({}/b)", site.url);
+    let first =
+        tkless_core::downloader::download_and_rewrite_markdown_images(&fetcher, &a, &dir, None)
+            .await
+            .unwrap();
+    let second =
+        tkless_core::downloader::download_and_rewrite_markdown_images(&fetcher, &b, &dir, None)
+            .await
+            .unwrap();
+    assert!(!first.contains("http://"));
+    assert_ne!(first.split('(').nth(1), second.split('(').nth(1));
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 2);
+    let limited = tkless_core::fetcher::Fetcher::new(FetchOptions {
+        allow_private_addresses: true,
+        max_bytes: 6,
+        ..Default::default()
+    })
+    .unwrap();
+    assert_eq!(
+        tkless_core::downloader::download_and_rewrite_markdown_images(&limited, &a, &dir, None)
+            .await
+            .unwrap(),
+        a
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
 impl tkless_core::PlatformAdapter for UnavailableAdapter {
     fn name(&self) -> &'static str {
         "fixture"

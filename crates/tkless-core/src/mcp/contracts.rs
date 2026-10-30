@@ -14,7 +14,17 @@ pub(super) fn output_schema(name: &str) -> Option<Value> {
         "title":{"type":"string"},"url":{"type":"string"},"snippet":{"type":"string"},"engine":{"const":"bing"}
     }});
     let success = match name {
-        "fetch_webpage" | "clean_html" => {
+        "sync_collection" => {
+            json!({"type":"object","required":["generation","complete","events","deletions_applied"],"properties":{
+                "generation":{"type":"integer"},"complete":{"type":"boolean"},"events":{"type":"array"},"deletions_applied":{"type":"boolean"}
+            }})
+        }
+        "collect_pages" => {
+            json!({"type":"object","required":["records","complete","listing_complete","stop_reason","pages_fetched"],"properties":{
+                "records":{"type":"array"},"complete":{"type":"boolean"},"listing_complete":{"type":"boolean"},"stop_reason":{"type":"string"},"pages_fetched":{"type":"integer"}
+            }})
+        }
+        "fetch_webpage" | "clean_html" | "browse_page" => {
             json!({"type":"object","required":["document"],"properties":{"document":document}})
         }
         "web_search" => {

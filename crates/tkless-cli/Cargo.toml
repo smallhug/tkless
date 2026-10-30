@@ -2,6 +2,7 @@
 name = "tkless-cli"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 description = "TkLess CLI - Spend less tokens, perceive more web"
@@ -9,6 +10,9 @@ description = "TkLess CLI - Spend less tokens, perceive more web"
 [[bin]]
 name = "tkless"
 path = "src/main.rs"
+
+[lints]
+workspace = true
 
 [dependencies]
 tkless-core.workspace = true

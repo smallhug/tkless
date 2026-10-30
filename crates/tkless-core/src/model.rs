@@ -123,6 +123,8 @@ pub struct FetchOptions {
     pub cookie_file: Option<String>,
     /// Authorized initial target host for unprefixed CLI cookies to prevent cross-host leaks.
     pub initial_target_host: Option<String>,
+    /// Exact origin authorized to receive custom credential headers.
+    pub initial_target_origin: Option<String>,
     /// Allow fetching private IP addresses, localhost, and internal network endpoints.
     pub allow_private_addresses: bool,
     /// Do not fail with an error on HTTP 4xx or 5xx responses.
@@ -149,6 +151,7 @@ impl Default for FetchOptions {
             cookie: None,
             cookie_file: None,
             initial_target_host: None,
+            initial_target_origin: None,
             allow_private_addresses: false,
             allow_http_errors: false,
             proxy: None,

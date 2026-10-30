@@ -12,9 +12,10 @@ TkLess 采用标准的 Cargo Workspace 多包模块化架构，严格遵循**关
 ```text
 tkless/
 ├── crates/
-│   ├── tkless-core/     # 纯核心引擎库：零 CLI 假设、零 stdio 依赖，作为纯粹的 Rust Library
-│   └── tkless-cli/      # 终端二进制层：仅负责 Clap 参数解析、退出码映射、渲染输出与 REPL
+│   ├── tkless-core/     # 提取、工作流与 MCP 通用传输；不绑定进程 stdin/stdout
+│   └── tkless-cli/      # 参数解析、commands/ 命令编排、标准流绑定、输出与 REPL
 ├── doc/                 # 核心架构与开发规范文档中心
+├── scripts/             # 开发检查脚本，不是产品运行时依赖
 └── .github/workflows/   # 跨平台 CI/CD 自动化构建流水线
 ```
 
@@ -28,8 +29,8 @@ tkless/
 
 ### 3. 内存与便携性底线
 - **纯 Safe Rust**：全库严禁引入自定义 `unsafe` 代码块或裸指针操作。所有内存安全与并发同步依托 Rust 编译器借用检查、Tokio 运行时与标准库同步原语。
-- **纯静态单二进制分发**：全局网络通信统一使用 `rustls-tls`，Linux 平台强制绑定 `openssl/vendored`，保证编译出的二进制程序不依赖目标系统安装的特定动态共享库（如 `libssl.so`），做到任意机器“复制即可运行”。
-- **极速低占用**：冷启动延迟控制在毫秒级，基础运行内存必须维持在 `< 15MB`。
+- **分发依赖**：HTTP 使用 `rustls-tls`，不要求额外启用 `openssl/vendored`。各发布目标的系统库要求以构建产物为准；CDP 功能需要本机浏览器或可访问的 CDP 服务。
+- **性能验证**：冷启动和内存数据必须注明平台、构建配置、输入规模、缓存和浏览器状态；未测量的性能目标不得写成已满足的保证。
 
 ---
 
@@ -42,6 +43,10 @@ tkless/
   - 常量、静态正则：全大写蛇形（`MAX_REDIRECTS`, `A_HREF_SELECTOR`）；
   - 静态编译期正则统一使用 `std::sync::LazyLock` 封装，杜绝重复解析编译损耗。
 - 代码格式必须 100% 满足 `cargo fmt` 官方规范，行宽以 100 字符为软性基线。
+- 当前支持的最低 Rust 工具链为 **1.98.1**，由 workspace `rust-version` 声明并通过 CI 验证；这是一条维护基线，不表示代码无法在更旧版本编译。
+- Workspace 使用 `unsafe_code = "forbid"`，两个成员通过 `[lints] workspace = true` 继承。
+- CLI 命令编排放在 `commands/`；MCP 传输和业务处理器放在 `mcp/server/`，按职责划分，避免入口文件聚集业务代码。
+- 分页与浏览器限制集中于 `limits.rs`，CLI、核心校验和 MCP Schema 引用同一常量；业务停止原因与同步事件使用 `workflow.rs` 枚举，JSON 使用 snake_case。
 
 ### 2. 错误处理与退出码规范
 - **领域错误统一定义**：`tkless-core` 使用 `thiserror` 派生枚举 `TklessError`，为每种错误类型提供精确的语义说明。
@@ -54,6 +59,9 @@ tkless/
   - `5`: 响应体超出 `--max-size` 限制；
   - `6`: SSRF 拦截命中（拒绝私有/回环网络请求）。
 - `anyhow` **仅允许**在 `tkless-cli` 二进制中使用，用于收集和丰富顶层调用上下文（`.context(...)`）。
+- 参数错误与运行故障必须区分。状态锁竞争为 `state_busy`（可重试），损坏状态为 `state_corrupt`，存储预算超限为 `state_budget_exceeded`，后台任务失败为 `task_failed`；以上退出码均为 1，不能包装成参数错误 2。
+- 同步磁盘遍历、快照序列化与持久化在 `spawn_blocking` 中执行。写入任务持有锁至提交结束；调用取消不会中止已经开始的阻塞写入，恢复时以已提交清单为准。
+- 可恢复的序列化错误使用 `?` 传播；确属不变量的 `expect` 必须说明依据。不要将所有 `unwrap` 无差别替换成静默默认值。
 
 ### 3. Token 经济学与边界安全截断
 - 任何正文截断操作必须通过 `tkless_core::token::truncate_to_tokens` 统一执行，**严禁使用粗暴的字符切片（`&str[..n]`）**。
@@ -80,7 +88,7 @@ tkless/
   - 若表头清洗后存在同名标识符，必须通过 `seen_col_names` 自动追加序号（`_1`, `_2`）消歧，确保生成的 DDL 语法合法；
   - 单元格数据必须包裹单引号，并对内部所有单引号严格执行 SQL 倍写转义（`'` ➔ `''`）。
 - **XML/RSS/Atom 解析**：使用 `html5ever`，严禁开启外部实体展开与 DTD 处理，彻底免疫 XXE 攻击。
-- **路径遍历防御**：长文档拆分文件名必须经过 `slugify` 正则清理；图片资产落盘统一采用内部数字自增模板 `img_NNN.<ext>`，禁止直接使用远程文件名作为本地磁盘路径。
+- **路径遍历防御**：长文档拆分文件名必须经过 `slugify` 正则清理；图片资产使用内部生成的 SHA-256 哈希名称，禁止直接使用远程文件名作为本地磁盘路径。
 
 ---
 
@@ -182,7 +190,7 @@ TkLess 原生实现了基于标准 stdio 的 JSON-RPC 2.0 MCP 协议，为确保
 针对 MCP 客户端默认将所有工具定义注入 System Prompt 导致上下文过度消耗的问题，TkLess 提供了两阶段动态工具发现架构（`--dynamic` 或 `--profile dynamic` 或环境变量 `TKLESS_MCP_DYNAMIC=1`）：
 
 - **第一阶段：轻量常驻核心集 (Stage 1: Resident Core + Meta Discovery Tools)**
-  - **初次暴露工具数**：从全量 23 个业务工具大幅精简为 **6 个常驻工具**；
+  - **初次暴露工具数**：从全量 26 个业务工具大幅精简为 **6 个常驻工具**；
   - **核心基础工具 (Core Tools)**：`fetch_webpage`（多格式抓取与清洗）、`web_search`（免 Key 全网搜索）；
   - **发现元工具 (Meta-Tools)**：
     1. `discover_tools(query, category)`：按关键词或分类（`content`, `search`, `media`, `analysis`, `system`, `all`）检索专门工具目录及简述；
@@ -212,7 +220,16 @@ cargo test --workspace
 
 # 4. 生产优化构建验证
 cargo build --release -p tkless-cli
+
+# 5. 可选特性与文档契约
+cargo check -p tkless-core --no-default-features --all-targets --locked
+node scripts/check-docs.cjs target/release/tkless
+
+# 6. 浏览器相关改动（需要本机 Chrome/Edge）
+cargo test -p tkless-core --test bing_cdp_test -- --ignored
 ```
+
+Windows 的文档检查传入 `target/release/tkless.exe`。Node.js 仅用于开发检查，不是 TkLess 的运行依赖。CI 分别运行三平台常规检查、Rust 1.98.1 编译和 Windows 浏览器测试；本地通过不能替代远程 CI 结果。
 
 ---
 

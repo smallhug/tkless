@@ -61,7 +61,7 @@ impl WechatAdapter {
             .send()
             .await?;
 
-        let html = resp.text().await?;
+        let html = fetcher.read_text(resp).await?;
         self.parse_article(&html, &target_url, options)
     }
 
@@ -88,7 +88,7 @@ impl WechatAdapter {
             );
         let resp = req.send().await?;
         let status_u16 = resp.status().as_u16();
-        let html = resp.text().await?;
+        let html = fetcher.read_text(resp).await?;
 
         // 2. Static regex extraction of dynamic JavaScript string concatenations
         let mut parts = Vec::new();
@@ -117,6 +117,7 @@ impl WechatAdapter {
             if let Some(ep) = cdp_ep {
                 debug!(endpoint = %ep, "搜狗重定向受阻，自动无缝启动无头浏览器 CDP 执行重定向跟踪");
                 let cdp_opts = crate::cdp::CdpOptions {
+                    allow_private_addresses: fetcher.options().allow_private_addresses,
                     endpoint: ep,
                     wait_ms: Some(2000),
                     timeout_ms: Some(30_000),

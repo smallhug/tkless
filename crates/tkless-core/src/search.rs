@@ -883,6 +883,7 @@ async fn prepare_search_transport(
                 "HTTP connection preflight failed; trying the browser's network path"
             );
             Ok(Some(crate::cdp::CdpOptions {
+                allow_private_addresses: fetcher.options().allow_private_addresses,
                 endpoint: crate::cdp::resolve_cdp_endpoint(None, true)
                     .unwrap_or_else(|| "http://127.0.0.1:9222".into()),
                 ..Default::default()
@@ -947,7 +948,7 @@ async fn search_bing_report_impl(
     }
 
     let outcome = fetch_and_parse_bing(
-        client,
+        fetcher,
         clean_query,
         clean_query,
         limit,
@@ -997,13 +998,14 @@ fn is_bing_verification_page(doc: &Html, html: &str) -> bool {
 }
 
 async fn fetch_and_parse_bing(
-    client: &reqwest::Client,
+    fetcher: &crate::fetcher::Fetcher,
     search_query: &str,
     relevance_query: &str,
     limit: usize,
     cdp_options: Option<&crate::cdp::CdpOptions>,
     auto_cdp: bool,
 ) -> Result<SearchReport, TklessError> {
+    let client = fetcher.client();
     let search_url = bing_search_url(search_query);
     let mut report = SearchReport::new(search_query);
 
@@ -1074,7 +1076,7 @@ async fn fetch_and_parse_bing(
     }
 
     let status = resp.status();
-    let html = resp.text().await?;
+    let html = fetcher.read_text(resp).await?;
     check_bing_http_status(status.as_u16(), &html, &search_url)?;
     let mut transport = "http";
     let initial_page = match parse_bing_page(&html, relevance_query, limit) {
@@ -1084,6 +1086,7 @@ async fn fetch_and_parse_bing(
                 "Encountered Bing anti-scraping challenge, auto-falling back to CDP browser rendering"
             );
             let fallback_cdp = crate::cdp::CdpOptions {
+                allow_private_addresses: fetcher.options().allow_private_addresses,
                 endpoint: crate::cdp::resolve_cdp_endpoint(None, true)
                     .unwrap_or_else(|| "http://127.0.0.1:9222".into()),
                 wait_ms: Some(1500),
@@ -1151,7 +1154,7 @@ async fn fetch_and_parse_bing(
                         format!("Page 2 returned HTTP {status}; page 1 results retained"),
                     ));
                 } else {
-                    match response.text().await {
+                    match fetcher.read_text(response).await {
                         Ok(html) => match parse_bing_page(&html, relevance_query, limit) {
                             Ok(page) => report.append(page, 2, "http", limit),
                             Err(error) => {
