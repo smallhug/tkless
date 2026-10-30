@@ -8,9 +8,6 @@ pub async fn run(
     extraction_options: &ExtractionOptions,
 ) -> Result<bool> {
     if let SubCommand::Wechat(args) = command {
-        crate::paths::distinct(args.output.as_deref(), args.session_file.as_deref())?;
-        crate::paths::distinct(args.output.as_deref(), args.checkpoint.as_deref())?;
-        crate::paths::distinct(args.session_file.as_deref(), args.checkpoint.as_deref())?;
         let options = tkless_core::wechat::WechatOptions {
             limit: args.limit,
             max_pages: args.max_pages,
@@ -26,22 +23,9 @@ pub async fn run(
         let engine = TklessEngine::with_options(fetch)?;
         let mut extraction = extraction_options.clone();
         extraction.max_tokens = Some(args.max_tokens_per_article as usize);
-        let report = if args.history {
-            tkless_core::wechat::history::list_history(
-                &engine,
-                &args.source,
-                &options,
-                &tkless_core::wechat::history::HistoryOptions {
-                    session_file: args.session_file.clone(),
-                    checkpoint: args.checkpoint.clone(),
-                    resume: args.resume,
-                },
-                &extraction,
-            )
-            .await?
-        } else {
-            tkless_core::wechat::list_articles(&engine, &args.source, &options, &extraction).await?
-        };
+        let report =
+            tkless_core::wechat::list_articles(&engine, &args.source, &options, &extraction)
+                .await?;
         output::write_payload(
             &serde_json::to_string_pretty(&report)?,
             args.output.as_deref(),
