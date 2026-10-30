@@ -124,6 +124,10 @@ pub struct FetchOptions {
     pub cookie: Option<String>,
     /// Path to cookie credential file (supports multi-platform prefix format, e.g. bilibili: ..., zhihu: ...).
     pub cookie_file: Option<String>,
+    /// Optional persistent cookie jar file. When set, `Set-Cookie` responses are saved and
+    /// replayed to the same host, subject to path, expiry and `Secure` rules.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cookie_jar: Option<std::path::PathBuf>,
     /// Authorized initial target host for unprefixed CLI cookies to prevent cross-host leaks.
     pub initial_target_host: Option<String>,
     /// Exact origin authorized to receive custom credential headers.
@@ -154,6 +158,7 @@ impl Default for FetchOptions {
             headers: Vec::new(),
             cookie: None,
             cookie_file: None,
+            cookie_jar: None,
             initial_target_host: None,
             initial_target_origin: None,
             allow_private_addresses: false,

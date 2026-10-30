@@ -12,6 +12,7 @@ pub mod cdp;
 pub mod chunker;
 pub mod cleaner;
 pub mod collection;
+pub mod cookie_jar;
 pub mod crawler;
 pub mod credentials;
 pub mod dedup;
@@ -53,6 +54,7 @@ pub use auth::{
 pub use cache::{CacheStats, DocumentCache};
 pub use cdp::{capture_screenshot_via_cdp, encode_base64, fetch_html_via_cdp, CdpOptions};
 pub use chunker::chunk_markdown;
+pub use cookie_jar::CookieJar;
 pub use crawler::{
     crawl_site, format_crawl_report_jsonl, format_crawl_report_markdown, CrawlOptions, CrawledPage,
     SiteCrawlReport,

@@ -268,6 +268,7 @@ impl McpServer {
             headers: Vec::new(),
             cookie,
             cookie_file,
+            cookie_jar: std::env::var_os("TKLESS_COOKIE_JAR").map(std::path::PathBuf::from),
             initial_target_host,
             initial_target_origin: Url::parse(url)
                 .ok()

@@ -232,6 +232,10 @@ async fn run(args: CliArgs) -> Result<()> {
         headers: custom_headers,
         cookie: args.cookie.clone(),
         cookie_file: cookie_file_path,
+        cookie_jar: args
+            .cookie_jar
+            .clone()
+            .or_else(|| std::env::var_os("TKLESS_COOKIE_JAR").map(std::path::PathBuf::from)),
         initial_target_host,
         initial_target_origin: target_url_ref
             .and_then(|t| url::Url::parse(t).ok())

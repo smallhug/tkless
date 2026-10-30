@@ -226,7 +226,7 @@ tkless watch --config ./watch.json --state ./watch-state --interval 3600
 
 ### WS6 凭据与会话体系（P1，部分实施）
 
-> 实施状态（2026-10-30）：已落地本地凭据库（`tkless auth set|list|remove`）、按平台的请求时回退解析、`0600` 原子写入与大小/平台数限制。Cookie Jar 持久化、自动刷新与加密/密钥环未实现（Jar 需引入 reqwest 的 cookie_store 依赖）；当前依靠文件权限保护。
+> 实施状态（2026-10-31）：已落地本地凭据库（`tkless auth set|list|remove`）、按平台的请求时回退解析、`0600` 原子写入与大小/平台数限制，以及可选持久化 Cookie Jar（`--cookie-jar` / `TKLESS_COOKIE_JAR`）。Jar 按精确主机、路径、过期与 `Secure` 回放，限制 1024 条与 4 MiB，损坏文件明确报错；不尝试推断公共后缀，因此不扩展 `Domain`，也不支持跨子域共享、自动刷新与加密/密钥环。
 
 **现状与证据**：`FetchOptions.cookie/cookie_file` 为明文；`login` 仅 B 站扫码；`check_auth` 对微信只返回 `configured`。
 
@@ -435,3 +435,4 @@ tkless watch --config ./watch.json --state ./watch-state --interval 3600
 | 2026-10-31 | WS4 部分实施：MCP `jobs_*` 进程内异步任务（限流、TTL、取消） |
 | 2026-10-31 | WS7 部分实施：`crawl --epub` 静态 EPUB 3 导出（无新依赖） |
 | 2026-10-31 | WS7 部分实施：DOCX/PPTX 原生解析（内置 ZIP+XML，无新依赖） |
+| 2026-10-31 | WS6 部分实施：可选持久化 Cookie Jar（精确主机、无新依赖） |

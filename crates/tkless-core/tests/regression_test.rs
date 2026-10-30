@@ -916,3 +916,46 @@ async fn ooxml_responses_use_native_office_extraction() {
     assert_eq!(doc.title.as_deref(), Some("Board Deck Notes"));
     assert!(doc.content.contains("Quarterly numbers"), "{}", doc.content);
 }
+
+#[tokio::test]
+async fn cookie_jar_captures_set_cookie_and_replays_on_same_host() {
+    let jar_path = std::env::temp_dir().join(format!(
+        "tkless-regression-cookie-jar-{}-{}.json",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ));
+    let _ = std::fs::remove_file(&jar_path);
+    let site = Site::start(|request, index| {
+        if index == 0 {
+            Reply {
+                status: 200,
+                headers: "Content-Type: text/html\r\nSet-Cookie: sid=abc; Path=/; HttpOnly\r\n"
+                    .into(),
+                body: b"<html><body><p>first</p></body></html>".to_vec(),
+                delay_ms: 0,
+            }
+        } else {
+            assert!(request.to_ascii_lowercase().contains("cookie: sid=abc"));
+            Reply::html("<html><body><p>second</p></body></html>")
+        }
+    })
+    .await;
+
+    let fetcher = tkless_core::fetcher::Fetcher::new(FetchOptions {
+        allow_private_addresses: true,
+        cookie_jar: Some(jar_path.clone()),
+        ..Default::default()
+    })
+    .unwrap();
+    fetcher.fetch(&site.url).await.unwrap();
+    fetcher.fetch(&site.url).await.unwrap();
+    assert_eq!(site.hits.load(Ordering::SeqCst), 2);
+
+    let reopened = tkless_core::CookieJar::open(&jar_path).unwrap();
+    let parsed = site.url.parse().unwrap();
+    assert_eq!(reopened.header_for(&parsed).as_deref(), Some("sid=abc"));
+    let _ = std::fs::remove_file(&jar_path);
+}
