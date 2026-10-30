@@ -1361,6 +1361,22 @@ pub struct SearchSubArgs {
     /// 模拟移动端设备 User-Agent
     #[arg(long = "mobile")]
     pub mobile: bool,
+
+    /// 仅返回该日期之后（含）的结果，格式 YYYY-MM-DD
+    #[arg(long = "since", value_name = "DATE")]
+    pub since: Option<String>,
+
+    /// 仅返回该日期之前（含）的结果，格式 YYYY-MM-DD
+    #[arg(long = "until", value_name = "DATE")]
+    pub until: Option<String>,
+
+    /// 结果语言，例如 zh-CN 或 en
+    #[arg(long = "lang", value_name = "LANG")]
+    pub language: Option<String>,
+
+    /// 地区/国家代码，例如 cn 或 us
+    #[arg(long = "region", value_name = "CC")]
+    pub region: Option<String>,
 }
 
 #[derive(clap::Args, Debug, Clone)]

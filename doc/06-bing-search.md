@@ -9,6 +9,8 @@ tkless search "DeepSeek"
 tkless search "Rust runtime" --scope github -l 10 -f json
 tkless search "技术文章" --scope wechat
 tkless search "Tokio runtime" --fetch-content --dedup -l 3 --max-tokens-per-page 1500 -f json
+tkless search "Rust 2026" --since 2026-01-01 --until 2026-06-30 -f json
+tkless search "Rust async" --lang zh-CN --region cn -f json
 tkless --auto-cdp search "DeepSeek" -f json
 tkless search "DeepSeek" --cdp http://127.0.0.1:9222 --cdp-wait 1500 -f json
 tkless research "Rust 异步运行时" -f json
@@ -26,6 +28,12 @@ tkless research "Rust 异步运行时" -f json
 | `--cdp-wait MS` | 配合显式 CDP 端点等待 DOM 加载 |
 | `-f, --format` | markdown、json 或 jsonl |
 | `--diagnostics` | 在 Markdown 中展示详细诊断；JSON/JSONL 始终为含诊断的报告对象 |
+| `--since YYYY-MM-DD` | 时间下界（含）；转换为 Bing 非公开筛选参数 |
+| `--until YYYY-MM-DD` | 时间上界（含）；省略时使用当天 |
+| `--lang LANG` | 结果语言（如 `zh-CN`），映射为 `setlang` |
+| `--region CC` | 两字母地区码（如 `cn`），映射为 `cc` |
+
+筛选参数属于**尽力而为**：它们使用 Bing 未公开的查询参数（`filters=ex1:"ez5_<startDays>_<endDays>"`、`setlang`、`cc`），上游可能忽略或变更。启用时报告会附加 `search_filters_best_effort` 警告；调用方应核验结果而不是仅凭参数假定已筛选。日期早于 1970-01-01、`--since` 晚于 `--until`、语言或地区格式非法都会在发请求前返回参数错误。
 
 scope 支持 all、wechat、zhihu、github、juejin、csdn、medium、substack、arxiv、huggingface、wikipedia、reddit、stackoverflow、v2ex、baike。平台过滤转换为 Bing 的 site: 查询，已有 site: 查询保留原过滤。
 

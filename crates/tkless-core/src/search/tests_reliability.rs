@@ -29,7 +29,8 @@ fn query_encoding_preserves_operators_phrases_dates_and_unicode() {
         "C++ & C# 百分比 100% ? a+b",
         "中文 2026 -推广 site:mp.weixin.qq.com",
     ] {
-        let url = url::Url::parse(&bing_search_url(query)).unwrap();
+        let url = url::Url::parse(&bing_search_url_with(query, &SearchFilters::default()).unwrap())
+            .unwrap();
         assert_eq!(
             url.query_pairs().find(|(key, _)| key == "q").unwrap().1,
             query

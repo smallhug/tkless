@@ -11,6 +11,101 @@ mod tests_reliability;
 use diagnostics::ParsedPage;
 pub use diagnostics::{SearchPageDiagnostics, SearchReport, SearchStatus};
 
+/// Optional, best-effort search filters. Parameters are undocumented Bing
+/// query parameters; callers must treat results as unverified.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SearchFilters {
+    /// Inclusive lower bound (`YYYY-MM-DD`).
+    pub since: Option<String>,
+    /// Inclusive upper bound (`YYYY-MM-DD`).
+    pub until: Option<String>,
+    /// Result language, e.g. `zh-CN` or `en`.
+    pub language: Option<String>,
+    /// Region/country code, e.g. `cn` or `us`.
+    pub region: Option<String>,
+}
+
+impl SearchFilters {
+    pub fn is_empty(&self) -> bool {
+        self.since.is_none()
+            && self.until.is_none()
+            && self.language.is_none()
+            && self.region.is_none()
+    }
+
+    pub fn validate(&self) -> Result<(), TklessError> {
+        let start = self.since.as_deref().map(parse_filter_date).transpose()?;
+        let end = self.until.as_deref().map(parse_filter_date).transpose()?;
+        if let (Some(start), Some(end)) = (start, end) {
+            if start > end {
+                return Err(TklessError::InvalidArgument(
+                    "search --since must not be later than --until".into(),
+                ));
+            }
+        }
+        if let Some(language) = &self.language {
+            let valid = (2..=16).contains(&language.len())
+                && language
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphabetic() || byte == b'-');
+            if !valid {
+                return Err(TklessError::InvalidArgument(
+                    "search language must be 2..16 ASCII letters or hyphens".into(),
+                ));
+            }
+        }
+        if let Some(region) = &self.region {
+            if region.len() != 2 || !region.bytes().all(|byte| byte.is_ascii_alphabetic()) {
+                return Err(TklessError::InvalidArgument(
+                    "search region must be a two-letter country code".into(),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn apply(&self, url: &mut url::Url) -> Result<(), TklessError> {
+        self.validate()?;
+        let mut pairs = url.query_pairs_mut();
+        if let Some(language) = &self.language {
+            pairs.append_pair("setlang", &language.to_ascii_lowercase());
+        }
+        if let Some(region) = &self.region {
+            pairs.append_pair("cc", &region.to_ascii_lowercase());
+        }
+        if self.since.is_some() || self.until.is_some() {
+            let start = match &self.since {
+                Some(value) => parse_filter_date(value)?,
+                None => parse_filter_date("1970-01-01")?,
+            };
+            let end = match &self.until {
+                Some(value) => parse_filter_date(value)?,
+                None => chrono::Utc::now().date_naive(),
+            };
+            let epoch = parse_filter_date("1970-01-01")?;
+            let start_days = (start - epoch).num_days();
+            let end_days = (end - epoch).num_days();
+            pairs.append_pair("filters", &format!("ex1:\"ez5_{start_days}_{end_days}\""));
+        }
+        Ok(())
+    }
+}
+
+fn parse_filter_date(value: &str) -> Result<chrono::NaiveDate, TklessError> {
+    let date = chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d").map_err(|_| {
+        TklessError::InvalidArgument(format!(
+            "Invalid search date '{value}'; expected YYYY-MM-DD"
+        ))
+    })?;
+    let epoch = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).expect("static epoch");
+    if date < epoch {
+        return Err(TklessError::InvalidArgument(
+            "Search dates must be on or after 1970-01-01".into(),
+        ));
+    }
+    Ok(date)
+}
+
 /// Current search configuration; all calls return SearchReport.
 #[derive(Debug, Clone)]
 pub struct SearchOptions {
@@ -18,6 +113,7 @@ pub struct SearchOptions {
     pub limit: usize,
     pub cdp: Option<crate::CdpOptions>,
     pub auto_cdp: bool,
+    pub filters: SearchFilters,
 }
 impl Default for SearchOptions {
     fn default() -> Self {
@@ -26,6 +122,7 @@ impl Default for SearchOptions {
             limit: 10,
             cdp: None,
             auto_cdp: false,
+            filters: SearchFilters::default(),
         }
     }
 }
@@ -900,6 +997,7 @@ pub async fn web_search(
     options: &SearchOptions,
 ) -> Result<SearchReport, TklessError> {
     let effective_query = apply_search_scope(query.trim(), options.scope.as_deref())?;
+    options.filters.validate()?;
     let mut report = search_bing_report_impl(
         engine.client(),
         engine.fetcher(),
@@ -907,8 +1005,15 @@ pub async fn web_search(
         options.limit,
         options.cdp.as_ref(),
         options.auto_cdp,
+        &options.filters,
     )
     .await?;
+    if !options.filters.is_empty() {
+        report.warnings.push(crate::model::DiagnosticWarning::new(
+            "search_filters_best_effort",
+            "Date, language and region filters rely on undocumented Bing parameters; upstream may ignore them. Verify results before relying on them.",
+        ));
+    }
     report.query = query.trim().into();
     Ok(report)
 }
@@ -920,6 +1025,7 @@ async fn search_bing_report_impl(
     limit: usize,
     cdp_options: Option<&crate::cdp::CdpOptions>,
     auto_cdp: bool,
+    filters: &SearchFilters,
 ) -> Result<SearchReport, TklessError> {
     if limit == 0 {
         return Err(TklessError::InvalidArgument(
@@ -954,6 +1060,7 @@ async fn search_bing_report_impl(
         limit,
         cdp_options,
         auto_cdp,
+        filters,
     )
     .await;
     if cdp_options.is_none() {
@@ -967,10 +1074,11 @@ async fn search_bing_report_impl(
     outcome
 }
 
-fn bing_search_url(query: &str) -> String {
-    let mut url = url::Url::parse("https://www.bing.com/search").unwrap();
+fn bing_search_url_with(query: &str, filters: &SearchFilters) -> Result<String, TklessError> {
+    let mut url = url::Url::parse("https://www.bing.com/search").expect("static Bing URL");
     url.query_pairs_mut().append_pair("q", query);
-    url.into()
+    filters.apply(&mut url)?;
+    Ok(url.into())
 }
 
 fn check_bing_http_status(status: u16, html: &str, url: &str) -> Result<(), TklessError> {
@@ -1004,9 +1112,10 @@ async fn fetch_and_parse_bing(
     limit: usize,
     cdp_options: Option<&crate::cdp::CdpOptions>,
     auto_cdp: bool,
+    filters: &SearchFilters,
 ) -> Result<SearchReport, TklessError> {
     let client = fetcher.client();
-    let search_url = bing_search_url(search_query);
+    let search_url = bing_search_url_with(search_query, filters)?;
     let mut report = SearchReport::new(search_query);
 
     debug!(query = search_query, url = %search_url, "Executing Bing web search");
@@ -1842,5 +1951,65 @@ mod tests {
             relaxed_score.is_some(),
             "Llama query must pass relaxed fallback scoring"
         );
+    }
+}
+
+#[cfg(test)]
+mod filter_tests {
+    use super::*;
+
+    #[test]
+    fn date_language_and_region_map_to_bing_parameters() {
+        let filters = SearchFilters {
+            since: Some("2026-01-01".into()),
+            until: Some("2026-01-31".into()),
+            language: Some("zh-CN".into()),
+            region: Some("CN".into()),
+        };
+        filters.validate().unwrap();
+        let url = url::Url::parse(&bing_search_url_with("rust", &filters).unwrap()).unwrap();
+        let pairs: std::collections::HashMap<_, _> = url.query_pairs().into_owned().collect();
+        assert_eq!(pairs.get("q").map(String::as_str), Some("rust"));
+        assert_eq!(pairs.get("setlang").map(String::as_str), Some("zh-cn"));
+        assert_eq!(pairs.get("cc").map(String::as_str), Some("cn"));
+        let range = pairs.get("filters").expect("date range parameter");
+        assert!(range.starts_with("ex1:\"ez5_"), "{range}");
+    }
+
+    #[test]
+    fn invalid_filters_are_rejected_before_fetching() {
+        for filters in [
+            SearchFilters {
+                since: Some("2026-02-01".into()),
+                until: Some("2026-01-01".into()),
+                ..Default::default()
+            },
+            SearchFilters {
+                since: Some("2026-13-01".into()),
+                ..Default::default()
+            },
+            SearchFilters {
+                until: Some("1969-12-31".into()),
+                ..Default::default()
+            },
+            SearchFilters {
+                language: Some("toolonglanguagecode".into()),
+                ..Default::default()
+            },
+            SearchFilters {
+                region: Some("chn".into()),
+                ..Default::default()
+            },
+        ] {
+            assert!(filters.validate().is_err());
+            assert!(bing_search_url_with("q", &filters).is_err());
+        }
+    }
+
+    #[test]
+    fn default_filters_leave_the_query_unchanged() {
+        let url = url::Url::parse(&bing_search_url_with("a b", &SearchFilters::default()).unwrap())
+            .unwrap();
+        assert_eq!(url.query_pairs().count(), 1);
     }
 }

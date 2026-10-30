@@ -112,6 +112,18 @@ impl McpServer {
                 limit,
                 cdp,
                 auto_cdp: options.auto_cdp,
+                filters: crate::search::SearchFilters {
+                    since: args.get("since").and_then(Value::as_str).map(str::to_owned),
+                    until: args.get("until").and_then(Value::as_str).map(str::to_owned),
+                    language: args
+                        .get("language")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned),
+                    region: args
+                        .get("region")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned),
+                },
             },
         )
         .await

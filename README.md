@@ -167,11 +167,15 @@ tkless search "DeepSeek" --cdp http://127.0.0.1:9222 -f json
 
 # 并发抓取正文，并进行近似去重
 tkless search "Tokio runtime" --fetch-content --dedup -l 3 --max-tokens-per-page 1500 -f json
+
+# 时间/语言/地区筛选（尽力而为，报告会附加警告）
+tkless search "Rust 2026" --since 2026-01-01 --until 2026-06-30 -f json
+tkless search "Rust async" --lang zh-CN --region cn -f json
 ```
 
 `--scope` 支持 `all`、`wechat`、`zhihu`、`github`、`juejin`、`csdn`、`medium`、`substack`、`arxiv`、`huggingface`、`wikipedia`、`reddit`、`stackoverflow`、`v2ex`、`baike`。平台定向转换为 Bing 的 `site:` 查询，并在本地校验结果 URL；关键词中已有 `site:` 过滤时优先保留原过滤。
 
-`--limit` 必须为正整数；`--dedup`、`--max-tokens-per-page` 要求 `--fetch-content`。CLI、Shell 和 MCP 均直接使用 Bing；旧的引擎选择参数及平台布尔开关已移除。搜索结果仍保留 `engine: "bing"` 来源字段。
+`--limit` 必须为正整数；`--dedup`、`--max-tokens-per-page` 要求 `--fetch-content`。`--since`/`--until`/`--lang`/`--region` 使用 Bing 未公开的参数，属于尽力而为：启用时报告附加 `search_filters_best_effort` 警告，请核验结果。CLI、Shell 和 MCP 均直接使用 Bing；旧的引擎选择参数及平台布尔开关已移除。搜索结果仍保留 `engine: "bing"` 来源字段。
 
 搜索前默认在后台执行 HTTPS 连接预检，成功缓存 60 秒、失败缓存 5 秒。慢连接或状态未知仍尝试搜索，限流按 `Retry-After` 冷却。使用 `-vv` 查看诊断，结构化输出包含查询与页面诊断。详细用法见 [Bing 搜索说明](doc/06-bing-search.md)。
 
