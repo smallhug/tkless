@@ -224,7 +224,9 @@ tkless watch --config ./watch.json --state ./watch-state --interval 3600
 
 验收：日期筛选在固定样本上命中预期 URL；筛选失败产生 `warning` 且 `complete` 语义不变；引擎切换不改变 `SearchReport` 结构。
 
-### WS6 凭据与会话体系（P1）
+### WS6 凭据与会话体系（P1，部分实施）
+
+> 实施状态（2026-10-30）：已落地本地凭据库（`tkless auth set|list|remove`）、按平台的请求时回退解析、`0600` 原子写入与大小/平台数限制。Cookie Jar 持久化、自动刷新与加密/密钥环未实现（Jar 需引入 reqwest 的 cookie_store 依赖）；当前依靠文件权限保护。
 
 **现状与证据**：`FetchOptions.cookie/cookie_file` 为明文；`login` 仅 B 站扫码；`check_auth` 对微信只返回 `configured`。
 
@@ -417,3 +419,4 @@ tkless watch --config ./watch.json --state ./watch-state --interval 3600
 | 2026-10-30 | WS3 部分实施：`watch` 单轮/循环、轮次预算、文件与 Webhook 通知、HMAC 签名与失败隔离 |
 | 2026-10-30 | WS4 部分实施：可选 HTTP JSON-RPC 传输、Bearer Token、可配置工具超时 |
 | 2026-10-30 | WS5 部分实施：搜索时间/语言/地区筛选与尽力而为告警 |
+| 2026-10-30 | WS6 部分实施：本地凭据库（权限、限制、请求时回退） |

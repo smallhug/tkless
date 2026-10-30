@@ -264,6 +264,17 @@ zhihu: d_c0=...; z_c0=...
 
 Cookie 文件为本地明文，请只在可信目录保存；仓库已忽略 `cookies.txt`。无前缀命令行 Cookie 按初始目标 Host 限制作用域，带前缀凭据按支持的平台匹配。
 
+也可使用仅限本用户读取的凭据存储（Windows `%APPDATA%\tkless\credentials.json`，其他平台 `$XDG_CONFIG_HOME/tkless/credentials.json` 或 `~/.config/tkless/credentials.json`，可用 `TKLESS_CREDENTIALS_FILE` 覆盖）：
+
+```bash
+# 从 stdin 读取 Cookie，避免进入 shell 历史
+printf '%s' 'SESSDATA=...; bili_jct=...' | tkless auth set bilibili
+tkless auth list
+tkless auth remove bilibili
+```
+
+存储优先使用 `--cookie`/`--cookie-file`；二者均未提供时才按平台读取凭据库。库文件在 Unix 下以 `0600` 写入，单平台 Cookie 上限 64 KiB、最多 32 个平台；进程启动时读取一次，修改后需重启长任务。
+
 ### 动态网页、截图与网络选项
 
 ```bash
@@ -389,6 +400,7 @@ tkless [OPTIONS] [TARGET] [COMMAND]
 | `diff` | 本地文本或网页的行级差异 |
 | `mcp` | stdio / HTTP MCP 服务 |
 | `login` | B站扫码登录或知乎登录指引 |
+| `auth` | 管理本地凭据存储（`set` 从 stdin 读取 Cookie，`list`，`remove`） |
 | `cache` | 缓存统计与清理 |
 | `adapters`（`platforms`） | 平台及能力目录 |
 | `doctor` | 浏览器、缓存目录和网络连通性自检 |

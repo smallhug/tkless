@@ -109,6 +109,41 @@ async fn run(args: CliArgs) -> Result<()> {
     // -------------------------------------------------------------------------
     // Execution Branch 0.1: Interactive Browser QR Code Login
     // -------------------------------------------------------------------------
+    if let Some(SubCommand::Auth(ref auth)) = args.command {
+        match auth.action.as_str() {
+            "set" => {
+                let platform = auth
+                    .platform
+                    .as_deref()
+                    .context("auth set requires a platform name")?;
+                let mut cookie = String::new();
+                io::stdin()
+                    .read_to_string(&mut cookie)
+                    .context("Failed to read the cookie from stdin")?;
+                let path = tkless_core::credentials::set(platform, &cookie)?;
+                println!("Stored credential for '{platform}' in {}", path.display());
+            }
+            "list" => {
+                for platform in tkless_core::credentials::list()? {
+                    println!("{platform}");
+                }
+            }
+            "remove" => {
+                let platform = auth
+                    .platform
+                    .as_deref()
+                    .context("auth remove requires a platform name")?;
+                if tkless_core::credentials::remove(platform)? {
+                    println!("Removed credential for '{platform}'");
+                } else {
+                    println!("No stored credential for '{platform}'");
+                }
+            }
+            other => bail!("Unknown auth action '{other}'; use set, list or remove"),
+        }
+        return Ok(());
+    }
+
     if let Some(SubCommand::Login(ref login_args)) = args.command {
         let platform_clean = login_args.platform.trim().to_ascii_lowercase();
         match platform_clean.as_str() {

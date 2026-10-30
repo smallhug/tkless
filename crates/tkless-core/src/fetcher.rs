@@ -28,6 +28,7 @@ pub struct Fetcher {
     client: reqwest::Client,
     options: FetchOptions,
     search_preflight: crate::search_preflight::HttpState,
+    credentials: crate::credentials::CredentialsFile,
 }
 
 impl Fetcher {
@@ -96,6 +97,7 @@ impl Fetcher {
             client,
             options,
             search_preflight: Default::default(),
+            credentials: crate::credentials::load(),
         })
     }
 
@@ -268,7 +270,8 @@ impl Fetcher {
             (Some(fc), Some(cc)) => Some(merge_cookies(&fc, &cc)),
             (Some(fc), None) => Some(fc),
             (None, Some(cc)) => Some(cc),
-            (None, None) => None,
+            (None, None) => detect_platform_from_url(url.as_str())
+                .and_then(|platform| self.credentials.get(platform).cloned()),
         }
     }
 
