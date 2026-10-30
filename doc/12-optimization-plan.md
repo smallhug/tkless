@@ -30,7 +30,7 @@
 | 维度 | 当前实现 | 关键约束 |
 | :--- | :--- | :--- |
 | CLI | 18 个子命令 + 根命令单页模式 | 全部通过参数传入，无配置文件 |
-| MCP | 27 个业务工具 + 4 个发现元工具，协议 `2025-11-25` | 仅 stdio；单次调用 300 秒超时 |
+| MCP | 31 个业务工具 + 4 个发现元工具，协议 `2025-11-25` | 仅 stdio；单次调用 300 秒超时 |
 | 适配器 | 22 个内置平台适配器 | 编译期内置，无插件机制 |
 | 请求 | 仅 GET；重定向逐跳校验；编码自动识别 | 无 POST/GraphQL/表单 |
 | 渲染 | Chromium 系 CDP；步骤 `wait_for/fill/click/scroll` | 不展开 Shadow DOM / iframe |
@@ -54,13 +54,13 @@
 | WS1 | 请求模型 | 仅 GET，无法调用 POST/GraphQL/表单接口 | P0 | 8–12 |
 | WS2 | 页面结构 | 无 XHR 响应捕获、不展开 Shadow DOM/iframe、滚动不收敛 | P0 | 10–15 |
 | WS3 | 调度监控 | 无常驻调度、无变更通知、无法监控任意 URL | P0 | 10–14 |
-| WS4 | MCP 服务化 | 仅 stdio、无异步任务、超时不可配 | P1 | 8–12 |
+| WS4 | MCP 服务化 | 无持久化任务队列、SSE 通知流与会话回收 | P1 | 8–12 |
 | WS5 | 搜索质量 | 无日期/语言/地区筛选、无多引擎可选 | P1 | 6–8 |
 | WS6 | 凭据体系 | 无 cookie jar/多站点凭据库/会话刷新 | P1 | 8–12 |
 | WS7 | 内容类型 | 无 OCR、Office、ASR | P1/P2 | 12–20 |
 | WS8 | 稳定性 | 无每域名熔断、代理池、metrics | P2 | 8–12 |
 | WS9 | 平台与扩展 | 适配器编译期内置，缺大量平台 | P2 | 按站点 1–3 |
-| WS10 | 输出集成 | 无对象存储/数据库/回调 sink，无 EPUB/PDF 导出 | P2 | 6–8 |
+| WS10 | 输出集成 | 无对象存储/数据库 sink，无 EPUB 导出 | P2 | 6–8 |
 
 ---
 
@@ -187,7 +187,7 @@ tkless watch --config ./watch.json --state ./watch-state --interval 3600
 
 ### WS4 MCP 传输、异步任务与协议演进（P1，部分实施）
 
-> 实施状态（2026-10-30）：已落地可选 HTTP JSON-RPC 传输（`--http`、`POST /mcp`、`GET /healthz`、Bearer Token、回环默认）与可配置工具超时（`--tool-timeout-secs`）。异步任务工具（`jobs_*`）未实现，需同时扩写工具目录与契约；当前仍建议长任务使用 CLI 或 checkpoint 分次执行。
+> 实施状态（2026-10-31）：已落地可选 HTTP JSON-RPC 传输（`--http`、`POST /mcp`、`GET /healthz`、Bearer Token、回环默认）、可配置工具超时（`--tool-timeout-secs`）与进程内异步任务（`jobs_start`/`jobs_status`/`jobs_cancel`/`jobs_list`）。异步任务采用显式启动而非超时自动转后台，支持 `crawl_site`/`batch_fetch_webpages`/`collect_pages`/`sync_collection`，最多 4 个活动、TTL 回收、重启即丢失；SSE 通知流、会话回收与持久化任务队列未实现。
 
 **现状与证据**：`mcp/server/transport.rs` 只有 `run_transport`（stdin/stdout）；工具调用硬编码 300 秒超时；MCP 只声明 `tools` 能力。
 
@@ -432,3 +432,4 @@ tkless watch --config ./watch.json --state ./watch-state --interval 3600
 | 2026-10-30 | WS8 部分实施：共享重试预算与 JSON 结构化日志 |
 | 2026-10-30 | WS9 部分实施：声明式配置适配器（TKLESS_ADAPTERS_DIR） |
 | 2026-10-31 | WS10 部分实施：`crawl --bundle` Markdown 知识库打包（stored ZIP） |
+| 2026-10-31 | WS4 部分实施：MCP `jobs_*` 进程内异步任务（限流、TTL、取消） |

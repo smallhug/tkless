@@ -21,7 +21,7 @@
 - **批量与站点抓取**：URL 列表并发提取、站点链接遍历、Sitemap、深度与页数限制、路径范围限制。
 - **PDF**：识别远程、本地或 stdin 中的 PDF，提取文本和元数据，再用启发式规则整理为 Markdown。
 - **浏览器渲染**：通过 CDP 使用 Chrome / Edge / Chromium，支持挑战回退、自动滚动、资源拦截、截图与 PDF 打印。
-- **MCP 服务**：stdio JSON-RPC，27 个业务工具；动态模式初始暴露 2 个核心工具和 4 个发现元工具。
+- **MCP 服务**：stdio / 可选 HTTP JSON-RPC，31 个业务工具；动态模式初始暴露 2 个核心工具和 4 个发现元工具。
 - **辅助工具**：表格 SQL / CSV / TSV 导出、文本差异、RSS / Atom、REPL、自检、缓存维护、Shell 补全和自升级。
 
 普通抓取和转换不需要 Node.js、Python 或外部大模型服务。CDP 渲染及截图需要本机已安装的 Chromium 系浏览器，或可连接的远程 CDP 服务。
@@ -328,7 +328,7 @@ tkless completions powershell
 
 ## MCP 接入
 
-当前服务默认通过 stdio 传输，也可用 `--http ADDR` 提供无状态 HTTP JSON-RPC（`POST /mcp`、`GET /healthz`，默认仅回环，非回环需 `--allow-public-bind` 与 Bearer Token），仅实现 `2025-11-25` 协议。工具调用并发执行，支持 `notifications/cancelled`，单次调用超时默认 300 秒（`--tool-timeout-secs` 可调），最多 64 个在途调用；动态模式声明 `tools.listChanged`。业务工具和参数见 [tools.rs](crates/tkless-core/src/mcp/tools.rs)。
+当前服务默认通过 stdio 传输，也可用 `--http ADDR` 提供无状态 HTTP JSON-RPC（`POST /mcp`、`GET /healthz`，默认仅回环，非回环需 `--allow-public-bind` 与 Bearer Token），仅实现 `2025-11-25` 协议。工具调用并发执行，支持 `notifications/cancelled`，单次调用超时默认 300 秒（`--tool-timeout-secs` 可调），最多 64 个在途调用；动态模式声明 `tools.listChanged`。长任务可用 `jobs_start` 转为后台执行并以 `jobs_status` 轮询。业务工具和参数见 [tools.rs](crates/tkless-core/src/mcp/tools.rs)。
 
 支持 `mcpServers` 配置的客户端可使用以下配置；若客户端找不到 `PATH` 中的程序，将 `command` 改为可执行文件绝对路径：
 
@@ -344,7 +344,7 @@ tkless completions powershell
 ```
 
 ```bash
-# 全量模式：tools/list 返回 27 个业务工具
+# 全量模式：tools/list 返回 31 个业务工具
 tkless mcp
 
 # 动态模式：初始返回 6 个工具，按需激活业务工具
@@ -373,7 +373,7 @@ MCP 仅支持 `2025-11-25`；网页提取、HTML 清洗、搜索和批量抓取�
 
 动态模式减少初始工具声明；具体 Token 开销取决于当前 Schema、序列化方式、分词器及宿主注入策略，此处不沿用旧版固定节省率。
 
-27 个业务工具按目录分类如下，四个发现元工具不计入该数量：
+31 个业务工具按目录分类如下，四个发现元工具不计入该数量：
 
 | 分类 | 工具 |
 |---|---|
@@ -381,7 +381,13 @@ MCP 仅支持 `2025-11-25`；网页提取、HTML 清洗、搜索和批量抓取�
 | 搜索（5） | `web_search`、`search_bilibili`、`inspect_links`、`list_adapters`、`deep_research` |
 | 媒体（3） | `fetch_bilibili_feed`、`download_media`、`take_screenshot` |
 | 分析（6） | `export_tables`、`summarize_content`、`split_document`、`chunk_markdown`、`diff_documents`、`compare_similarity` |
-| 系统（3） | `manage_cache`、`login_platform`、`check_auth` |
+| 系统（7） | `manage_cache`、`login_platform`、`check_auth`、`jobs_start`、`jobs_status`、`jobs_cancel`、`jobs_list` |
+
+**后台任务**：`jobs_start` 接受 `tool`（`crawl_site`、`batch_fetch_webpages`、`collect_pages`、`sync_collection`）与嵌套 `arguments`，立即返回 `job_id`；`jobs_status` 返回状态、耗时、进度与最终结构化结果，`jobs_cancel` 中止任务，`jobs_list` 按状态筛选并以摘要形式列举。任务注册表仅存在于当前进程，最多 4 个排队/运行任务，结束后默认保留 3600 秒（`ttl_secs` 可调），重启即丢失。
+
+```json
+{"tool":"crawl_site","arguments":{"seed_url":"https://example.com/docs","max_pages":50,"checkpoint":"./docs.state.json"},"ttl_secs":3600}
+```
 
 `login_platform` 的 B站流程支持扫码及保存 Cookie，知乎流程目前返回手动操作说明。`check_auth` 对 B站、知乎、GitHub 尝试远程验证，阻断或无法识别的响应会明确表示状态未知；微信目前只报告已配置，并返回 `verified: false`，不会仅凭 Cookie 字段名判定登录有效。
 

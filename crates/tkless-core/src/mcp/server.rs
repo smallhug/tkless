@@ -5,6 +5,7 @@ mod extraction;
 mod http;
 mod inspection;
 mod jobs;
+mod jobs_registry;
 mod media;
 mod search;
 mod transport;
@@ -23,6 +24,7 @@ use crate::model::{
     TokenizerKind, VideoQuality,
 };
 use crate::TklessEngine;
+use jobs_registry::JobRegistry;
 use serde_json::Value;
 use std::collections::HashSet;
 use std::path::Path;
@@ -54,6 +56,7 @@ pub struct McpServer {
     mode: McpMode,
     active_dynamic_tools: Arc<RwLock<HashSet<String>>>,
     tool_timeout_secs: u64,
+    jobs: Arc<JobRegistry>,
 }
 
 impl McpServer {
@@ -70,6 +73,7 @@ impl McpServer {
             mode,
             active_dynamic_tools: Arc::new(RwLock::new(HashSet::new())),
             tool_timeout_secs: 300,
+            jobs: Arc::new(JobRegistry::new()),
         }
     }
 
@@ -152,7 +156,7 @@ impl McpServer {
                     "capabilities": {
                         "tools": {"listChanged": self.mode == McpMode::Dynamic},
                         "logging": {},
-                        "experimental": {"tkless/batchStreaming":{"notification":"notifications/progress","itemKey":"tkless/batch_item"}}
+                        "experimental": {"tkless/batchStreaming":{"notification":"notifications/progress","itemKey":"tkless/batch_item"},"tkless/asyncJobs":{"start":"jobs_start","status":"jobs_status","cancel":"jobs_cancel","list":"jobs_list","maxActive":4}}
                     },
                     "serverInfo": {
                         "name": "tkless",
@@ -307,6 +311,10 @@ impl McpServer {
             "chunk_markdown" => self.call_chunk_markdown(arguments).await,
             "diff_documents" => self.call_diff_content(arguments).await,
             "deep_research" => self.call_deep_research(arguments).await,
+            "jobs_start" => self.call_jobs_start(arguments).await,
+            "jobs_status" => self.call_jobs_status(arguments).await,
+            "jobs_cancel" => self.call_jobs_cancel(arguments).await,
+            "jobs_list" => self.call_jobs_list(arguments).await,
             "take_screenshot" => self.call_capture_screenshot(arguments).await,
             "export_tables" => self.call_export_tables(arguments).await,
             "list_adapters" => self.call_list_adapters(arguments).await,

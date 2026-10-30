@@ -22,6 +22,7 @@
 - 新增 `--retry-budget N`（整个运行共享重试上限）与 `--log-format json`（stderr 结构化日志，每行一个 JSON 对象）。
 - 新增配置式适配器：设置 `TKLESS_ADAPTERS_DIR` 后从 `*.json` 加载域/路径匹配与可选 Schema，仅执行 HTTP 获取与通用清洗，不加载代码；内置适配器优先。
 - `crawl` 新增 `--bundle FILE`：额外输出 Markdown 知识库 ZIP（`README.md` 索引 + 逐页 `.md`）；采用不压缩实现，512 条目与 64 MiB 上限，路径不得与 `-o`/`--checkpoint` 相同。
+- MCP 新增 `jobs_start`/`jobs_status`/`jobs_cancel`/`jobs_list`：将 `crawl_site`、`batch_fetch_webpages`、`collect_pages`、`sync_collection` 转为进程内后台任务；最多 4 个活动任务，结果默认保留 3600 秒，重启即丢失。业务工具总数增至 31。
 
 ### Fixed
 

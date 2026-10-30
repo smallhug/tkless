@@ -1,6 +1,6 @@
 # MCP 接入与工具扩展
 
-本文对齐 2026-10-30 工作区。当前提供 27 个业务工具；`web_search` 与 `deep_research` 均仅使用 Bing。工具名称与完整参数以 [tools.rs](../crates/tkless-core/src/mcp/tools.rs) 及运行时 `tools/list` 为准。
+本文对齐 2026-10-31 工作区。当前提供 31 个业务工具；`web_search` 与 `deep_research` 均仅使用 Bing。工具名称与完整参数以 [tools.rs](../crates/tkless-core/src/mcp/tools.rs) 及运行时 `tools/list` 为准。
 
 ## 启动与客户端配置
 
@@ -16,7 +16,7 @@ tkless mcp --http 127.0.0.1:8787 --tool-timeout-secs 120
 TKLESS_MCP_TOKEN=... tkless mcp --http 0.0.0.0:8787 --allow-public-bind --auth-token-env TKLESS_MCP_TOKEN
 ```
 
-完整模式返回 27 个业务工具；动态模式初始返回 2 个核心工具和 4 个发现元工具。环境变量 `TKLESS_MCP_DYNAMIC=1` 也可启用动态模式。MCP 本身不依赖 Node.js 或 Python；浏览器渲染和截图另需本机浏览器或远程 CDP 服务。
+完整模式返回 31 个业务工具；动态模式初始返回 2 个核心工具和 4 个发现元工具。环境变量 `TKLESS_MCP_DYNAMIC=1` 也可启用动态模式。MCP 本身不依赖 Node.js 或 Python；浏览器渲染和截图另需本机浏览器或远程 CDP 服务。
 
 支持 mcpServers 的客户端可参考：
 
@@ -114,6 +114,25 @@ TKLESS_MCP_TOKEN=... tkless mcp --http 0.0.0.0:8787 --allow-public-bind --auth-t
 
 激活后发送 `notifications/tools/list_changed`。动态模式支持直接调用未激活业务工具；`execute_tool` 不能递归调用自身。所有路径只接受目录中的规范名称，例如 `web_search`；旧别名和 `tkless_` 前缀会报错。初始声明的 Token 开销取决于 Schema、分词器和宿主。
 
+## 异步任务（jobs_*）
+
+四个工具把长时间运行的工具调用移出单次请求超时：
+
+| 工具 | 参数与用途 |
+|---|---|
+| `jobs_start` | `tool`、`arguments`、可选 `ttl_secs`；启动后台任务并立即返回 `job_id` |
+| `jobs_status` | `job_id`；返回状态、耗时、进度、错误和完成后的结构化结果 |
+| `jobs_cancel` | `job_id`；取消排队或运行中的任务；对已完成任务幂等 |
+| `jobs_list` | 可选 `state`、`limit`；按新到旧返回摘要，不含结果体 |
+
+`tool` 仅接受 `crawl_site`、`batch_fetch_webpages`、`collect_pages`、`sync_collection`；`arguments` 与该工具在 `tools/list` 中的 `inputSchema` 一致，并在启动时同步校验。任务状态为 `queued`、`running`、`completed`、`failed` 或 `cancelled`；失败任务的错误文本上限 4096 字符，完整结构化结果仍需通过 `jobs_status` 获取。
+
+```json
+{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"jobs_start","arguments":{"tool":"crawl_site","arguments":{"seed_url":"https://example.com/docs","max_pages":50},"ttl_secs":600}}}
+```
+
+任务注册表仅存在于当前进程：最多 4 个排队/运行任务，结束后默认保留 3600 秒（60–86400 可调），进程重启即丢失；不跨进程共享，也不做持久化。结果为内存副本，大报告的保留会占用进程内存。HTTP 传输虽为无状态，但同一进程内可先 `POST` 启动、后续请求轮询；不提供多租户隔离，`job_id` 不是授权凭据，公网部署仍需 Bearer Token 与反向代理。
+
 ## 进度与业务工具目录
 
 批量抓取和爬虫在调用 `params._meta.progressToken` 存在时，可以发送 `notifications/progress`，携带同一 `progressToken`、`progress`、`total` 和 `message`。
@@ -122,6 +141,6 @@ TKLESS_MCP_TOKEN=... tkless mcp --http 0.0.0.0:8787 --allow-public-bind --auth-t
 {"jsonrpc":"2.0","method":"notifications/progress","params":{"progressToken":"crawl-1","progress":2,"total":10,"message":"Page processed"}}
 ```
 
-27 个业务工具的分类清单见 [README](../README.md#mcp-接入)。返回文件、图片、认证或缓存信息的工具，应按各自 Schema 和响应处理；适配器存在不代表站点所有内容均可访问。
+31 个业务工具的分类清单见 [README](../README.md#mcp-接入)。返回文件、图片、认证或缓存信息的工具，应按各自 Schema 和响应处理；适配器存在不代表站点所有内容均可访问。
 
 新增工具需同步更新 `get_available_tools`、`get_tool_catalog`、`dispatch_tool_execution` 及协议测试；实现与规范见 [开发标准](04-development-standards.md)。

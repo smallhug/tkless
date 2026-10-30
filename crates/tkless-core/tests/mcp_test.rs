@@ -1,6 +1,8 @@
+use std::time::{Duration, Instant};
 use tkless_core::cache::DocumentCache;
 use tkless_core::mcp::McpServer;
 use tkless_core::TklessEngine;
+use tokio::io::AsyncReadExt;
 
 #[tokio::test]
 async fn structured_documents_preserve_text_and_report_strict_schema_errors() {
@@ -234,7 +236,7 @@ async fn test_mcp_protocol_lifecycle() {
     let tools_array = tools_val["tools"]
         .as_array()
         .expect("Tools should be an array");
-    assert_eq!(tools_array.len(), 27);
+    assert_eq!(tools_array.len(), 31);
 
     let tool_names: Vec<&str> = tools_array
         .iter()
@@ -1126,4 +1128,118 @@ async fn test_mcp_two_stage_dynamic_discovery() {
         .as_str()
         .unwrap()
         .contains("recursively"));
+}
+
+#[tokio::test]
+async fn background_jobs_start_status_cancel_and_list() {
+    // A listener that accepts the request but never responds keeps the collection running
+    // until it is cancelled, making the lifecycle deterministic.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let hanging = tokio::spawn(async move {
+        if let Ok((mut stream, _)) = listener.accept().await {
+            let mut buffer = vec![0u8; 1024];
+            let _ = stream.read(&mut buffer).await;
+            tokio::time::sleep(Duration::from_secs(30)).await;
+        }
+    });
+
+    let server = McpServer::new(
+        TklessEngine::new().unwrap(),
+        DocumentCache::memory_only(300),
+    );
+    let started = server
+        .dispatch_tool_execution(
+            "jobs_start",
+            &serde_json::json!({
+                "tool": "collect_pages",
+                "arguments": {
+                    "allow_private_addresses": true,
+                    "config": {
+                        "url": format!("http://{address}/"),
+                        "id_pointer": "/id",
+                        "pagination": {
+                            "kind": "cursor",
+                            "parameter": "cursor",
+                            "items_pointer": "/items",
+                            "next_pointer": "/next"
+                        }
+                    }
+                }
+            }),
+            None,
+            None,
+        )
+        .await;
+    assert!(!started.is_error, "{:?}", started.structured_content);
+    let started = started.structured_content.unwrap();
+    let job_id = started["job_id"].as_str().unwrap().to_string();
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let status = server
+            .dispatch_tool_execution(
+                "jobs_status",
+                &serde_json::json!({"job_id": job_id}),
+                None,
+                None,
+            )
+            .await;
+        assert!(!status.is_error, "{:?}", status.structured_content);
+        let status = status.structured_content.unwrap();
+        if status["state"] == "running" {
+            break;
+        }
+        assert!(Instant::now() < deadline, "job did not start: {status}");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+
+    let cancelled = server
+        .dispatch_tool_execution(
+            "jobs_cancel",
+            &serde_json::json!({"job_id": job_id}),
+            None,
+            None,
+        )
+        .await;
+    assert!(!cancelled.is_error);
+    let cancelled = cancelled.structured_content.unwrap();
+    assert_eq!(cancelled["state"], "cancelled");
+    assert!(cancelled["finished_at"].is_string());
+
+    let listed = server
+        .dispatch_tool_execution(
+            "jobs_list",
+            &serde_json::json!({"state": "cancelled"}),
+            None,
+            None,
+        )
+        .await;
+    assert!(!listed.is_error);
+    let listed = listed.structured_content.unwrap();
+    assert_eq!(listed["total"], 1);
+    assert_eq!(listed["active"], 0);
+    assert_eq!(listed["jobs"][0]["job_id"], job_id);
+
+    let unknown = server
+        .dispatch_tool_execution(
+            "jobs_status",
+            &serde_json::json!({"job_id": "job-404"}),
+            None,
+            None,
+        )
+        .await;
+    assert!(unknown.is_error);
+
+    let unsupported = server
+        .dispatch_tool_execution(
+            "jobs_start",
+            &serde_json::json!({"tool": "web_search", "arguments": {"query": "Rust"}}),
+            None,
+            None,
+        )
+        .await;
+    assert!(unsupported.is_error);
+
+    hanging.abort();
 }
