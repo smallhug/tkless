@@ -155,6 +155,16 @@ tkless crawl https://example.com/docs --same-path-prefix --max-pages 50 --bundle
 
 打包只使用本次报告内容，不再访问网络。容器采用 ZIP stored（不压缩）实现以避免新增归档依赖，不支持 ZIP64、加密或注释；条目上限 512、未压缩总字节上限 64 MiB，超限直接报错。打包失败不会改变采集退出码，但不会留下声称成功的完整文件。
 
+### 3.2 EPUB 导出
+
+```bash
+tkless crawl https://example.com/docs --same-path-prefix --max-pages 50 --epub ./site.epub -o docs.md
+```
+
+`--epub` 生成 EPUB 3 电子书：`mimetype`、`META-INF/container.xml`、`OEBPS/content.opf`、`OEBPS/nav.xhtml` 以及每页一个 XHTML。页面正文以转义后的 `<pre>` 保存，保留原始 Markdown 文本而不做渲染；正文中的尖括号与 `&` 会被正确转义，标题进入目录与导航。
+
+EPUB 与 `--bundle` 互不依赖，可与 `-o`、`--checkpoint` 同时使用，但路径不能重复。导出要求至少一页，最多 508 页（受 512 条目上限约束）；同样采用 stored ZIP，不实现 ZIP64 与加密。生成的是结构合法的静态 EPUB 3，不包含封面图、字体嵌入、分章节重构或 Markdown 渲染。
+
 ## 4. 受限浏览器交互
 
 保存为 `browser.json`：

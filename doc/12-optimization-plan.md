@@ -60,7 +60,7 @@
 | WS7 | 内容类型 | 无 OCR、Office、ASR | P1/P2 | 12–20 |
 | WS8 | 稳定性 | 无每域名熔断、代理池、metrics | P2 | 8–12 |
 | WS9 | 平台与扩展 | 适配器编译期内置，缺大量平台 | P2 | 按站点 1–3 |
-| WS10 | 输出集成 | 无对象存储/数据库 sink，无 EPUB 导出 | P2 | 6–8 |
+| WS10 | 输出集成 | 无对象存储/数据库 sink | P2 | 6–8 |
 
 ---
 
@@ -241,7 +241,7 @@ tkless watch --config ./watch.json --state ./watch-state --interval 3600
 
 ### WS7 内容类型扩展（P1/P2，部分实施）
 
-> 实施状态（2026-10-30）：已落地 CDP `Page.printToPDF`（`tkless ... --pdf` 与 `capture_pdf_via_cdp`），复用截图相同的导航/等待/自动滚动/请求拦截流程。OCR、Office、EPUB 与 ASR 未实现；均需外部程序或可选依赖，待后续按需求排序。
+> 实施状态（2026-10-31）：已落地 CDP `Page.printToPDF`（`tkless ... --pdf` 与 `capture_pdf_via_cdp`），复用截图相同的导航/等待/自动滚动/请求拦截流程；并新增 `crawl --epub` 导出静态 EPUB 3（stored ZIP，无新依赖，正文以转义 `<pre>` 保留 Markdown 原文）。OCR、Office、Markdown 渲染式 EPUB 与 ASR 未实现；均需外部程序或可选依赖，待后续按需求排序。
 
 **原则**：默认构建不引入重依赖与模型权重；全部通过 feature 开关，并在 `--help`/文档中明确"需要外部程序或额外特性"。
 
@@ -433,3 +433,4 @@ tkless watch --config ./watch.json --state ./watch-state --interval 3600
 | 2026-10-30 | WS9 部分实施：声明式配置适配器（TKLESS_ADAPTERS_DIR） |
 | 2026-10-31 | WS10 部分实施：`crawl --bundle` Markdown 知识库打包（stored ZIP） |
 | 2026-10-31 | WS4 部分实施：MCP `jobs_*` 进程内异步任务（限流、TTL、取消） |
+| 2026-10-31 | WS7 部分实施：`crawl --epub` 静态 EPUB 3 导出（无新依赖） |
