@@ -1703,4 +1703,8 @@ pub struct CrawlArgs {
     /// 递归爬取单页面间歇延迟等待时间 (毫秒)，防止触发服务端 429 速率限制
     #[arg(long = "delay-ms", default_value_t = 0, value_name = "MS")]
     pub delay_ms: u64,
+
+    /// 将抓取结果打包为 Markdown ZIP（README 索引 + 每页一个 .md）
+    #[arg(long = "bundle", value_name = "FILE")]
+    pub bundle: Option<PathBuf>,
 }

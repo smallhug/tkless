@@ -145,6 +145,16 @@ robots.txt 首版支持 `TkLess` / `*` 分组、Allow/Disallow、`*` 和尾部 `
 
 报告包含 `complete`、`stop_reason`、`pending_urls`。JSONL 最后一条新增 `type=summary` 记录，前面的页面行保持页面字段；Markdown 开头包含相同完成状态。不完整结果默认返回非零退出码，`--allow-partial` 可以接受部分结果。深度、域名和排除规则定义的是采集范围，`complete` 表示该范围内任务已完成。
 
+### 3.1 Markdown 知识库打包
+
+```bash
+tkless crawl https://example.com/docs --same-path-prefix --max-pages 50 --bundle ./site.zip -o docs.md
+```
+
+`--bundle` 与 `-o`/`--checkpoint` 相互独立，可同时使用，但路径不能相同。压缩包包含 `README.md`（种子 URL、页数、完成状态、停止原因与页面索引）和 `pages/001-<slug>.md` 形式的逐页 Markdown；每页带 `url`、`title`、`rank`、`depth`、`status`、`tokens` 前置元数据，失败页面在索引中保留并写有错误引用。
+
+打包只使用本次报告内容，不再访问网络。容器采用 ZIP stored（不压缩）实现以避免新增归档依赖，不支持 ZIP64、加密或注释；条目上限 512、未压缩总字节上限 64 MiB，超限直接报错。打包失败不会改变采集退出码，但不会留下声称成功的完整文件。
+
 ## 4. 受限浏览器交互
 
 保存为 `browser.json`：
