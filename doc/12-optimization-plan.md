@@ -185,7 +185,9 @@ tkless watch --config ./watch.json --state ./watch-state --interval 3600
 - 单轮超时、webhook 5xx、状态文件损坏分别返回可区分的错误码；
 - `--once` 退出码语义：本轮全部 job 完整为 0，存在部分结果为 1（可 `--allow-partial`）。
 
-### WS4 MCP 传输、异步任务与协议演进（P1）
+### WS4 MCP 传输、异步任务与协议演进（P1，部分实施）
+
+> 实施状态（2026-10-30）：已落地可选 HTTP JSON-RPC 传输（`--http`、`POST /mcp`、`GET /healthz`、Bearer Token、回环默认）与可配置工具超时（`--tool-timeout-secs`）。异步任务工具（`jobs_*`）未实现，需同时扩写工具目录与契约；当前仍建议长任务使用 CLI 或 checkpoint 分次执行。
 
 **现状与证据**：`mcp/server/transport.rs` 只有 `run_transport`（stdin/stdout）；工具调用硬编码 300 秒超时；MCP 只声明 `tools` 能力。
 
@@ -411,3 +413,4 @@ tkless watch --config ./watch.json --state ./watch-state --interval 3600
 | 2026-10-30 | WS1 实施：模板化请求（GET/POST/PUT）、请求体占位符、游标体分页、校验与测试 |
 | 2026-10-30 | WS2 部分实施：滚动收敛、Shadow DOM/同源 iframe 序列化、可选 XHR 捕获与边界 |
 | 2026-10-30 | WS3 部分实施：`watch` 单轮/循环、轮次预算、文件与 Webhook 通知、HMAC 签名与失败隔离 |
+| 2026-10-30 | WS4 部分实施：可选 HTTP JSON-RPC 传输、Bearer Token、可配置工具超时 |

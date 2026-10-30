@@ -15,6 +15,7 @@
 - 采集支持模板化请求：`CollectionConfig.request` 可配置 GET/POST/PUT、请求头与请求体，请求体可用 `{{page}}`、`{{offset}}`、`{{cursor}}`、`{{limit}}` 占位符，游标可放在请求体中；请求体上限 64 KiB，禁止在模板头中写凭据，模板请求不跟随重定向。
 - 浏览器工作流新增 `scroll_until_stable` 步骤、`include_shadow_dom`/`include_frames` 序列化选项，以及受条数与字节上限约束的 XHR/fetch 响应捕获（默认关闭，带凭据请求不捕获）。
 - 新增 `watch` 子命令：每轮按配置运行多个采集任务，输出新增/更新/删除事件，并支持文件或 Webhook 通知（可选 HMAC 签名、默认拒绝私网目标）；调度由 cron 等外部工具承担。
+- MCP 新增可选 HTTP JSON-RPC 传输（`--http`、`POST /mcp`、`GET /healthz`），默认仅回环、非回环需显式授权与 Bearer Token；单次调用超时改由 `--tool-timeout-secs` 配置。
 
 ### Fixed
 

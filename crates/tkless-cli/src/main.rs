@@ -292,6 +292,15 @@ async fn run(args: CliArgs) -> Result<()> {
             ),
             _ => (args.no_cache, args.cache_ttl, args.cache_dir.clone()),
         };
+        let (http, tool_timeout_secs, auth_token_env, allow_public_bind) = match args.command {
+            Some(SubCommand::Mcp(ref mcp_args)) => (
+                mcp_args.http.clone(),
+                mcp_args.tool_timeout_secs,
+                mcp_args.auth_token_env.clone(),
+                mcp_args.allow_public_bind,
+            ),
+            _ => (None, 300, None, false),
+        };
 
         let cache = if no_cache {
             DocumentCache::memory_only(cache_ttl)
@@ -319,7 +328,31 @@ async fn run(args: CliArgs) -> Result<()> {
             tkless_core::mcp::McpMode::Full
         };
 
-        let mcp_server = McpServer::new_with_mode(engine, cache, mcp_mode);
+        let mcp_server =
+            McpServer::new_with_mode(engine, cache, mcp_mode).with_tool_timeout(tool_timeout_secs);
+        if let Some(bind) = http {
+            let auth_token = match auth_token_env {
+                Some(name) => Some(
+                    std::env::var(&name)
+                        .with_context(|| format!("Environment variable {name} is not set"))?,
+                ),
+                None => None,
+            };
+            let listener = tokio::net::TcpListener::bind(&bind)
+                .await
+                .with_context(|| format!("Failed to bind MCP HTTP listener on {bind}"))?;
+            return mcp_server
+                .serve_http(
+                    listener,
+                    tkless_core::mcp::HttpTransportOptions {
+                        auth_token,
+                        allow_public_bind,
+                        ..Default::default()
+                    },
+                )
+                .await
+                .map_err(Into::into);
+        }
         return mcp_server
             .run_transport(tokio::io::stdin(), tokio::io::stdout())
             .await

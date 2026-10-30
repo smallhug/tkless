@@ -2,6 +2,7 @@ mod auth;
 mod content;
 mod discovery;
 mod extraction;
+mod http;
 mod inspection;
 mod jobs;
 mod media;
@@ -29,6 +30,8 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 
+pub use http::HttpTransportOptions;
+
 /// Bounded notification sender; consumers must drain it concurrently with streaming calls.
 pub type NotificationSender = tokio::sync::mpsc::Sender<Value>;
 
@@ -50,6 +53,7 @@ pub struct McpServer {
     cache: Arc<DocumentCache>,
     mode: McpMode,
     active_dynamic_tools: Arc<RwLock<HashSet<String>>>,
+    tool_timeout_secs: u64,
 }
 
 impl McpServer {
@@ -65,7 +69,14 @@ impl McpServer {
             cache: Arc::new(cache),
             mode,
             active_dynamic_tools: Arc::new(RwLock::new(HashSet::new())),
+            tool_timeout_secs: 300,
         }
+    }
+
+    /// Builder method to change the per-call timeout used by both transports.
+    pub fn with_tool_timeout(mut self, seconds: u64) -> Self {
+        self.tool_timeout_secs = seconds.clamp(1, 3600);
+        self
     }
 
     /// Builder method to specify the MCP operational mode.

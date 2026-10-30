@@ -8,6 +8,12 @@
 tkless mcp
 tkless mcp --dynamic
 tkless mcp --profile dynamic
+
+# HTTP 传输（可选），默认仅允许回环地址
+tkless mcp --http 127.0.0.1:8787 --tool-timeout-secs 120
+
+# 非回环绑定必须显式授权并提供 Bearer Token
+TKLESS_MCP_TOKEN=... tkless mcp --http 0.0.0.0:8787 --allow-public-bind --auth-token-env TKLESS_MCP_TOKEN
 ```
 
 完整模式返回 27 个业务工具；动态模式初始返回 2 个核心工具和 4 个发现元工具。环境变量 `TKLESS_MCP_DYNAMIC=1` 也可启用动态模式。MCP 本身不依赖 Node.js 或 Python；浏览器渲染和截图另需本机浏览器或远程 CDP 服务。
@@ -24,13 +30,23 @@ tkless mcp --profile dynamic
 
 服务通过 stdio 读取和输出单行 JSON-RPC 2.0，诊断日志写入 stderr。仅实现 `2025-11-25`，初始化始终声明该版本；不模拟旧协议，也不省略结构化输出。请求其他版本时仍返回自身支持的版本，客户端不支持该版本时应断开，遵循 [MCP 版本协商规范](https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle#version-negotiation)。
 
+## HTTP 传输
+
+指定 `--http ADDR` 时改用 HTTP JSON-RPC：`POST /mcp` 每次发送一个 JSON-RPC 消息，`GET /healthz` 返回健康状态。该传输为无状态实现，单连接单请求（`Connection: close`），不提供 SSE 或服务端主动通知流；需要进度通知或取消的长任务仍应使用 stdio。
+
+- 默认只允许绑定回环地址；非回环地址必须同时指定 `--allow-public-bind` 与 `--auth-token-env`，否则启动失败。
+- 设置 Token 后，每个请求都必须携带 `Authorization: Bearer <token>`，否则返回 401。
+- 请求头上限 16 KiB、请求体上限 1 MiB，拒绝分块传输；单个 IP 未限制，但全局最多 32 个并发请求（超出排队）。
+- 单次请求超时由 `--tool-timeout-secs`（默认 300，1–3600）控制；超时返回 JSON-RPC 错误 `-32001`。
+- 不实现会话、鉴权刷新或多租户隔离；暴露到公网前应置于反向代理与 TLS 之后。
+
 ```jsonl
 {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"example-client","version":"1.0"}}}
 {"jsonrpc":"2.0","method":"notifications/initialized"}
 {"jsonrpc":"2.0","id":2,"method":"tools/list"}
 ```
 
-工具调用并发执行，最多 64 个在途调用，单次超时 300 秒。调用方可发送 `notifications/cancelled`，并在 `params.requestId` 中指定原请求 ID。JSON-RPC 协议错误和工具执行错误是两类响应，调用方都应处理。
+工具调用并发执行，最多 64 个在途调用，单次超时默认 300 秒（`--tool-timeout-secs` 可调，1–3600）。调用方可发送 `notifications/cancelled`，并在 `params.requestId` 中指定原请求 ID。JSON-RPC 协议错误和工具执行错误是两类响应，调用方都应处理。
 
 ## Bing 搜索
 

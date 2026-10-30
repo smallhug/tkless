@@ -307,7 +307,7 @@ tkless completions powershell
 
 ## MCP 接入
 
-当前服务通过 stdio 传输，仅实现 `2025-11-25` 协议，初始化返回该支持版本。工具调用并发执行，支持 `notifications/cancelled`，单次调用超时为 300 秒，最多 64 个在途调用；动态模式声明 `tools.listChanged`。业务工具和参数见 [tools.rs](crates/tkless-core/src/mcp/tools.rs)。
+当前服务默认通过 stdio 传输，也可用 `--http ADDR` 提供无状态 HTTP JSON-RPC（`POST /mcp`、`GET /healthz`，默认仅回环，非回环需 `--allow-public-bind` 与 Bearer Token），仅实现 `2025-11-25` 协议。工具调用并发执行，支持 `notifications/cancelled`，单次调用超时默认 300 秒（`--tool-timeout-secs` 可调），最多 64 个在途调用；动态模式声明 `tools.listChanged`。业务工具和参数见 [tools.rs](crates/tkless-core/src/mcp/tools.rs)。
 
 支持 `mcpServers` 配置的客户端可使用以下配置；若客户端找不到 `PATH` 中的程序，将 `command` 改为可执行文件绝对路径：
 
@@ -383,7 +383,7 @@ tkless [OPTIONS] [TARGET] [COMMAND]
 | `research` | 启发式两跳资料检索及摘录报告 |
 | `tables` | 表格 Markdown / CSV / TSV / JSON / SQL 导出 |
 | `diff` | 本地文本或网页的行级差异 |
-| `mcp` | stdio MCP 服务 |
+| `mcp` | stdio / HTTP MCP 服务 |
 | `login` | B站扫码登录或知乎登录指引 |
 | `cache` | 缓存统计与清理 |
 | `adapters`（`platforms`） | 平台及能力目录 |
