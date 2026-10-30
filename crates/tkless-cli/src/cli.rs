@@ -946,6 +946,8 @@ pub struct CliArgs {
 
 #[derive(Subcommand, Debug, Clone)]
 pub enum SubCommand {
+    /// 获取公开微信公众号文章、关联合集和合集分页列表
+    Wechat(WechatArgs),
     /// 按配置进行通用分页和列表详情采集，输出 JSON 报告
     Collect(CollectionArgs),
     /// 保存采集快照，输出新增、更新和删除事件
@@ -1082,6 +1084,46 @@ pub struct BrowseArgs {
     pub plan: PathBuf,
     #[arg(long, short = 'o')]
     pub output: Option<PathBuf>,
+}
+
+#[derive(clap::Args, Debug, Clone)]
+pub struct WechatArgs {
+    /// 读取账号历史列表（source 为文章 URL 或 biz；需要有效会话）
+    #[arg(long)]
+    pub history: bool,
+    /// 本地授权会话 JSON 文件，不向输出或检查点写入凭据
+    #[arg(long, requires = "history")]
+    pub session_file: Option<PathBuf>,
+    /// 历史列表及正文抓取检查点
+    #[arg(long, requires = "history")]
+    pub checkpoint: Option<PathBuf>,
+    /// 从检查点恢复，跳过已完成正文并重试失败项
+    #[arg(long, requires_all = ["history", "checkpoint"])]
+    pub resume: bool,
+    /// 公众号显示名称、文章 URL 或公开合集 URL
+    pub source: String,
+    #[arg(long, short = 'l', default_value_t = tkless_core::wechat::DEFAULT_LIMIT)]
+    pub limit: usize,
+    #[arg(long, default_value_t = tkless_core::wechat::DEFAULT_PAGES)]
+    pub max_pages: usize,
+    #[arg(long, default_value_t = 300)]
+    pub delay_ms: u64,
+    /// 获取列表中每篇文章的正文
+    #[arg(long)]
+    pub fetch_content: bool,
+    /// 仅接受指定 __biz 的公众号文章
+    #[arg(long)]
+    pub expected_biz: Option<String>,
+    /// 文章入口仅识别身份和合集，不继续抓取合集列表
+    #[arg(long)]
+    pub no_follow_albums: bool,
+    #[arg(long, default_value_t = 4000, value_parser = clap::value_parser!(u32).range(1..=100000))]
+    pub max_tokens_per_article: u32,
+    #[arg(long, short = 'o')]
+    pub output: Option<PathBuf>,
+    /// 接受搜索发现、预算中断等非完整列表，返回报告中的明确状态
+    #[arg(long)]
+    pub allow_partial: bool,
 }
 
 #[derive(clap::Args, Debug, Clone, Default)]

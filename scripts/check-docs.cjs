@@ -65,8 +65,8 @@ for (const args of [['mcp', '--no-cache'], ['mcp', '--dynamic', '--no-cache']]) 
   }
 }
 if (catalogs.length === 2) {
-  if (catalogs[0].length !== 26 || catalogs[1].length !== 6) errors.push('Unexpected MCP tool counts');
-  for (const name of ['collect_pages', 'sync_collection', 'browse_page']) {
+  if (catalogs[0].length !== 27 || catalogs[1].length !== 6) errors.push('Unexpected MCP tool counts');
+  for (const name of ['collect_pages', 'sync_collection', 'browse_page', 'list_wechat_articles']) {
     if (!catalogs[0].some(tool => tool.name === name)) errors.push(`Missing workflow tool: ${name}`);
   }
   const search = catalogs[0].find(tool => tool.name === 'web_search')?.inputSchema.properties;

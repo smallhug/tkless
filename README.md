@@ -21,7 +21,7 @@
 - **批量与站点抓取**：URL 列表并发提取、站点链接遍历、Sitemap、深度与页数限制、路径范围限制。
 - **PDF**：识别远程、本地或 stdin 中的 PDF，提取文本和元数据，再用启发式规则整理为 Markdown。
 - **浏览器渲染**：通过 CDP 使用 Chrome / Edge / Chromium，支持挑战回退、自动滚动、资源拦截和截图。
-- **MCP 服务**：stdio JSON-RPC，26 个业务工具；动态模式初始暴露 2 个核心工具和 4 个发现元工具。
+- **MCP 服务**：stdio JSON-RPC，27 个业务工具；动态模式初始暴露 2 个核心工具和 4 个发现元工具。
 - **辅助工具**：表格 SQL / CSV / TSV 导出、文本差异、RSS / Atom、REPL、自检、缓存维护、Shell 补全和自升级。
 
 普通抓取和转换不需要 Node.js、Python 或外部大模型服务。CDP 渲染及截图需要本机已安装的 Chromium 系浏览器，或可连接的远程 CDP 服务。
@@ -325,7 +325,7 @@ tkless completions powershell
 ```
 
 ```bash
-# 全量模式：tools/list 返回 26 个业务工具
+# 全量模式：tools/list 返回 27 个业务工具
 tkless mcp
 
 # 动态模式：初始返回 6 个工具，按需激活业务工具
@@ -354,11 +354,11 @@ MCP 仅支持 `2025-11-25`；网页提取、HTML 清洗、搜索和批量抓取�
 
 动态模式减少初始工具声明；具体 Token 开销取决于当前 Schema、序列化方式、分词器及宿主注入策略，此处不沿用旧版固定节省率。
 
-26 个业务工具按目录分类如下，四个发现元工具不计入该数量：
+27 个业务工具按目录分类如下，四个发现元工具不计入该数量：
 
 | 分类 | 工具 |
 |---|---|
-| 内容（9） | `fetch_webpage`、`crawl_site`、`batch_fetch_webpages`、`clean_html`、`fetch_feed`、`scaffold_schema`、`collect_pages`、`sync_collection`、`browse_page` |
+| 内容（10） | `fetch_webpage`、`crawl_site`、`batch_fetch_webpages`、`clean_html`、`fetch_feed`、`scaffold_schema`、`collect_pages`、`sync_collection`、`browse_page`、`list_wechat_articles` |
 | 搜索（5） | `web_search`、`search_bilibili`、`inspect_links`、`list_adapters`、`deep_research` |
 | 媒体（3） | `fetch_bilibili_feed`、`download_media`、`take_screenshot` |
 | 分析（6） | `export_tables`、`summarize_content`、`split_document`、`chunk_markdown`、`diff_documents`、`compare_similarity` |
@@ -377,6 +377,7 @@ tkless [OPTIONS] [TARGET] [COMMAND]
 | `search` | Bing 平台定向搜索与搜索后正文提取 |
 | `batch` | 从文件或 stdin 读取 URL 列表并发抓取 |
 | `crawl` | 站点链接 / Sitemap 遍历与知识库汇编 |
+| `wechat` | 微信公众号名称发现、合集翻页与授权账号历史采集（`--history`）；[使用说明](doc/11-wechat-public.md) |
 | `collect` | 通用分页与列表详情采集 |
 | `sync` | 保存采集快照并输出增量事件 |
 | `browse` | 执行受限浏览器步骤并提取正文 |

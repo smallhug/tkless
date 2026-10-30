@@ -33,6 +33,7 @@ mod state_file;
 pub mod summarizer;
 pub mod sync;
 pub mod token;
+pub mod wechat;
 pub mod workflow;
 
 pub use adapters::{

@@ -15,6 +15,10 @@ pub struct ToolCatalogEntry {
 pub fn get_tool_catalog() -> Vec<ToolCatalogEntry> {
     vec![
         ToolCatalogEntry {
+            name: "list_wechat_articles", category: "content", summary: "Public WeChat account discovery, article identity and album cursor pagination with explicit completeness.",
+            keywords: &["wechat", "公众号", "微信", "album", "articles", "history"], is_core: false,
+        },
+        ToolCatalogEntry {
             name: "browse_page", category: "content", summary: "Extract browser-rendered content after bounded wait_for, fill, click, and scroll actions.",
             keywords: &["browser", "interactive", "click", "fill", "wait", "dynamic"], is_core: false,
         },
@@ -278,6 +282,23 @@ pub fn get_initial_dynamic_tools() -> Vec<McpTool> {
 /// Returns the complete registry of MCP tools exposed by TkLess.
 pub fn get_available_tools() -> Vec<McpTool> {
     let mut tools = vec![
+        McpTool {
+            output_schema: None, name: "list_wechat_articles".into(),
+            description: "Discover public WeChat articles by name/article/album. Set history=true with an article URL or biz and a local session_file to enumerate authorized account history, including secondary articles. Supports checkpoint/resume. listing_complete means the selected visible listing was exhausted, not recovery of deleted/inaccessible history. Never bypasses verification.".into(),
+            input_schema: serde_json::json!({"type":"object","additionalProperties":false,"required":["source"],"properties":{
+                "source":{"type":"string","minLength":1,"maxLength":4096},
+                "limit":{"type":"integer","minimum":1,"maximum":crate::wechat::MAX_LIMIT,"default":crate::wechat::DEFAULT_LIMIT},
+                "max_pages":{"type":"integer","minimum":1,"maximum":crate::wechat::MAX_PAGES,"default":crate::wechat::DEFAULT_PAGES},
+                "delay_ms":{"type":"integer","minimum":0,"maximum":60000,"default":300},
+                "fetch_content":{"type":"boolean","default":false},"follow_albums":{"type":"boolean","default":true},
+                "expected_biz":{"type":"string","minLength":1,"maxLength":128},
+                "history":{"type":"boolean","default":false,"description":"Enumerate authorized account history; source must be article URL or biz. listing_complete covers session-visible history only."},
+                "session_file":{"type":"string","description":"Local authorized session JSON path; never pass credentials inline."},
+                "checkpoint":{"type":"string","description":"Local history checkpoint path."},
+                "resume":{"type":"boolean","default":false},
+                "max_tokens_per_article":{"type":"integer","minimum":1,"maximum":100000,"default":4000}
+            }}),
+        },
         McpTool {
             output_schema: None, name: "browse_page".into(),
             description: "Execute at most 32 declarative browser steps then extract content. Blocks non-GET/HEAD/OPTIONS requests and cross-origin navigation by default. No arbitrary JavaScript. Use wait_for after actions that load content.".into(),

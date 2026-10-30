@@ -7,6 +7,53 @@ pub async fn run(
     fetch_options: &FetchOptions,
     extraction_options: &ExtractionOptions,
 ) -> Result<bool> {
+    if let SubCommand::Wechat(args) = command {
+        crate::paths::distinct(args.output.as_deref(), args.session_file.as_deref())?;
+        crate::paths::distinct(args.output.as_deref(), args.checkpoint.as_deref())?;
+        crate::paths::distinct(args.session_file.as_deref(), args.checkpoint.as_deref())?;
+        let options = tkless_core::wechat::WechatOptions {
+            limit: args.limit,
+            max_pages: args.max_pages,
+            delay_ms: args.delay_ms,
+            fetch_content: args.fetch_content,
+            follow_albums: !args.no_follow_albums,
+            expected_biz: args.expected_biz.clone(),
+        };
+        options.validate()?;
+        let mut fetch = fetch_options.clone();
+        fetch.initial_target_host = Some("mp.weixin.qq.com".into());
+        fetch.initial_target_origin = Some("https://mp.weixin.qq.com".into());
+        let engine = TklessEngine::with_options(fetch)?;
+        let mut extraction = extraction_options.clone();
+        extraction.max_tokens = Some(args.max_tokens_per_article as usize);
+        let report = if args.history {
+            tkless_core::wechat::history::list_history(
+                &engine,
+                &args.source,
+                &options,
+                &tkless_core::wechat::history::HistoryOptions {
+                    session_file: args.session_file.clone(),
+                    checkpoint: args.checkpoint.clone(),
+                    resume: args.resume,
+                },
+                &extraction,
+            )
+            .await?
+        } else {
+            tkless_core::wechat::list_articles(&engine, &args.source, &options, &extraction).await?
+        };
+        output::write_payload(
+            &serde_json::to_string_pretty(&report)?,
+            args.output.as_deref(),
+        )?;
+        if !report.complete && !args.allow_partial {
+            bail!(
+                "WeChat listing is partial ({:?}); inspect the report or use --allow-partial",
+                report.stop_reason
+            );
+        }
+        return Ok(true);
+    }
     if let SubCommand::Browse(browse) = command {
         crate::paths::distinct(browse.output.as_deref(), Some(&browse.plan))?;
         let plan: tkless_core::browser_workflow::BrowserPlan =

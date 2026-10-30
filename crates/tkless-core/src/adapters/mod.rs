@@ -242,7 +242,13 @@ impl AdapterRegistry {
                 name: "wechat",
                 title: "微信公众号 (WeChat)",
                 domain_patterns: &["mp.weixin.qq.com"],
-                features: &["懒加载图片还原", "作者与发布时间解析", "反爬/删除风控探测"],
+                features: &[
+                    "懒加载图片还原",
+                    "公众号身份与关联合集",
+                    "公开合集游标分页",
+                    "按名称发现并核验文章",
+                    "反爬/删除风控探测",
+                ],
             },
             AdapterInfo {
                 name: "xiaohongshu",

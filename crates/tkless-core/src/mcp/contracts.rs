@@ -14,6 +14,12 @@ pub(super) fn output_schema(name: &str) -> Option<Value> {
         "title":{"type":"string"},"url":{"type":"string"},"snippet":{"type":"string"},"engine":{"const":"bing"}
     }});
     let success = match name {
+        "list_wechat_articles" => {
+            json!({"type":"object","required":["source","scope","account_history_complete","listing_complete","complete","articles","stop_reason"],"properties":{
+                "source":{"type":"string"},"scope":{"type":"string"},"account_history_complete":{"const":false},
+                "listing_complete":{"type":"boolean"},"complete":{"type":"boolean"},"articles":{"type":"array"},"stop_reason":{"type":"string"}
+            }})
+        }
         "sync_collection" => {
             json!({"type":"object","required":["generation","complete","events","deletions_applied"],"properties":{
                 "generation":{"type":"integer"},"complete":{"type":"boolean"},"events":{"type":"array"},"deletions_applied":{"type":"boolean"}

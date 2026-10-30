@@ -239,6 +239,7 @@ impl McpServer {
         let result = match tool_name {
             "browse_page" => self.call_browse_page(arguments).await,
             "collect_pages" => self.call_collect_pages(arguments).await,
+            "list_wechat_articles" => self.call_list_wechat_articles(arguments).await,
             "sync_collection" => self.call_sync_collection(arguments).await,
             // Stage 1: Dynamic Discovery Meta-Tools
             "discover_tools" => self.call_discover_tools(arguments).await,
