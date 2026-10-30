@@ -496,3 +496,227 @@ async fn collection_stops_before_cross_origin_next_page() {
     assert_eq!(report.pages_fetched, 1);
     assert!(!report.complete);
 }
+
+/// Mock server that exposes the full request text so tests can assert method, headers and body.
+struct RawSite {
+    url: String,
+    requests: Arc<std::sync::Mutex<Vec<String>>>,
+    task: tokio::task::JoinHandle<()>,
+}
+impl Drop for RawSite {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
+impl RawSite {
+    async fn new(handler: impl Fn(&str) -> (u16, String) + Send + Sync + 'static) -> Self {
+        let socket = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", socket.local_addr().unwrap());
+        let handler = Arc::new(handler);
+        let requests = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let recorded = requests.clone();
+        let task = tokio::spawn(async move {
+            while let Ok((mut stream, _)) = socket.accept().await {
+                let handler = handler.clone();
+                let recorded = recorded.clone();
+                tokio::spawn(async move {
+                    let mut buffer = Vec::new();
+                    let mut chunk = vec![0; 4096];
+                    loop {
+                        let read = stream.read(&mut chunk).await.unwrap_or(0);
+                        if read == 0 {
+                            break;
+                        }
+                        buffer.extend_from_slice(&chunk[..read]);
+                        if let Some(end) = buffer.windows(4).position(|w| w == b"\r\n\r\n") {
+                            let head = String::from_utf8_lossy(&buffer[..end]).to_string();
+                            let length = head
+                                .lines()
+                                .find_map(|line| {
+                                    let line = line.to_ascii_lowercase();
+                                    line.strip_prefix("content-length:")
+                                        .map(|value| value.trim().parse::<usize>().unwrap_or(0))
+                                })
+                                .unwrap_or(0);
+                            if buffer.len() >= end + 4 + length {
+                                break;
+                            }
+                        }
+                    }
+                    let request = String::from_utf8_lossy(&buffer).to_string();
+                    recorded.lock().unwrap().push(request.clone());
+                    let (status, body) = handler(&request);
+                    let response = format!("HTTP/1.1 {status} Test\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+                    let _ = stream.write_all(response.as_bytes()).await;
+                });
+            }
+        });
+        Self {
+            url,
+            requests,
+            task,
+        }
+    }
+    fn engine(&self) -> TklessEngine {
+        TklessEngine::with_options(FetchOptions {
+            allow_private_addresses: true,
+            ..Default::default()
+        })
+        .unwrap()
+    }
+    fn requests(&self) -> Vec<String> {
+        self.requests.lock().unwrap().clone()
+    }
+}
+
+fn request_body(request: &str) -> &str {
+    request
+        .split_once("\r\n\r\n")
+        .map(|(_, body)| body)
+        .unwrap_or("")
+}
+
+#[tokio::test]
+async fn templated_post_body_drives_cursor_pagination() {
+    let site = RawSite::new(|request| {
+        if request_body(request).contains("\"cursor\":\"c1\"") {
+            (200, r#"{"items":[{"id":2}],"next":null}"#.to_string())
+        } else {
+            (200, r#"{"items":[{"id":1}],"next":"c1"}"#.to_string())
+        }
+    })
+    .await;
+    let config = CollectionConfig {
+        url: site.url.clone(),
+        id_pointer: Some("/id".into()),
+        pagination: Pagination::Cursor {
+            parameter: "cursor".into(),
+            items_pointer: "/items".into(),
+            next_pointer: "/next".into(),
+        },
+        request: Some(tkless_core::collection::RequestSpec {
+            method: "POST".into(),
+            content_type: Some("application/json".into()),
+            headers: [("X-Requested-With".to_string(), "XMLHttpRequest".to_string())]
+                .into_iter()
+                .collect(),
+            body: Some(r#"{"cursor":"{{cursor}}","size":{{limit}}}"#.into()),
+            page_size: Some(50),
+        }),
+        ..Default::default()
+    };
+    let report = collect_pages(&site.engine(), &config, &ExtractionOptions::default())
+        .await
+        .unwrap();
+
+    let requests = site.requests();
+    assert_eq!(requests.len(), 2);
+    assert!(requests[0].starts_with("POST / "));
+    assert!(requests[0].contains("content-type: application/json"));
+    assert!(requests[0].contains("x-requested-with: XMLHttpRequest"));
+    assert!(request_body(&requests[0]).contains("\"cursor\":\"\",\"size\":50"));
+    assert!(request_body(&requests[1]).contains("\"cursor\":\"c1\",\"size\":50"));
+    assert!(report.complete);
+    assert!(report.listing_complete);
+    assert_eq!(report.records.len(), 2);
+    assert_eq!(report.stop_reason.as_str(), "exhausted");
+}
+
+#[tokio::test]
+async fn templated_request_rejects_redirects_and_upstream_errors() {
+    let redirect = RawSite::new(|_| (302, String::new())).await;
+    let config = CollectionConfig {
+        url: redirect.url.clone(),
+        pagination: Pagination::Cursor {
+            parameter: "cursor".into(),
+            items_pointer: "/items".into(),
+            next_pointer: "/next".into(),
+        },
+        request: Some(tkless_core::collection::RequestSpec {
+            method: "POST".into(),
+            content_type: Some("application/json".into()),
+            body: Some("{}".into()),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let error = collect_pages(&redirect.engine(), &config, &ExtractionOptions::default())
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("do not follow redirects"));
+
+    let rejected = RawSite::new(|_| (405, String::new())).await;
+    let mut config = config;
+    config.url = rejected.url.clone();
+    let error = collect_pages(&rejected.engine(), &config, &ExtractionOptions::default())
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        tkless_core::TklessError::HttpStatusError { status: 405, .. }
+    ));
+}
+
+#[tokio::test]
+async fn templated_request_requires_valid_configuration() {
+    let site = RawSite::new(|_| (200, r#"{"items":[],"next":null}"#.into())).await;
+    let mut config = CollectionConfig {
+        url: site.url.clone(),
+        pagination: Pagination::Cursor {
+            parameter: "cursor".into(),
+            items_pointer: "/items".into(),
+            next_pointer: "/next".into(),
+        },
+        ..Default::default()
+    };
+
+    config.request = Some(tkless_core::collection::RequestSpec {
+        method: "POST".into(),
+        body: Some(r#"{"cursor":"{{unknown}}"}"#.into()),
+        ..Default::default()
+    });
+    assert!(
+        collect_pages(&site.engine(), &config, &ExtractionOptions::default())
+            .await
+            .is_err()
+    );
+
+    let mut headers = std::collections::BTreeMap::new();
+    headers.insert("Cookie".to_string(), "session=1".to_string());
+    config.request = Some(tkless_core::collection::RequestSpec {
+        method: "POST".into(),
+        body: Some("{}".into()),
+        headers,
+        ..Default::default()
+    });
+    assert!(
+        collect_pages(&site.engine(), &config, &ExtractionOptions::default())
+            .await
+            .is_err()
+    );
+    assert!(site.requests().is_empty());
+}
+
+#[tokio::test]
+async fn mcp_accepts_templated_request_configuration() {
+    let site = RawSite::new(|_| (200, r#"{"items":[{"id":1}],"next":null}"#.into())).await;
+    let server =
+        tkless_core::McpServer::new(site.engine(), tkless_core::DocumentCache::memory_only(60));
+    let result = server
+        .dispatch_tool_execution(
+            "collect_pages",
+            &serde_json::json!({"config":{
+                "url": site.url,
+                "id_pointer": "/id",
+                "request": {"method":"post","content_type":"application/json","body":"{\"cursor\":\"{{cursor}}\"}","page_size":20},
+                "pagination": {"kind":"cursor","parameter":"cursor","items_pointer":"/items","next_pointer":"/next"}
+            },"allow_private_addresses":true}),
+            None,
+            None,
+        )
+        .await;
+    assert!(!result.is_error, "{:?}", result.structured_content);
+    let report = result.structured_content.unwrap();
+    assert_eq!(report["records"].as_array().unwrap().len(), 1);
+    assert!(site.requests()[0].starts_with("POST "));
+}

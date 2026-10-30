@@ -54,7 +54,38 @@ tkless collect --config ./collect.json --allow-partial -o collection.json
 
 默认不跟随跨源分页或详情 URL；`allow_cross_origin=true` 可显式放开发现的链接范围。HTTP 请求仍进行 SSRF 检查，并拒绝 API 请求的跨源重定向。重复 URL、重复条目页、空页带后续游标、页数/条目上限以及中途错误都不会被标为完整采集。`next_url` 是诊断信息，不是可独立保证无遗漏的续传游标。
 
-详情使用通用 HTML 提取或 `details.schema`，不自动调用平台专属适配器。列表字段规则与详情字段规则分开配置。HTML 与游标 GET API 已支持；不包含任意 POST 请求模板、自动猜测网站分页协议或全文数据库检索。
+详情使用通用 HTML 提取或 `details.schema`，不自动调用平台专属适配器。列表字段规则与详情字段规则分开配置。HTML 与游标 API 均支持模板化请求（见下节）；不自动猜网站分页协议，也不提供全文数据库检索。
+
+### 模板化请求（GET / POST / PUT）
+
+分页接口不是 GET 时，用 `request` 描述方法、请求体与分页变量。占位符仅支持 `{{page}}`、`{{offset}}`、`{{cursor}}`、`{{limit}}`，其中 `{{limit}}` 取自 `request.page_size`（默认 20）。
+
+```json
+{
+  "url": "https://example.com/api/articles",
+  "request": {
+    "method": "POST",
+    "content_type": "application/json",
+    "headers": {"X-Requested-With": "XMLHttpRequest"},
+    "body": "{\"cursor\":\"{{cursor}}\",\"size\":{{limit}}}",
+    "page_size": 50
+  },
+  "pagination": {"kind": "cursor", "parameter": "cursor", "items_pointer": "/data/items", "next_pointer": "/data/next_cursor"},
+  "max_pages": 20
+}
+```
+
+约束：
+
+- 方法仅限 `GET`、`POST`、`PUT`；`GET` 不允许请求体；不支持 `DELETE` 等破坏性方法。
+- 请求体上限 64 KiB，展开后再校验一次；header 最多 16 个，单个值不超过 8 KiB。
+- 不得在 header 中写 `Cookie`、`Authorization` 等凭据；凭据仍由 `--cookie` 或 cookie 文件按 origin 注入。
+- `{{page}}` 只能用于 `page_number` 分页，`{{cursor}}` 只能用于 `cursor` 分页；`{{offset}}` 为已请求页序号（从 0 开始）。
+- 模板请求不跟随重定向（3xx 直接报错），也不能与 `browser` 渲染同时使用。
+- 游标位于请求体时，`next_url` 仅作诊断信息，不能当作可续传入口。
+- `page_number` + 请求体仍需显式空页标记才会标记 `listing_complete`；纯 JSON 接口建议使用 `cursor` 模式。
+
+未配置 `request` 时沿用原有 GET 行为，旧配置无需迁移。
 
 ## 2. 快照与增量同步
 
