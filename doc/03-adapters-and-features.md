@@ -105,6 +105,9 @@ tkless https://en.wikipedia.org/wiki/Rust_(programming_language) --out-dir ./rus
 ```bash
 # 针对复杂 SPA 动态页面，调用本地 Chrome 渲染并抓取高清整页截图
 tkless https://dashboard.example.com/app --screenshot ./dashboard.png
+
+# 将渲染后的页面打印为 PDF（背景图形与 CSS 分页设置保留）
+tkless https://dashboard.example.com/report --pdf ./report.pdf
 ```
 
 ### 2.7 免 API Key 全网搜索与即搜即抓

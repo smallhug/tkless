@@ -1164,6 +1164,30 @@ pub async fn capture_screenshot_via_cdp(
     options: &CdpOptions,
     format: Option<&str>,
 ) -> Result<Vec<u8>, TklessError> {
+    capture_page_artifact(
+        url,
+        options,
+        CaptureTarget::Screenshot(format.map(str::to_owned)),
+    )
+    .await
+}
+
+/// Prints the rendered page to PDF via Chrome DevTools `Page.printToPDF`.
+pub async fn capture_pdf_via_cdp(url: &str, options: &CdpOptions) -> Result<Vec<u8>, TklessError> {
+    capture_page_artifact(url, options, CaptureTarget::Pdf).await
+}
+
+#[derive(Clone)]
+enum CaptureTarget {
+    Screenshot(Option<String>),
+    Pdf,
+}
+
+async fn capture_page_artifact(
+    url: &str,
+    options: &CdpOptions,
+    target: CaptureTarget,
+) -> Result<Vec<u8>, TklessError> {
     let (raw_base_endpoint, is_direct_ws) = normalize_cdp_endpoint(&options.endpoint);
     let base_endpoint = if !is_direct_ws {
         ensure_cdp_daemon_ready(&raw_base_endpoint).await?
@@ -1174,7 +1198,7 @@ pub async fn capture_screenshot_via_cdp(
 
     timeout(total_timeout, async {
         if is_direct_ws {
-            connect_and_capture_screenshot(&base_endpoint, url, options, format).await
+            connect_and_capture(&base_endpoint, url, options, target).await
         } else {
             let req_timeout = Duration::from_millis(options.timeout_ms.unwrap_or(30_000).min(2000));
             let client = reqwest::Client::builder()
@@ -1184,7 +1208,7 @@ pub async fn capture_screenshot_via_cdp(
                 .map_err(|e| TklessError::CdpError(format!("创建 HTTP 客户端失败: {e}")))?;
 
             let new_target_url = format!("{}/json/new?{}", base_endpoint, urlencoding("about:blank"));
-            debug!(endpoint = %new_target_url, "通过 CDP HTTP 接口创建新页面 Tab (截图)");
+            debug!(endpoint = %new_target_url, "通过 CDP HTTP 接口创建新页面 Tab (渲染截图/PDF)");
 
             let resp = match client.put(&new_target_url).send().await {
                 Ok(r) if r.status().is_success() => Ok(r),
@@ -1204,16 +1228,16 @@ pub async fn capture_screenshot_via_cdp(
                 )));
             }
 
-            let target: DevToolsTarget = resp.json().await.map_err(|err| {
+            let target_info: DevToolsTarget = resp.json().await.map_err(|err| {
                 TklessError::CdpError(format!("解析 CDP 目标元数据失败: {err}"))
             })?;
 
-            let ws_url = target.web_socket_debugger_url.ok_or_else(|| {
+            let ws_url = target_info.web_socket_debugger_url.ok_or_else(|| {
                 TklessError::CdpError("CDP 目标未返回有效的 webSocketDebuggerUrl".to_string())
             })?;
 
-            let target_id = target.id.clone();
-            let result = connect_and_capture_screenshot(&ws_url, url, options, format).await;
+            let target_id = target_info.id.clone();
+            let result = connect_and_capture(&ws_url, url, options, target).await;
 
             let close_url = format!("{}/json/close/{}", base_endpoint, target_id);
             let _ = client.get(&close_url).send().await;
@@ -1224,18 +1248,18 @@ pub async fn capture_screenshot_via_cdp(
     .await
     .map_err(|_| {
         TklessError::ConnectionTimeout(format!(
-            "CDP 页面加载与截图超时 ({}ms): {url}",
+            "CDP 页面加载与捕捉超时 ({}ms): {url}",
             options.timeout_ms.unwrap_or(30_000)
         ))
     })?
 }
 
-/// Connects to a CDP WebSocket URL, navigates, waits for DOM ready and hydration, and captures screenshot.
-async fn connect_and_capture_screenshot(
+/// Connects to a CDP WebSocket URL, navigates, waits for DOM ready and hydration, and captures the requested artifact.
+async fn connect_and_capture(
     ws_url: &str,
     target_url: &str,
     options: &CdpOptions,
-    format: Option<&str>,
+    target: CaptureTarget,
 ) -> Result<Vec<u8>, TklessError> {
     debug!(ws_url = %ws_url, "连接 CDP WebSocket 截取屏幕快照");
 
@@ -1358,31 +1382,44 @@ async fn connect_and_capture_screenshot(
         .await;
     }
 
-    let img_format = match format {
-        Some("jpeg") | Some("jpg") => "jpeg",
-        _ => "png",
+    let (command_id, command, params) = match target {
+        CaptureTarget::Screenshot(format) => {
+            let image_format = match format.as_deref() {
+                Some("jpeg") | Some("jpg") => "jpeg",
+                _ => "png",
+            };
+            (
+                message_id,
+                "Page.captureScreenshot",
+                json!({
+                    "format": image_format,
+                    "quality": 85,
+                    "fromSurface": true,
+                    "captureBeyondViewport": true
+                }),
+            )
+        }
+        CaptureTarget::Pdf => (
+            message_id,
+            "Page.printToPDF",
+            json!({
+                "printBackground": true,
+                "preferCSSPageSize": true,
+                "transferMode": "ReturnAsBase64"
+            }),
+        ),
     };
-
-    let screenshot_cmd_id = message_id;
-    send_cdp_cmd(
-        &mut ws_stream,
-        screenshot_cmd_id,
-        "Page.captureScreenshot",
-        json!({
-            "format": img_format,
-            "quality": 85,
-            "fromSurface": true,
-            "captureBeyondViewport": true
-        }),
-    )
-    .await?;
+    send_cdp_cmd(&mut ws_stream, command_id, command, params).await?;
 
     let cap_timeout = Duration::from_secs(15);
     let b64_str = timeout(cap_timeout, async {
         while let Some(msg_result) = guard.next(&mut ws_stream).await {
             if let Ok(Message::Text(text)) = msg_result {
                 if let Ok(v) = serde_json::from_str::<Value>(&text) {
-                    if v.get("id").and_then(|id| id.as_u64()) == Some(screenshot_cmd_id) {
+                    if v.get("id").and_then(|id| id.as_u64()) == Some(command_id) {
+                        if v.get("error").is_some() {
+                            return Err(TklessError::CdpError(format!("CDP {command} 返回错误")));
+                        }
                         if let Some(res_val) = v
                             .get("result")
                             .and_then(|r| r.get("data"))
@@ -1394,17 +1431,15 @@ async fn connect_and_capture_screenshot(
                 }
             }
         }
-        Err(TklessError::CdpError(
-            "未能从 CDP Page.captureScreenshot 获取图像数据".to_string(),
-        ))
+        Err(TklessError::CdpError(format!(
+            "未能从 CDP {command} 获取数据"
+        )))
     })
     .await
-    .map_err(|_| {
-        TklessError::ConnectionTimeout("CDP Page.captureScreenshot 执行超时".to_string())
-    })??;
+    .map_err(|_| TklessError::ConnectionTimeout(format!("CDP {command} 执行超时")))??;
 
     decode_base64(&b64_str)
-        .ok_or_else(|| TklessError::CdpError("解析 CDP 截图 Base64 数据失败".to_string()))
+        .ok_or_else(|| TklessError::CdpError(format!("解析 CDP {command} Base64 数据失败")))
 }
 
 /// Decodes standard base64 string into raw binary bytes.

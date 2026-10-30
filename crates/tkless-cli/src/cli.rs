@@ -838,6 +838,14 @@ pub struct CliArgs {
     )]
     pub screenshot: Option<PathBuf>,
 
+    /// 将渲染后的页面打印为 PDF 并保存（需要本地 Chrome/Edge 或 CDP 服务）
+    #[arg(
+        long = "pdf",
+        value_name = "PATH",
+        help_heading = "网络与身份认证 (Network & Auth)"
+    )]
+    pub pdf: Option<PathBuf>,
+
     /// Do not fail with non-zero exit code on HTTP 4xx or 5xx error responses (returns body with exit 0)
     #[arg(
         long = "allow-http-errors",

@@ -367,5 +367,17 @@ async fn shadow_frames_scroll_and_xhr_capture_are_opt_in() {
     assert!(!rendered.html.contains("Frame body text"));
     assert!(rendered.html.contains("XHR item"));
     assert!(rendered.network.is_empty());
+
+    let pdf_options = CdpOptions {
+        allow_private_addresses: true,
+        endpoint: endpoint.clone(),
+        wait_ms: Some(200),
+        timeout_ms: Some(30_000),
+        ..Default::default()
+    };
+    let pdf = tkless_core::cdp::capture_pdf_via_cdp(&format!("{origin}/ws2"), &pdf_options)
+        .await
+        .unwrap();
+    assert!(pdf.starts_with(b"%PDF-"), "unexpected PDF header");
     service.abort();
 }
