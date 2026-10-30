@@ -210,7 +210,7 @@ tkless sync --config ./collect.json --state ./collection-state -o changes.json
 tkless browse https://example.com/search --plan ./browser.json -o rendered.json
 ```
 
-`collect` 支持下一页链接、页码与 JSON 游标，以及列表详情关联；`sync` 保存快照并输出新增/更新/删除事件，采集不完整时不删除旧条目；`browse` 支持等待元素、填写文本、点击和滚动。配置示例与限制见 [采集工作流](doc/10-collection-workflows.md)。
+`collect` 支持下一页链接、页码与 JSON 游标，以及列表详情关联；接口不是 GET 时可通过配置中的 `request` 指定 POST/PUT、请求头与请求体模板。`sync` 保存快照并输出新增/更新/删除事件，采集不完整时不删除旧条目；`browse` 支持等待元素、填写文本、点击和滚动。配置示例与限制见 [采集工作流](doc/10-collection-workflows.md)。
 ### 平台适配器与视频
 
 ```bash

@@ -4,6 +4,12 @@ pub const COLLECTION_MAX_PAGES: usize = 1000;
 pub const COLLECTION_DEFAULT_ITEMS: usize = 1000;
 pub const COLLECTION_MAX_ITEMS: usize = 100_000;
 pub const COLLECTION_MAX_DELAY_MS: u64 = 60_000;
+/// Upper bound for a templated request body, measured after placeholder expansion.
+pub const COLLECTION_MAX_REQUEST_BYTES: usize = 64 * 1024;
+pub const COLLECTION_MAX_REQUEST_HEADERS: usize = 16;
+pub const COLLECTION_MAX_REQUEST_HEADER_BYTES: usize = 8 * 1024;
+pub const COLLECTION_DEFAULT_PAGE_SIZE: u64 = 20;
+pub const COLLECTION_MAX_PAGE_SIZE: u64 = 1000;
 pub const SYNC_DEFAULT_STATE_MB: u64 = 256;
 pub const SYNC_MAX_STATE_MB: u64 = 65_536;
 pub const MIB: u64 = 1024 * 1024;

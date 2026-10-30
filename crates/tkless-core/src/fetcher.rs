@@ -116,6 +116,11 @@ impl Fetcher {
     /// Builds a GET request for target URL with domain-scoped cookies automatically attached.
     /// Strictly protects against cross-host credential leaks.
     pub fn get(&self, url: &Url) -> reqwest::RequestBuilder {
+        self.request(reqwest::Method::GET, url)
+    }
+
+    /// Builds a request with an explicit method, applying the same origin-scoped credentials as `get`.
+    pub fn request(&self, method: reqwest::Method, url: &Url) -> reqwest::RequestBuilder {
         if !matches!(url.scheme(), "http" | "https")
             || (!self.options.allow_private_addresses
                 && (url
@@ -128,9 +133,9 @@ impl Fetcher {
                     }))
         {
             // RequestBuilder records an error; callers cannot accidentally send this URL.
-            return self.client.get("invalid://blocked-destination");
+            return self.client.request(method, "invalid://blocked-destination");
         }
-        let mut builder = self.client.get(url.clone());
+        let mut builder = self.client.request(method, url.clone());
         if self.options.initial_target_origin.as_deref()
             == Some(url.origin().ascii_serialization().as_str())
         {
@@ -290,6 +295,134 @@ impl Fetcher {
     pub async fn fetch_api(&self, target_url: &str) -> Result<FetchedResponse, TklessError> {
         self.fetch_with_origin_policy(target_url, None, None, true)
             .await
+    }
+
+    /// Sends a single templated API request with an explicit method, headers and body.
+    ///
+    /// Unlike `fetch_api`, this never follows redirects: replaying a body to another URL
+    /// is not assumed safe. Callers must resolve and validate the final endpoint first.
+    pub async fn send_api_request(
+        &self,
+        target_url: &str,
+        method: &str,
+        content_type: Option<&str>,
+        headers: &[(String, String)],
+        body: Option<&str>,
+    ) -> Result<FetchedResponse, TklessError> {
+        let url = Url::parse(target_url)?;
+        if !matches!(url.scheme(), "http" | "https")
+            || !url.username().is_empty()
+            || url.password().is_some()
+        {
+            return Err(TklessError::InvalidArgument(
+                "Expected an HTTP(S) URL without embedded credentials".into(),
+            ));
+        }
+        self.validate_ssrf(&url).await?;
+        if !matches!(method, "GET" | "POST" | "PUT") {
+            return Err(TklessError::InvalidArgument(format!(
+                "Unsupported HTTP method: {method}"
+            )));
+        }
+        let method = reqwest::Method::from_bytes(method.as_bytes()).map_err(|_| {
+            TklessError::InvalidArgument(format!("Unsupported HTTP method: {method}"))
+        })?;
+        let connect_timeout = Duration::from_secs(self.options.connect_timeout_secs);
+
+        let mut attempt = 0;
+        let response = loop {
+            let mut builder = self.request(method.clone(), &url);
+            if let Some(content_type) = content_type {
+                builder = builder.header(reqwest::header::CONTENT_TYPE, content_type);
+            }
+            for (name, value) in headers {
+                let name = HeaderName::from_str(name).map_err(|_| {
+                    TklessError::InvalidArgument("Invalid custom request header name".into())
+                })?;
+                let value = HeaderValue::from_str(value).map_err(|_| {
+                    TklessError::InvalidArgument("Invalid custom request header value".into())
+                })?;
+                builder = builder.header(name, value);
+            }
+            if let Some(body) = body {
+                builder = builder.body(body.to_string());
+            }
+
+            match tokio::time::timeout(connect_timeout, builder.send()).await {
+                Ok(Ok(response)) => {
+                    let status = response.status();
+                    if (status.is_server_error()
+                        || status == reqwest::StatusCode::TOO_MANY_REQUESTS)
+                        && attempt < self.options.retries
+                    {
+                        attempt += 1;
+                        let delay = retry_delay(
+                            attempt,
+                            response
+                                .headers()
+                                .get(reqwest::header::RETRY_AFTER)
+                                .and_then(|v| v.to_str().ok()),
+                        );
+                        tokio::time::sleep(delay).await;
+                        continue;
+                    }
+                    break response;
+                }
+                Ok(Err(error)) => {
+                    if attempt < self.options.retries {
+                        attempt += 1;
+                        let delay = retry_delay(attempt, None);
+                        tokio::time::sleep(delay).await;
+                        continue;
+                    }
+                    return Err(TklessError::Network(error));
+                }
+                Err(_) => {
+                    if attempt < self.options.retries {
+                        attempt += 1;
+                        let delay = retry_delay(attempt, None);
+                        tokio::time::sleep(delay).await;
+                        continue;
+                    }
+                    return Err(TklessError::ConnectionTimeout(format!(
+                        "Connection handshake to '{url}' timed out after {connect_timeout:?}"
+                    )));
+                }
+            }
+        };
+
+        if response.status().is_redirection() {
+            return Err(TklessError::InvalidArgument(
+                "Templated API requests do not follow redirects; configure the final endpoint"
+                    .into(),
+            ));
+        }
+        let status = response.status();
+        if !self.options.allow_http_errors && (status.is_client_error() || status.is_server_error())
+        {
+            return Err(TklessError::HttpStatusError {
+                status: status.as_u16(),
+                url: url.to_string(),
+            });
+        }
+        let content_type = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_owned);
+        let bytes = self.read_bytes(response).await?;
+        let html = decode_html(&bytes, content_type.as_deref());
+        Ok(FetchedResponse {
+            requested_url: target_url.to_string(),
+            final_url: url.to_string(),
+            status: status.as_u16(),
+            html,
+            truncated: false,
+            etag: None,
+            last_modified: None,
+            not_modified: false,
+            raw_bytes: Some(bytes),
+        })
     }
 
     async fn fetch_with_origin_policy(
@@ -605,7 +738,7 @@ impl Fetcher {
     }
 }
 
-fn is_sensitive_header(name: &str) -> bool {
+pub(crate) fn is_sensitive_header(name: &str) -> bool {
     matches!(
         name.to_ascii_lowercase().as_str(),
         "authorization"
