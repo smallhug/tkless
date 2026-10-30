@@ -181,6 +181,25 @@ tkless completions powershell | Out-String | Invoke-Expression
 
 ---
 
+## 2.12 配置式适配器（无需改代码）
+
+设置 `TKLESS_ADAPTERS_DIR` 指向一个目录，启动时加载其中的 `*.json`。不设置时不加载任何配置适配器，内置适配器优先匹配。
+
+```json
+{
+  "name": "my-blog",
+  "hosts": ["blog.example.com"],
+  "path_prefix": "/posts/",
+  "schema": {"fields": {"title": "h1", "author": ".author"}}
+}
+```
+
+- `hosts` 支持精确域和子域（`example.com` 匹配 `news.example.com`），最多 8 个；`path_prefix` 可选。
+- `schema` 为普通 [ExtractionSchema](04-development-standards.md) 根字段定义，结果写入 `entity`。
+- 适配器仅执行 HTTP 获取 + 通用清洗 + 可选 Schema 抽取，**不加载任何代码**；单文件 ≤ 64 KiB、最多 32 个。
+- 配置非法（名称/域/前缀/Schema 错误、未知字段）会记录警告并跳过整个目录，不会静默加载部分内容。
+- 内置适配器始终优先；配置适配器适合补全长尾站点，不替代需要签名/API 的平台适配器。
+
 ## 3. Agent 管道典型集成范例
 
 ### 3.1 Claude Code / Cursor 自动化调研 Prompt 模板

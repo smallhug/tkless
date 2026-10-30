@@ -1,6 +1,7 @@
 pub mod arxiv;
 pub mod baike;
 pub mod bilibili;
+pub mod config;
 pub mod csdn;
 pub mod discourse;
 pub mod github;
@@ -85,7 +86,10 @@ pub struct AdapterRegistry {
 
 impl Default for AdapterRegistry {
     fn default() -> Self {
-        Self::with_builtins()
+        let mut registry = Self::with_builtins();
+        // Opt-in only: TKLESS_ADAPTERS_DIR must be set explicitly.
+        registry.load_config_adapters();
+        registry
     }
 }
 
