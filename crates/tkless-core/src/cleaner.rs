@@ -8,14 +8,14 @@ use url::Url;
 
 static FULL_PAGE_REMOVE_SELECTOR: LazyLock<Selector> = LazyLock::new(|| {
     Selector::parse(
-        "script, style, noscript, svg, canvas, iframe, form, input, textarea, button, dialog, nav, footer, aside",
+        "script, style, noscript, svg, math, canvas, iframe, object, embed, base, meta, link, form, input, textarea, button, dialog, nav, footer, aside",
     )
     .unwrap()
 });
 
 static TARGETED_REMOVE_SELECTOR: LazyLock<Selector> = LazyLock::new(|| {
     Selector::parse(
-        "script, style, noscript, svg, canvas, iframe, form, input, textarea, button, dialog",
+        "script, style, noscript, svg, math, canvas, iframe, object, embed, base, meta, link, form, input, textarea, button, dialog",
     )
     .unwrap()
 });
@@ -72,7 +72,7 @@ pub fn clean_html(
                     Ok(CleanedContent {
                         title,
                         byline: None,
-                        html: product.content,
+                        html: clean_full_page(&product.content, Some(base_url.as_str()))?.html,
                         is_article_fallback: false,
                     })
                 }
@@ -241,28 +241,34 @@ fn render_cleaned_node(
                 continue;
             }
             // Skip inline style
-            if attr_name == "style" {
+            if matches!(attr_name, "style" | "srcdoc" | "srcset" | "ping") {
                 continue;
             }
+
+            let resolved = if matches!(
+                attr_name,
+                "href" | "src" | "action" | "formaction" | "poster" | "background" | "xlink:href"
+            ) {
+                let parsed = base_url
+                    .and_then(|b| b.join(attr_val).ok())
+                    .or_else(|| Url::parse(attr_val).ok());
+                match parsed {
+                    Some(url) if matches!(url.scheme(), "http" | "https" | "mailto" | "tel") => {
+                        Some(url.to_string())
+                    }
+                    Some(_) => continue,
+                    None if attr_val.contains(':') => continue,
+                    None => None,
+                }
+            } else {
+                None
+            };
 
             out.push(' ');
             out.push_str(attr_name);
             out.push_str("=\"");
 
-            if (attr_name == "href" || attr_name == "src") && base_url.is_some() {
-                if let Some(b) = base_url {
-                    if let Ok(resolved) = b.join(attr_val) {
-                        out.push_str(resolved.as_str());
-                    } else {
-                        out.push_str(attr_val);
-                    }
-                }
-            } else if attr_val.contains('"') {
-                // Escape HTML quotes in attributes only when needed
-                out.push_str(&attr_val.replace('"', "&quot;"));
-            } else {
-                out.push_str(attr_val);
-            }
+            escape_html(resolved.as_deref().unwrap_or(attr_val), out);
             out.push('"');
         }
         out.push('>');
@@ -284,7 +290,7 @@ fn render_cleaned_node(
         out.push_str(tag_name);
         out.push('>');
     } else if let Some(text) = value.as_text() {
-        out.push_str(text);
+        escape_html(text, out);
     } else {
         for child in node.children() {
             render_cleaned_node(
@@ -345,11 +351,7 @@ fn render_pruned_node(
             out.push(' ');
             out.push_str(attr_name);
             out.push_str("=\"");
-            if attr_val.contains('"') {
-                out.push_str(&attr_val.replace('"', "&quot;"));
-            } else {
-                out.push_str(attr_val);
-            }
+            escape_html(attr_val, out);
             out.push('"');
         }
         out.push('>');
@@ -362,10 +364,36 @@ fn render_pruned_node(
         out.push_str(tag_name);
         out.push('>');
     } else if let Some(text) = value.as_text() {
-        out.push_str(text);
+        // Raw-text elements must retain their original parsing semantics during pruning.
+        if node
+            .parent()
+            .and_then(|p| p.value().as_element())
+            .is_some_and(|e| {
+                matches!(
+                    e.name(),
+                    "script" | "style" | "xmp" | "iframe" | "noembed" | "noframes" | "plaintext"
+                )
+            })
+        {
+            out.push_str(text);
+        } else {
+            escape_html(text, out);
+        }
     } else {
         for child in node.children() {
             render_pruned_node(child.id(), document, remove_selector, out);
+        }
+    }
+}
+
+fn escape_html(text: &str, out: &mut String) {
+    for ch in text.chars() {
+        match ch {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            _ => out.push(ch),
         }
     }
 }
@@ -396,6 +424,29 @@ fn extract_title_simple(html: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn encoded_markup_stays_text_and_unsafe_urls_are_removed() {
+        let source = r#"<p>&lt;img src=x onerror=alert(1)&gt;<a href="java&#x09;script:alert(1)">bad</a><a href="/ok?a=1&amp;b=2" title="&quot; onmouseover=&quot;bad">ok</a></p>"#;
+        let cleaned = super::extract_selector(source, "p", Some("https://example.com")).unwrap();
+        let parsed = scraper::Html::parse_fragment(&cleaned.html);
+        assert_eq!(
+            parsed
+                .select(&scraper::Selector::parse("img,[onerror],[onmouseover]").unwrap())
+                .count(),
+            0
+        );
+        let links: Vec<_> = parsed
+            .select(&scraper::Selector::parse("a").unwrap())
+            .collect();
+        assert_eq!(links[0].value().attr("href"), None);
+        assert_eq!(
+            links[1].value().attr("href"),
+            Some("https://example.com/ok?a=1&b=2")
+        );
+        assert!(cleaned.html.contains("&lt;img"));
+        let pruned = super::prune_unwanted_selectors(source, ".unused").unwrap();
+        assert!(!pruned.contains("<img"));
+    }
     use super::*;
 
     #[test]

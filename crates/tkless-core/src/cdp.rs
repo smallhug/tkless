@@ -21,6 +21,9 @@ use crate::error::TklessError;
 
 mod browser;
 mod preflight;
+mod steps;
+pub(crate) use steps::validate as validate_steps;
+pub use steps::BrowserStep;
 
 pub(crate) use preflight::check as preflight_search;
 
@@ -219,6 +222,14 @@ pub async fn ensure_cdp_daemon_ready(endpoint: &str) -> Result<String, TklessErr
 /// Options controlling CDP browser interaction.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CdpOptions {
+    #[serde(default)]
+    pub steps: Vec<BrowserStep>,
+    #[serde(default)]
+    pub navigation_origin: Option<String>,
+    #[serde(default)]
+    pub read_only_requests: bool,
+    /// Permit private network requests from the browser. Disabled by default.
+    pub allow_private_addresses: bool,
     /// DevTools HTTP or WebSocket endpoint, e.g. "http://127.0.0.1:9222" or "ws://127.0.0.1:9222/devtools/..."
     pub endpoint: String,
     /// Optional additional wait time in milliseconds for dynamic JS rendering/hydration.
@@ -242,6 +253,10 @@ pub struct CdpOptions {
 impl Default for CdpOptions {
     fn default() -> Self {
         Self {
+            steps: vec![],
+            navigation_origin: None,
+            read_only_requests: false,
+            allow_private_addresses: false,
             endpoint: "http://127.0.0.1:9222".to_string(),
             wait_ms: Some(1000),
             timeout_ms: Some(30_000),
@@ -279,13 +294,20 @@ fn normalize_cdp_endpoint(endpoint: &str) -> (String, bool) {
 
 /// Fetches rendered HTML for a given URL via Chrome DevTools Protocol.
 pub async fn fetch_html_via_cdp(url: &str, options: &CdpOptions) -> Result<String, TklessError> {
-    fetch_html_with_interaction(url, options).await
+    Ok(fetch_rendered_page(url, options).await?.html)
 }
 
-async fn fetch_html_with_interaction(
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RenderedPage {
+    pub html: String,
+    pub final_url: String,
+}
+
+pub async fn fetch_rendered_page(
     url: &str,
     options: &CdpOptions,
-) -> Result<String, TklessError> {
+) -> Result<RenderedPage, TklessError> {
+    steps::validate(&options.steps)?;
     let (raw_base_endpoint, is_direct_ws) = normalize_cdp_endpoint(&options.endpoint);
     let base_endpoint = if !is_direct_ws {
         ensure_cdp_daemon_ready(&raw_base_endpoint).await?
@@ -363,12 +385,14 @@ async fn connect_and_extract_html(
     ws_url: &str,
     target_url: &str,
     options: &CdpOptions,
-) -> Result<String, TklessError> {
+) -> Result<RenderedPage, TklessError> {
     debug!(ws_url = %ws_url, "连接 CDP WebSocket 调试会话");
 
     let (mut ws_stream, _) = connect_async(ws_url).await.map_err(|err| {
         TklessError::CdpError(format!("无法建立 CDP WebSocket 连接 ({ws_url}): {err}"))
     })?;
+
+    let mut guard = BrowserRequestGuard::enable(&mut ws_stream, target_url, options).await?;
 
     let mut message_id = 1u64;
 
@@ -466,7 +490,7 @@ async fn connect_and_extract_html(
     // 5. Wait for page load event or navigation response
     let nav_timeout = Duration::from_secs(15);
     let _ = timeout(nav_timeout, async {
-        while let Some(msg_result) = ws_stream.next().await {
+        while let Some(msg_result) = guard.next(&mut ws_stream).await {
             if let Ok(Message::Text(text)) = msg_result {
                 if let Ok(v) = serde_json::from_str::<Value>(&text) {
                     if let Some(method) = v.get("method").and_then(|m| m.as_str()) {
@@ -490,7 +514,10 @@ async fn connect_and_extract_html(
     // 6. Optional additional hydration wait time
     if let Some(wait_ms) = options.wait_ms {
         if wait_ms > 0 {
-            tokio::time::sleep(Duration::from_millis(wait_ms)).await;
+            let _ = timeout(Duration::from_millis(wait_ms), async {
+                while guard.next(&mut ws_stream).await.is_some() {}
+            })
+            .await;
         }
     }
 
@@ -541,7 +568,7 @@ async fn connect_and_extract_html(
 
         let scroll_timeout = Duration::from_millis(max_scrolls as u64 * 180 + 1500);
         let _ = timeout(scroll_timeout, async {
-            while let Some(msg_result) = ws_stream.next().await {
+            while let Some(msg_result) = guard.next(&mut ws_stream).await {
                 if let Ok(Message::Text(text)) = msg_result {
                     if let Ok(v) = serde_json::from_str::<Value>(&text) {
                         if v.get("id").and_then(|id| id.as_u64()) == Some(scroll_cmd_id) {
@@ -555,14 +582,15 @@ async fn connect_and_extract_html(
         .await;
     }
 
-    // 7. Extract document.documentElement.outerHTML
+    steps::execute(&mut ws_stream, &mut guard, &mut message_id, &options.steps).await?;
+    // 7. Capture content and its actual browser URL in the same evaluation.
     let eval_cmd_id = message_id;
     send_cdp_cmd(
         &mut ws_stream,
         eval_cmd_id,
         "Runtime.evaluate",
         json!({
-            "expression": "document.documentElement.outerHTML",
+            "expression": "({html: document.documentElement.outerHTML, final_url: location.href})",
             "returnByValue": true,
             "awaitPromise": true,
         }),
@@ -571,7 +599,7 @@ async fn connect_and_extract_html(
 
     let eval_timeout = Duration::from_secs(10);
     let html = timeout(eval_timeout, async {
-        while let Some(msg_result) = ws_stream.next().await {
+        while let Some(msg_result) = guard.next(&mut ws_stream).await {
             if let Ok(Message::Text(text)) = msg_result {
                 if let Ok(v) = serde_json::from_str::<Value>(&text) {
                     if v.get("id").and_then(|id| id.as_u64()) == Some(eval_cmd_id) {
@@ -579,9 +607,9 @@ async fn connect_and_extract_html(
                             .get("result")
                             .and_then(|r| r.get("result"))
                             .and_then(|r| r.get("value"))
-                            .and_then(|val| val.as_str())
                         {
-                            return Ok(res_val.to_string());
+                            return serde_json::from_value::<RenderedPage>(res_val.clone())
+                                .map_err(|e| TklessError::CdpError(e.to_string()));
                         }
                     }
                 }
@@ -594,7 +622,159 @@ async fn connect_and_extract_html(
     .await
     .map_err(|_| TklessError::ConnectionTimeout("CDP Runtime.evaluate 执行超时".to_string()))??;
 
+    if let Some(url) = guard.blocked_navigation {
+        return Err(TklessError::CdpError(format!(
+            "Blocked browser navigation: {url}"
+        )));
+    }
     Ok(html)
+}
+
+type BrowserSocket =
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+
+struct BrowserRequestGuard {
+    navigation_origin: Option<String>,
+    read_only_requests: bool,
+    blocked_navigation: Option<String>,
+    fetcher: crate::fetcher::Fetcher,
+    next_id: u64,
+    pending: Option<Value>,
+}
+
+impl BrowserRequestGuard {
+    async fn enable(
+        ws: &mut BrowserSocket,
+        target_url: &str,
+        options: &CdpOptions,
+    ) -> Result<Self, TklessError> {
+        let fetcher = crate::fetcher::Fetcher::new(crate::FetchOptions {
+            allow_private_addresses: options.allow_private_addresses,
+            ..Default::default()
+        })?;
+        fetcher.validate_ssrf(&Url::parse(target_url)?).await?;
+        // Intercept before navigation, including redirects and subresource requests.
+        const ENABLE_ID: u64 = 1_000_000;
+        send_cdp_cmd(
+            ws,
+            ENABLE_ID,
+            "Network.setBypassServiceWorker",
+            json!({"bypass":true}),
+        )
+        .await?;
+        send_cdp_cmd(
+            ws,
+            ENABLE_ID + 1,
+            "Fetch.enable",
+            json!({"patterns":[{"urlPattern":"*","requestStage":"Request"}]}),
+        )
+        .await?;
+        timeout(Duration::from_secs(5), async {
+            while let Some(message) = ws.next().await {
+                let message = message.map_err(|e| TklessError::CdpError(e.to_string()))?;
+                if let Message::Text(text) = message {
+                    if let Ok(value) = serde_json::from_str::<Value>(&text) {
+                        if value.get("id").and_then(Value::as_u64) == Some(ENABLE_ID + 1) {
+                            if value.get("error").is_some() {
+                                return Err(TklessError::CdpError(
+                                    "Browser request interception could not be enabled".into(),
+                                ));
+                            }
+                            return Ok(());
+                        }
+                    }
+                }
+            }
+            Err(TklessError::CdpError(
+                "Browser disconnected while enabling request interception".into(),
+            ))
+        })
+        .await
+        .map_err(|_| TklessError::CdpError("Browser request interception timed out".into()))??;
+        Ok(Self {
+            navigation_origin: options.navigation_origin.clone(),
+            read_only_requests: options.read_only_requests,
+            blocked_navigation: None,
+            fetcher,
+            next_id: ENABLE_ID + 2,
+            pending: None,
+        })
+    }
+
+    async fn next(
+        &mut self,
+        ws: &mut BrowserSocket,
+    ) -> Option<Result<Message, tokio_tungstenite::tungstenite::Error>> {
+        loop {
+            let message = if let Some(value) = &self.pending {
+                Ok(Message::Text(value.to_string().into()))
+            } else {
+                ws.next().await?
+            };
+            if let Ok(Message::Text(text)) = &message {
+                if let Ok(value) = serde_json::from_str::<Value>(text) {
+                    if value.get("method").and_then(Value::as_str) == Some("Fetch.requestPaused") {
+                        self.pending = Some(value.clone());
+                        let params = &value["params"];
+                        let mut allowed = match params["request"]["url"]
+                            .as_str()
+                            .and_then(|s| Url::parse(s).ok())
+                        {
+                            Some(url) => matches!(
+                                timeout(Duration::from_secs(5), self.fetcher.validate_ssrf(&url))
+                                    .await,
+                                Ok(Ok(()))
+                            ),
+                            None => false,
+                        };
+                        if self.read_only_requests
+                            && !matches!(
+                                params["request"]["method"].as_str(),
+                                Some("GET" | "HEAD" | "OPTIONS")
+                            )
+                        {
+                            allowed = false;
+                        }
+                        if params["resourceType"] == "Document" {
+                            if let Some(origin) = &self.navigation_origin {
+                                if params["request"]["url"]
+                                    .as_str()
+                                    .and_then(|s| Url::parse(s).ok())
+                                    .is_none_or(|u| u.origin().ascii_serialization() != *origin)
+                                {
+                                    allowed = false;
+                                }
+                            }
+                            if !allowed {
+                                self.blocked_navigation =
+                                    params["request"]["url"].as_str().map(str::to_owned);
+                            }
+                        }
+                        let (method, args) = if allowed {
+                            (
+                                "Fetch.continueRequest",
+                                json!({"requestId":params["requestId"]}),
+                            )
+                        } else {
+                            (
+                                "Fetch.failRequest",
+                                json!({"requestId":params["requestId"],"errorReason":"BlockedByClient"}),
+                            )
+                        };
+                        self.next_id += 1;
+                        if let Err(e) = send_cdp_cmd(ws, self.next_id, method, args).await {
+                            return Some(Err(tokio_tungstenite::tungstenite::Error::Io(
+                                std::io::Error::other(e.to_string()),
+                            )));
+                        }
+                        self.pending = None;
+                        continue;
+                    }
+                }
+            }
+            return Some(message);
+        }
+    }
 }
 
 /// Helper function to send a JSON-RPC command over a WebSocket stream.
@@ -645,7 +825,7 @@ pub async fn capture_screenshot_via_cdp(
                 .build()
                 .map_err(|e| TklessError::CdpError(format!("创建 HTTP 客户端失败: {e}")))?;
 
-            let new_target_url = format!("{}/json/new?{}", base_endpoint, urlencoding(url));
+            let new_target_url = format!("{}/json/new?{}", base_endpoint, urlencoding("about:blank"));
             debug!(endpoint = %new_target_url, "通过 CDP HTTP 接口创建新页面 Tab (截图)");
 
             let resp = match client.put(&new_target_url).send().await {
@@ -705,6 +885,8 @@ async fn connect_and_capture_screenshot(
         TklessError::CdpError(format!("无法建立 CDP WebSocket 连接 ({ws_url}): {err}"))
     })?;
 
+    let mut guard = BrowserRequestGuard::enable(&mut ws_stream, target_url, options).await?;
+
     let mut message_id = 1u64;
 
     send_cdp_cmd(&mut ws_stream, message_id, "Page.enable", json!({})).await?;
@@ -733,7 +915,7 @@ async fn connect_and_capture_screenshot(
 
     let nav_timeout = Duration::from_millis(options.timeout_ms.unwrap_or(30_000).min(15_000));
     let _ = timeout(nav_timeout, async {
-        while let Some(msg_result) = ws_stream.next().await {
+        while let Some(msg_result) = guard.next(&mut ws_stream).await {
             if let Ok(Message::Text(text)) = msg_result {
                 if let Ok(v) = serde_json::from_str::<Value>(&text) {
                     if let Some(method) = v.get("method").and_then(|m| m.as_str()) {
@@ -750,7 +932,10 @@ async fn connect_and_capture_screenshot(
 
     if let Some(wait_ms) = options.wait_ms {
         if wait_ms > 0 {
-            tokio::time::sleep(Duration::from_millis(wait_ms)).await;
+            let _ = timeout(Duration::from_millis(wait_ms), async {
+                while guard.next(&mut ws_stream).await.is_some() {}
+            })
+            .await;
         }
     }
 
@@ -801,7 +986,7 @@ async fn connect_and_capture_screenshot(
 
         let scroll_timeout = Duration::from_millis(max_scrolls as u64 * 180 + 1500);
         let _ = timeout(scroll_timeout, async {
-            while let Some(msg_result) = ws_stream.next().await {
+            while let Some(msg_result) = guard.next(&mut ws_stream).await {
                 if let Ok(Message::Text(text)) = msg_result {
                     if let Ok(v) = serde_json::from_str::<Value>(&text) {
                         if v.get("id").and_then(|id| id.as_u64()) == Some(scroll_cmd_id) {
@@ -836,7 +1021,7 @@ async fn connect_and_capture_screenshot(
 
     let cap_timeout = Duration::from_secs(15);
     let b64_str = timeout(cap_timeout, async {
-        while let Some(msg_result) = ws_stream.next().await {
+        while let Some(msg_result) = guard.next(&mut ws_stream).await {
             if let Ok(Message::Text(text)) = msg_result {
                 if let Ok(v) = serde_json::from_str::<Value>(&text) {
                     if v.get("id").and_then(|id| id.as_u64()) == Some(screenshot_cmd_id) {
@@ -1054,6 +1239,74 @@ fn urlencoding(input: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn browser_guard_blocks_private_requests_before_continuing() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let peer = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
+            for _ in 0..2 {
+                ws.next().await.unwrap().unwrap();
+            }
+            ws.send(Message::Text(
+                json!({"id":1000001,"result":{}}).to_string().into(),
+            ))
+            .await
+            .unwrap();
+            for (url, method, resource, expected) in [
+                (
+                    "http://127.0.0.1/private",
+                    "GET",
+                    "Document",
+                    "Fetch.failRequest",
+                ),
+                (
+                    "https://1.1.1.1/public",
+                    "GET",
+                    "Document",
+                    "Fetch.continueRequest",
+                ),
+                ("https://1.1.1.1/write", "POST", "XHR", "Fetch.failRequest"),
+                (
+                    "https://2.2.2.2/other",
+                    "GET",
+                    "Document",
+                    "Fetch.failRequest",
+                ),
+            ] {
+                ws.send(Message::Text(json!({"method":"Fetch.requestPaused","params":{"requestId":"test","resourceType":resource,"request":{"url":url,"method":method}}}).to_string().into())).await.unwrap();
+                let reply = ws.next().await.unwrap().unwrap().into_text().unwrap();
+                let reply: Value = serde_json::from_str(&reply).unwrap();
+                assert_eq!(reply["method"], expected);
+            }
+            ws.send(Message::Text(
+                json!({"method":"Page.loadEventFired"}).to_string().into(),
+            ))
+            .await
+            .unwrap();
+        });
+        let (mut ws, _) = connect_async(format!("ws://{address}")).await.unwrap();
+        let mut guard = BrowserRequestGuard::enable(
+            &mut ws,
+            "https://1.1.1.1/",
+            &CdpOptions {
+                read_only_requests: true,
+                navigation_origin: Some("https://1.1.1.1".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let event = timeout(Duration::from_secs(3), guard.next(&mut ws))
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert!(event.into_text().unwrap().contains("Page.loadEventFired"));
+        peer.await.unwrap();
+    }
 
     #[test]
     fn test_normalize_cdp_endpoint() {

@@ -283,7 +283,7 @@ impl HackerNewsAdapter {
             let api_url_str = format!("https://hacker-news.firebaseio.com/v0/item/{item_id}.json");
             if let Ok(parsed_api_url) = Url::parse(&api_url_str) {
                 if let Ok(resp) = fetcher.get(&parsed_api_url).send().await {
-                    if let Ok(val) = resp.json::<Value>().await {
+                    if let Ok(val) = fetcher.read_json::<Value>(resp).await {
                         if let Some(title) = val.get("title").and_then(|t| t.as_str()) {
                             let by = val.get("by").and_then(|b| b.as_str()).unwrap_or("unknown");
                             let score = val.get("score").and_then(|s| s.as_u64()).unwrap_or(0);
@@ -395,7 +395,7 @@ impl HackerNewsAdapter {
 
         // 2. HTML Fallback
         let resp = fetcher.get(url).send().await?;
-        let html = resp.text().await?;
+        let html = fetcher.read_text(resp).await?;
 
         let (content, page_title) = if let Some(item_id) = item_id_opt {
             let md = Self::parse_item_discussion(&html, item_id);

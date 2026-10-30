@@ -69,6 +69,15 @@ jobs:
 
       - name: Package Release Artifact
         run: |
+          binary="./target/${{ matrix.target }}/release/${{ matrix.binary_name }}"
+          test -s "$binary" || { echo "Release binary is empty or missing" >&2; exit 1; }
+          if [ "${{ matrix.use_cross }}" != "true" ]; then
+            actual_version="$("$binary" --version)"
+            case "$actual_version" in
+              "tkless ${GITHUB_REF_NAME#v} "*|"tkless ${GITHUB_REF_NAME#v}") ;;
+              *) echo "Unexpected binary version: $actual_version" >&2; exit 1 ;;
+            esac
+          fi
           if [ "${{ matrix.pkg_type }}" = "exe" ]; then
             cp ./target/${{ matrix.target }}/release/${{ matrix.binary_name }} ./${{ matrix.artifact_name }}
           elif [ "${{ matrix.pkg_type }}" = "dmg" ]; then
@@ -84,6 +93,7 @@ jobs:
 
       - name: Generate SHA-256 Checksum
         run: |
+          test -s "${{ matrix.artifact_name }}" || { echo "Release artifact is empty or missing" >&2; exit 1; }
           if command -v sha256sum >/dev/null 2>&1; then
             sha256sum "${{ matrix.artifact_name }}" > "${{ matrix.artifact_name }}.sha256"
           else

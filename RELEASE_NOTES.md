@@ -1,6 +1,23 @@
-# TkLess 0.4.0 工作区更新说明
+# TkLess 0.5.0 更新说明
 
-更新日期：2026-10-29。本说明对应当前工作区，不代表这些变更已发布到 GitHub Release。已发布版本以 Release 标签和附件为准。
+更新日期：2026-10-30。本说明对应 0.5.0 源码，不代表已经发布到 GitHub Release。已发布版本以 Release 标签和附件为准。
+
+## 0.5.0 新增工作流
+
+- `collect` 支持下一页链接、页码、JSON 游标分页和列表详情关联。
+- `sync` 保存快照并输出新增、更新、删除事件；不完整采集不会误删旧记录。
+- `crawl` 增加持久检查点、恢复与失败重试、时间和输出预算、队列限制及可选 robots.txt 检查。
+- `browse` 执行等待、填写、点击和滚动步骤，提取实际导航后的页面；不提供任意脚本或验证码自动处理。
+- MCP 增加 `collect_pages`、`sync_collection`、`browse_page`。配置与边界见 [采集工作流](doc/10-collection-workflows.md)。
+
+## 安全与工程改进
+
+- 加固凭据作用域、DNS 校验、HTML 净化、响应大小限制、资源下载和缓存；具体边界见 [安全加固记录](doc/09-security-hardening.md)。
+- CLI 命令与 MCP 处理器按职责拆分，分页和浏览器限制集中管理；状态损坏、锁冲突、存储预算超限使用独立错误码。
+- 快照和检查点的磁盘操作移入阻塞任务，取消调用时运行中的写入仍保持锁直至完成。
+- 最低支持 Rust 版本为 1.98.1；增加无默认特性、文档契约、支持基线和独立浏览器 CI 检查。
+
+Rust 调用方将 `McpServer::run_stdio` 改为 `run_transport` 并传入输入输出流。停止原因与同步事件改为枚举，JSON 名称保持不变。缓存键升级为 v4；批量任务身份包含软件版本，跨版本恢复可能被拒绝，应新建任务。CLI/MCP 同步存储预算统一为 1–65536 MiB。
 
 ## Skills.sh 平台适配
 
@@ -16,7 +33,6 @@
 - 搜索 JSON/JSONL 统一使用含查询、过滤数量和警告的报告对象；`--diagnostics` 控制 Markdown 诊断，未知页面结构明确报错。
 - 增加 `--schema-strict` / MCP `schema_strict`，Schema 失败直接报错；默认回退会写入 `warnings[]`。文档 `extraction` 记录实际路径。
 - 四个主要 MCP 工具提供结构化输出与输出 Schema。参数和结果集中校验，核心错误及逐项失败包含稳定错误码与重试信息。
-
 ## 第二阶段：批量任务与兼容清理
 
 - CLI `batch -f jsonl` 逐项输出并刷新，默认输入顺序，`--order completion` 按完成顺序；有界缓冲支持背压。
@@ -76,7 +92,7 @@ tkless search "DeepSeek" --cdp http://127.0.0.1:9222 --cdp-wait 1500 -f json
 
 MCP 搜索 `limit` 范围为 1–20，默认 10；`auto_cdp` 默认 false。搜索与调研拒绝未声明参数。`dedup`=true、`max_tokens_per_page`、`schema` 要求 `fetch_content`=true。
 
-完整模式提供 23 个业务工具；动态模式初始提供 2 个核心工具和 4 个发现元工具。完整 Schema 以 `tools/list` 或动态工具 `get_tool_schema` 返回为准。
+完整模式提供 27 个业务工具；动态模式初始提供 2 个核心工具和 4 个发现元工具。完整 Schema 以 `tools/list` 或动态工具 `get_tool_schema` 返回为准。
 
 ## 其他当前能力与边界
 
@@ -88,8 +104,8 @@ MCP 搜索 `limit` 范围为 1–20，默认 10；`auto_cdp` 默认 false。搜�
 
 ## 最近代码验证记录
 
-2026-10-28：251 项离线测试通过，覆盖实际 CLI 子进程终止后的恢复、失败项重试、检查点锁、尾部半行恢复、配置/凭据身份校验和通知背压。严格 Clippy、关闭默认 feature 的编译检查、格式检查、release 构建及发布版 CLI/MCP 检查通过。真实 Chrome 无头浏览器测试单独通过。
+2026-10-30：307 项离线测试通过，覆盖分页与同步、任务恢复、预算、锁竞争、取消期间写入、参数边界和 MCP 协议。严格 Clippy、无默认特性编译、格式检查、Release 构建及文档契约检查通过。1 项真实 Chrome 无头浏览器集成测试单独通过；远程 CI 状态需提交后确认。
 
-本轮 HTTP 在线实测：DeepSeek 返回 10 条 Bing 结果；Tokio runtime `--scope github` 返回 1 条符合条件的链接，诊断记录 10 个候选中有 9 个域名不符而被过滤。在线数量不是固定保证，也不作为离线 CI 的成功断言。
+此前 HTTP 在线实测：DeepSeek 返回 10 条 Bing 结果；Tokio runtime `--scope github` 返回 1 条符合条件的链接，诊断记录 10 个候选中有 9 个域名不符而被过滤。此结果不是本次版本更新的新测试，在线数量不作为离线 CI 的成功断言。
 
 详细说明见 [README](README.md)、[Bing 搜索](doc/06-bing-search.md) 和 [MCP 接入](doc/02-mcp-tools-extension.md)。

@@ -3,6 +3,43 @@ use clap::{Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 use tkless_core::model::{ExtractionMode, OutputFormat};
 
+#[cfg(test)]
+mod workflow_contract_tests {
+    use super::*;
+
+    #[test]
+    fn sync_budget_matches_core_limits() {
+        for value in [0, tkless_core::limits::SYNC_MAX_STATE_MB + 1, u64::MAX] {
+            assert!(CliArgs::try_parse_from([
+                "tkless",
+                "sync",
+                "--config",
+                "config.json",
+                "--state",
+                "state",
+                "--max-state-mb",
+                &value.to_string(),
+            ])
+            .is_err());
+            assert!(tkless_core::limits::sync_state_bytes(value).is_err());
+        }
+        for value in [1, tkless_core::limits::SYNC_MAX_STATE_MB] {
+            assert!(CliArgs::try_parse_from([
+                "tkless",
+                "sync",
+                "--config",
+                "config.json",
+                "--state",
+                "state",
+                "--max-state-mb",
+                &value.to_string(),
+            ])
+            .is_ok());
+            assert!(tkless_core::limits::sync_state_bytes(value).is_ok());
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, ValueEnum)]
 pub enum CliFormat {
     /// GitHub Flavored Markdown (default)
@@ -909,6 +946,14 @@ pub struct CliArgs {
 
 #[derive(Subcommand, Debug, Clone)]
 pub enum SubCommand {
+    /// 获取公开微信公众号文章、关联合集和合集分页列表
+    Wechat(WechatArgs),
+    /// 按配置进行通用分页和列表详情采集，输出 JSON 报告
+    Collect(CollectionArgs),
+    /// 保存采集快照，输出新增、更新和删除事件
+    Sync(SyncArgs),
+    /// 执行受限浏览器步骤后提取网页，输出 PageDocument JSON
+    Browse(BrowseArgs),
     /// 启动原生 Model Context Protocol (MCP) stdio 服务端 (供 Claude Desktop / Cursor 直连)
     #[command(
         name = "mcp",
@@ -1006,6 +1051,79 @@ pub enum SubCommand {
         about = "诊断并自检当前运行环境 (CDP 浏览器就绪、网络核心服务连通性、缓存读写权限)"
     )]
     Doctor(DoctorArgs),
+}
+
+#[derive(clap::Args, Debug, Clone)]
+pub struct CollectionArgs {
+    /// JSON 采集配置文件
+    #[arg(long, short = 'c')]
+    pub config: PathBuf,
+    #[arg(long, short = 'o')]
+    pub output: Option<PathBuf>,
+    /// 不完整结果仍返回成功退出码，报告保留停止原因
+    #[arg(long)]
+    pub allow_partial: bool,
+}
+
+#[derive(clap::Args, Debug, Clone)]
+pub struct SyncArgs {
+    #[command(flatten)]
+    pub collection: CollectionArgs,
+    /// 快照与增量清单目录，同一目录绑定同一采集配置
+    #[arg(long)]
+    pub state: PathBuf,
+    #[arg(long, default_value_t = tkless_core::limits::SYNC_DEFAULT_STATE_MB, value_parser = clap::value_parser!(u64).range(1..=tkless_core::limits::SYNC_MAX_STATE_MB))]
+    pub max_state_mb: u64,
+}
+
+#[derive(clap::Args, Debug, Clone)]
+pub struct BrowseArgs {
+    pub url: String,
+    /// BrowserPlan JSON 文件（endpoint、timeout_ms、steps）
+    #[arg(long)]
+    pub plan: PathBuf,
+    #[arg(long, short = 'o')]
+    pub output: Option<PathBuf>,
+}
+
+#[derive(clap::Args, Debug, Clone)]
+pub struct WechatArgs {
+    /// 读取账号历史列表（source 为文章 URL 或 biz；需要有效会话）
+    #[arg(long)]
+    pub history: bool,
+    /// 本地授权会话 JSON 文件，不向输出或检查点写入凭据
+    #[arg(long, requires = "history")]
+    pub session_file: Option<PathBuf>,
+    /// 历史列表及正文抓取检查点
+    #[arg(long, requires = "history")]
+    pub checkpoint: Option<PathBuf>,
+    /// 从检查点恢复，跳过已完成正文并重试失败项
+    #[arg(long, requires_all = ["history", "checkpoint"])]
+    pub resume: bool,
+    /// 公众号显示名称、文章 URL 或公开合集 URL
+    pub source: String,
+    #[arg(long, short = 'l', default_value_t = tkless_core::wechat::DEFAULT_LIMIT)]
+    pub limit: usize,
+    #[arg(long, default_value_t = tkless_core::wechat::DEFAULT_PAGES)]
+    pub max_pages: usize,
+    #[arg(long, default_value_t = 300)]
+    pub delay_ms: u64,
+    /// 获取列表中每篇文章的正文
+    #[arg(long)]
+    pub fetch_content: bool,
+    /// 仅接受指定 __biz 的公众号文章
+    #[arg(long)]
+    pub expected_biz: Option<String>,
+    /// 文章入口仅识别身份和合集，不继续抓取合集列表
+    #[arg(long)]
+    pub no_follow_albums: bool,
+    #[arg(long, default_value_t = 4000, value_parser = clap::value_parser!(u32).range(1..=100000))]
+    pub max_tokens_per_article: u32,
+    #[arg(long, short = 'o')]
+    pub output: Option<PathBuf>,
+    /// 接受搜索发现、预算中断等非完整列表，返回报告中的明确状态
+    #[arg(long)]
+    pub allow_partial: bool,
 }
 
 #[derive(clap::Args, Debug, Clone, Default)]
@@ -1388,7 +1506,7 @@ pub struct McpArgs {
     #[arg(long = "dynamic")]
     pub dynamic: bool,
 
-    /// MCP 工具配置模式: 'full' (全量 23 工具) 或 'dynamic' (两阶段动态发现)
+    /// MCP 工具配置模式: 'full' (全量 27 工具) 或 'dynamic' (两阶段动态发现)
     #[arg(long = "profile", default_value = "full", value_name = "PROFILE")]
     pub profile: String,
 
@@ -1407,6 +1525,21 @@ pub struct McpArgs {
 
 #[derive(clap::Args, Debug, Clone)]
 pub struct CrawlArgs {
+    #[arg(long, requires = "resume")]
+    pub retry_failed: bool,
+    #[arg(long)]
+    pub checkpoint: Option<PathBuf>,
+    #[arg(long, requires = "checkpoint")]
+    pub resume: bool,
+    #[arg(long)]
+    pub max_seconds: Option<u64>,
+    #[arg(long)]
+    pub max_output_bytes: Option<u64>,
+    #[arg(long, default_value_t = 10000)]
+    pub max_pending_urls: usize,
+    /// 读取 robots.txt 并按 TkLess / * 规则过滤页面
+    #[arg(long)]
+    pub respect_robots: bool,
     /// Return success despite failed pages; errors remain in the report
     #[arg(long = "allow-partial")]
     pub allow_partial: bool,

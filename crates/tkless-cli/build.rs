@@ -22,8 +22,9 @@ fn main() {
         res.set("CompanyName", "TkLess Contributors");
         res.set("OriginalFilename", "tkless.exe");
         res.set("LegalCopyright", "TkLess Contributors");
-        res.set("FileVersion", "0.4.0.0");
-        res.set("ProductVersion", "0.4.0.0");
+        let version = format!("{}.0", env!("CARGO_PKG_VERSION"));
+        res.set("FileVersion", &version);
+        res.set("ProductVersion", &version);
         if let Err(e) = res.compile() {
             eprintln!("Warning: Failed to compile Windows resource: {e}");
         }

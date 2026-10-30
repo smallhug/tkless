@@ -62,6 +62,9 @@ impl Fetcher {
         );
 
         for (key, val) in &options.headers {
+            if is_sensitive_header(key) {
+                continue;
+            }
             if let (Ok(hname), Ok(hval)) = (HeaderName::from_str(key), HeaderValue::from_str(val)) {
                 headers.insert(hname, hval);
             }
@@ -77,6 +80,10 @@ impl Fetcher {
             .connect_timeout(Duration::from_secs(options.connect_timeout_secs))
             .connector_layer(crate::search_preflight::ConnectionTimingLayer)
             .redirect(reqwest::redirect::Policy::none());
+
+        if !options.allow_private_addresses {
+            client_builder = client_builder.dns_resolver(std::sync::Arc::new(PublicDnsResolver));
+        }
 
         if let Some(ref proxy_url) = options.proxy {
             let proxy = reqwest::Proxy::all(proxy_url)?;
@@ -109,7 +116,34 @@ impl Fetcher {
     /// Builds a GET request for target URL with domain-scoped cookies automatically attached.
     /// Strictly protects against cross-host credential leaks.
     pub fn get(&self, url: &Url) -> reqwest::RequestBuilder {
+        if !matches!(url.scheme(), "http" | "https")
+            || (!self.options.allow_private_addresses
+                && (url
+                    .host_str()
+                    .is_some_and(|h| h == "localhost" || h.ends_with(".local"))
+                    || match url.host() {
+                        Some(url::Host::Ipv4(ip)) => is_private_ip(ip.into()),
+                        Some(url::Host::Ipv6(ip)) => is_private_ip(ip.into()),
+                        _ => false,
+                    }))
+        {
+            // RequestBuilder records an error; callers cannot accidentally send this URL.
+            return self.client.get("invalid://blocked-destination");
+        }
         let mut builder = self.client.get(url.clone());
+        if self.options.initial_target_origin.as_deref()
+            == Some(url.origin().ascii_serialization().as_str())
+        {
+            for (key, value) in &self.options.headers {
+                if is_sensitive_header(key) {
+                    if let (Ok(name), Ok(value)) =
+                        (HeaderName::from_str(key), HeaderValue::from_str(value))
+                    {
+                        builder = builder.header(name, value);
+                    }
+                }
+            }
+        }
         if let Some(cookie_str) = self.resolve_cookie_for_url(url) {
             if !cookie_str.trim().is_empty() {
                 if let Ok(hval) = HeaderValue::from_str(cookie_str.trim()) {
@@ -127,6 +161,44 @@ impl Fetcher {
         } else {
             self.client.get(url_str)
         }
+    }
+
+    /// Bounded response reader for adapters. Structured data must never be silently truncated.
+    pub async fn read_text(&self, response: reqwest::Response) -> Result<String, TklessError> {
+        let content_type = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_owned);
+        let bytes = self.read_bytes(response).await?;
+        Ok(decode_html(&bytes, content_type.as_deref()))
+    }
+
+    pub async fn read_bytes(
+        &self,
+        mut response: reqwest::Response,
+    ) -> Result<Vec<u8>, TklessError> {
+        let mut bytes = Vec::new();
+        while let Some(chunk) = response.chunk().await? {
+            let received = bytes.len().saturating_add(chunk.len());
+            if received > self.options.max_bytes {
+                return Err(TklessError::ResponseTooLarge {
+                    limit: self.options.max_bytes,
+                    received,
+                });
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+        Ok(bytes)
+    }
+
+    pub async fn read_json<T: serde::de::DeserializeOwned>(
+        &self,
+        response: reqwest::Response,
+    ) -> Result<T, TklessError> {
+        let bytes = self.read_bytes(response).await?;
+        serde_json::from_slice(&bytes)
+            .map_err(|e| TklessError::InvalidArgument(format!("Invalid API JSON: {e}")))
     }
 
     /// Resolves the cookie header string scoped strictly to the target URL's domain.
@@ -479,6 +551,11 @@ impl Fetcher {
 
     /// Validates that target URL does not point to internal/loopback/cloud-metadata addresses (SSRF guard).
     pub async fn validate_ssrf(&self, url: &Url) -> Result<(), TklessError> {
+        if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
+            return Err(TklessError::SsrfBlocked(
+                "Only HTTP(S) destinations are supported".into(),
+            ));
+        }
         if self.options.allow_private_addresses {
             return Ok(());
         }
@@ -508,7 +585,12 @@ impl Fetcher {
         // Hostname DNS resolution check: validate ALL resolved IP addresses (prevents multi-A-record bypass)
         let port = url.port_or_known_default().unwrap_or(80);
         let host_with_port = format!("{host}:{port}");
-        if let Ok(addrs) = tokio::net::lookup_host(&host_with_port).await {
+        {
+            let addrs = tokio::net::lookup_host(&host_with_port)
+                .await
+                .map_err(|e| {
+                    TklessError::SsrfBlocked(format!("Cannot validate destination DNS: {e}"))
+                })?;
             for addr in addrs {
                 if is_private_ip(addr.ip()) {
                     return Err(TklessError::SsrfBlocked(format!(
@@ -523,6 +605,36 @@ impl Fetcher {
     }
 }
 
+fn is_sensitive_header(name: &str) -> bool {
+    matches!(
+        name.to_ascii_lowercase().as_str(),
+        "authorization"
+            | "proxy-authorization"
+            | "cookie"
+            | "cookie2"
+            | "x-api-key"
+            | "api-key"
+            | "x-auth-token"
+    )
+}
+
+/// Validate the addresses actually supplied to the HTTP connector, not only a preliminary lookup.
+struct PublicDnsResolver;
+impl reqwest::dns::Resolve for PublicDnsResolver {
+    fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
+        Box::pin(async move {
+            let addresses: Vec<_> = tokio::net::lookup_host((name.as_str(), 0)).await?.collect();
+            if addresses.is_empty() || addresses.iter().any(|a| is_private_ip(a.ip())) {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "DNS destination is not public",
+                )
+                .into());
+            }
+            Ok(Box::new(addresses.into_iter()) as reqwest::dns::Addrs)
+        })
+    }
+}
 fn retry_delay(attempt: u32, retry_after: Option<&str>) -> Duration {
     if let Some(value) = retry_after {
         if let Ok(seconds) = value.trim().parse::<u64>() {
@@ -546,6 +658,7 @@ fn is_private_ip(ip: std::net::IpAddr) -> bool {
                 || ipv4.is_link_local()
                 || ipv4.is_broadcast()
                 || ipv4.is_unspecified()
+                || ipv4.is_multicast()
                 || oct[0] == 0
                 || (oct[0] == 100 && (oct[1] & 0xc0) == 64) // 100.64.0.0/10 (CGNAT)
                 || (oct[0] == 192 && oct[1] == 0 && oct[2] == 0) // 192.0.0.0/24 (IETF Protocol Assignments)
@@ -561,6 +674,7 @@ fn is_private_ip(ip: std::net::IpAddr) -> bool {
             }
             ipv6.is_loopback()
                 || ipv6.is_unspecified()
+                || ipv6.is_multicast()
                 || (ipv6.segments()[0] & 0xfe00) == 0xfc00 // Unique Local Address fc00::/7
                 || (ipv6.segments()[0] & 0xffc0) == 0xfe80 // Link-Local Address fe80::/10
         }

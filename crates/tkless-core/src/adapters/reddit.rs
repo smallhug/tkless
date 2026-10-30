@@ -67,7 +67,7 @@ impl RedditAdapter {
             .send()
             .await?;
 
-        let text = resp.text().await?;
+        let text = fetcher.read_text(resp).await?;
 
         // Attempt JSON API parse first
         if let Ok(v) = serde_json::from_str::<Value>(&text) {
