@@ -1,6 +1,5 @@
 //! Public account article discovery and album enumeration, without backend credentials.
 pub mod album;
-pub mod history;
 pub mod identity;
 use crate::{ExtractionOptions, PageDocument, TklessEngine, TklessError};
 use identity::{failure, Account};
@@ -76,7 +75,6 @@ pub enum StopReason {
     FetchFailed,
     DiscoveryOnly,
     IdentityMismatch,
-    SessionRequired,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

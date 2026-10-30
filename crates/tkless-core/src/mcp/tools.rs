@@ -284,7 +284,7 @@ pub fn get_available_tools() -> Vec<McpTool> {
     let mut tools = vec![
         McpTool {
             output_schema: None, name: "list_wechat_articles".into(),
-            description: "Discover public WeChat articles by name/article/album. Set history=true with an article URL or biz and a local session_file to enumerate authorized account history, including secondary articles. Supports checkpoint/resume. listing_complete means the selected visible listing was exhausted, not recovery of deleted/inaccessible history. Never bypasses verification.".into(),
+            description: "Discover public WeChat articles by name/article/album. Supports account identity checks, linked album expansion and cursor pagination with explicit completion status. Never bypasses verification.".into(),
             input_schema: serde_json::json!({"type":"object","additionalProperties":false,"required":["source"],"properties":{
                 "source":{"type":"string","minLength":1,"maxLength":4096},
                 "limit":{"type":"integer","minimum":1,"maximum":crate::wechat::MAX_LIMIT,"default":crate::wechat::DEFAULT_LIMIT},
@@ -292,10 +292,6 @@ pub fn get_available_tools() -> Vec<McpTool> {
                 "delay_ms":{"type":"integer","minimum":0,"maximum":60000,"default":300},
                 "fetch_content":{"type":"boolean","default":false},"follow_albums":{"type":"boolean","default":true},
                 "expected_biz":{"type":"string","minLength":1,"maxLength":128},
-                "history":{"type":"boolean","default":false,"description":"Enumerate authorized account history; source must be article URL or biz. listing_complete covers session-visible history only."},
-                "session_file":{"type":"string","description":"Local authorized session JSON path; never pass credentials inline."},
-                "checkpoint":{"type":"string","description":"Local history checkpoint path."},
-                "resume":{"type":"boolean","default":false},
                 "max_tokens_per_article":{"type":"integer","minimum":1,"maximum":100000,"default":4000}
             }}),
         },

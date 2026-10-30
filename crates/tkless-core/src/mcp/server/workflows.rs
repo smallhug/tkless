@@ -30,28 +30,6 @@ impl McpServer {
                 max_tokens: Some(args["max_tokens_per_article"].as_u64().unwrap_or(4000) as usize),
                 ..Default::default()
             };
-            if args["history"].as_bool().unwrap_or(false) {
-                return crate::wechat::history::list_history(
-                    &TklessEngine::with_options(fetch)?,
-                    source,
-                    &options,
-                    &crate::wechat::history::HistoryOptions {
-                        session_file: args["session_file"].as_str().map(Into::into),
-                        checkpoint: args["checkpoint"].as_str().map(Into::into),
-                        resume: args["resume"].as_bool().unwrap_or(false),
-                    },
-                    &extraction,
-                )
-                .await;
-            }
-            if args.get("session_file").is_some()
-                || args.get("checkpoint").is_some()
-                || args["resume"].as_bool().unwrap_or(false)
-            {
-                return Err(TklessError::InvalidArgument(
-                    "Session/checkpoint parameters require history=true".into(),
-                ));
-            }
             crate::wechat::list_articles(
                 &TklessEngine::with_options(fetch)?,
                 source,

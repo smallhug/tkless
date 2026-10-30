@@ -1088,18 +1088,6 @@ pub struct BrowseArgs {
 
 #[derive(clap::Args, Debug, Clone)]
 pub struct WechatArgs {
-    /// 读取账号历史列表（source 为文章 URL 或 biz；需要有效会话）
-    #[arg(long)]
-    pub history: bool,
-    /// 本地授权会话 JSON 文件，不向输出或检查点写入凭据
-    #[arg(long, requires = "history")]
-    pub session_file: Option<PathBuf>,
-    /// 历史列表及正文抓取检查点
-    #[arg(long, requires = "history")]
-    pub checkpoint: Option<PathBuf>,
-    /// 从检查点恢复，跳过已完成正文并重试失败项
-    #[arg(long, requires_all = ["history", "checkpoint"])]
-    pub resume: bool,
     /// 公众号显示名称、文章 URL 或公开合集 URL
     pub source: String,
     #[arg(long, short = 'l', default_value_t = tkless_core::wechat::DEFAULT_LIMIT)]

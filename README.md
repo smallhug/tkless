@@ -375,7 +375,7 @@ tkless [OPTIONS] [TARGET] [COMMAND]
 | `search` | Bing 平台定向搜索与搜索后正文提取 |
 | `batch` | 从文件或 stdin 读取 URL 列表并发抓取 |
 | `crawl` | 站点链接 / Sitemap 遍历与知识库汇编 |
-| `wechat` | 微信公众号名称发现、合集翻页与授权账号历史采集（`--history`）；[使用说明](doc/11-wechat-public.md) |
+| `wechat` | 微信公众号名称发现、文章身份与合集翻页；[使用说明](doc/11-wechat-public.md) |
 | `collect` | 通用分页与列表详情采集 |
 | `sync` | 保存采集快照并输出增量事件 |
 | `browse` | 执行受限浏览器步骤并提取正文 |

@@ -120,9 +120,9 @@ async fn mcp_public_wechat_tool_is_discoverable_and_validates_limits() {
             None,
         )
         .await;
-    assert!(!result.is_error);
-    let report = result.structured_content.unwrap();
-    assert_eq!(report["scope"], "account_history");
-    assert_eq!(report["stop_reason"], "session_required");
-    assert_eq!(report["complete"], false);
+    assert!(result.is_error);
+    assert_eq!(
+        result.structured_content.unwrap()["error"]["code"],
+        "invalid_argument"
+    );
 }
