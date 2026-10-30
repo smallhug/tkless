@@ -362,7 +362,7 @@ tkless watch --config ./watch.json --state ./watch-state --interval 3600
 | v0.8（P1/P2） | WS7 内容类型（OCR/PDF 打印）、WS8 熔断与可观测 | 缺依赖时报错明确；熔断与预算可在报告中观察 |
 | v0.9+（P2） | WS9 配置式适配器、WS10 sink | 新增站点无需改核心代码；sink 失败不影响主流程语义 |
 
-说明：版本号与顺序是建议，不绑定发布时间；每项应独立可回滚。
+说明：版本号与顺序是建议，不绑定发布时间；每项应独立可回滚。截至 2026-10-31，上述里程碑的主要条目已部分落地（含请求模板、页面结构采集、`watch`、MCP HTTP 与 `jobs_*`、搜索筛选、凭据库与 Cookie Jar、PDF/EPUB/Office、重试预算与每主机熔断、配置式适配器）；具体实现边界以各工作流「实施状态」为准。
 
 ---
 
@@ -396,24 +396,24 @@ tkless watch --config ./watch.json --state ./watch-state --interval 3600
 | :--- | :--- | :--- |
 | 静态/服务端渲染正文 | 支持 | — |
 | 简单 JS 交互后取正文 | 支持（`browse`） | WS2 增强 |
-| 数据仅在 XHR JSON | 不支持 | WS2 |
+| 数据仅在 XHR JSON | 部分（`browse` 捕获 + `request` 模板直连接口） | WS2 |
 | 列表页 GET 分页 | 支持（`collect`） | — |
-| 列表页 POST/表单分页 | 不支持 | WS1 |
-| Shadow DOM / iframe 正文 | 不支持 | WS2 |
-| 无限滚动列表 | 部分（固定步数） | WS2 |
-| 登录后内容 | 部分（需自备 cookie） | WS6 |
+| 列表页 POST/表单分页 | 支持（`CollectionConfig.request`） | WS1 |
+| Shadow DOM / iframe 正文 | 支持（同源、显式开启） | WS2 |
+| 无限滚动列表 | 支持（`scroll_until_stable`） | WS2 |
+| 登录后内容 | 支持（凭据库 + 可选持久化 Cookie Jar） | WS6 |
 | 扫码/2FA 自动登录 | 仅 B 站 | WS6 |
 | 验证码/Cloudflare | 不支持（设计取舍） | — |
-| 扫描 PDF / 图片文字 | 不支持 | WS7 |
-| Office 文档 | 不支持 | WS7 |
-| 视频理解（无字幕） | 不支持 | WS7 |
-| 日期/语言/地区检索 | 不支持 | WS5 |
-| 多引擎交叉验证 | 不支持 | WS5 |
-| 定时监控与变更通知 | 不支持 | WS3 |
+| 扫描 PDF / 图片文字 | 不支持（OCR 需外部程序） | WS7 |
+| Office 文档 | 支持 DOCX/PPTX；XLSX 需先转 CSV | WS7 |
+| 视频理解（无字幕） | 不支持（ASR 需外部程序） | WS7 |
+| 日期/语言/地区检索 | 支持（Bing 未公开参数，尽力而为） | WS5 |
+| 多引擎交叉验证 | 不支持（默认且当前仅 Bing） | WS5 |
+| 定时监控与变更通知 | 支持（`watch` 单轮/循环，外部调度） | WS3 |
 | 分布式多机抓取 | 不支持 | 不在近期范围 |
-| 远程 MCP 接入 | 不支持 | WS4 |
+| 远程 MCP 接入 | 支持可选 HTTP（无 SSE/持久会话） | WS4 |
 | 对象存储/数据库写入 | 不支持 | WS10 |
-| 大规模站点平台覆盖 | 22 个适配器 | WS9 |
+| 大规模站点平台覆盖 | 22 个内置适配器 + 配置式扩展 | WS9 |
 
 ---
 
@@ -437,3 +437,4 @@ tkless watch --config ./watch.json --state ./watch-state --interval 3600
 | 2026-10-31 | WS7 部分实施：DOCX/PPTX 原生解析（内置 ZIP+XML，无新依赖） |
 | 2026-10-31 | WS6 部分实施：可选持久化 Cookie Jar（精确主机、无新依赖） |
 | 2026-10-31 | WS8 部分实施：可选每主机熔断（阈值、冷却、半开探测） |
+| 2026-10-31 | 同步 §7 路线图与 §10 差距自查表至当前实施状态 |
