@@ -1707,4 +1707,8 @@ pub struct CrawlArgs {
     /// 将抓取结果打包为 Markdown ZIP（README 索引 + 每页一个 .md）
     #[arg(long = "bundle", value_name = "FILE")]
     pub bundle: Option<PathBuf>,
+
+    /// 将抓取结果导出为 EPUB 3 电子书
+    #[arg(long = "epub", value_name = "FILE")]
+    pub epub: Option<PathBuf>,
 }

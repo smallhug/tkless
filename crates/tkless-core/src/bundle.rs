@@ -36,6 +36,157 @@ pub fn write_markdown_bundle(report: &SiteCrawlReport, path: &Path) -> Result<us
     Ok(entries.len())
 }
 
+/// Writes a crawl report as a minimal, dependency-free EPUB 3 book.
+///
+/// The container reuses the stored ZIP writer, so `mimetype` is the first entry and no
+/// compression is applied. Page bodies are emitted as escaped `<pre>` blocks rather than
+/// rendered Markdown, which keeps the conversion lossless without a Markdown engine.
+pub fn write_epub(report: &SiteCrawlReport, path: &Path) -> Result<usize, TklessError> {
+    if report.pages.is_empty() {
+        return Err(TklessError::InvalidArgument(
+            "EPUB export requires at least one crawled page".into(),
+        ));
+    }
+    let max_pages = MAX_BUNDLE_ENTRIES - 4;
+    if report.pages.len() > max_pages {
+        return Err(TklessError::InvalidArgument(format!(
+            "EPUB export supports at most {max_pages} pages"
+        )));
+    }
+
+    let book_title = format!("TkLess crawl: {}", report.seed_url);
+    let mut entries = Vec::with_capacity(report.pages.len() + 4);
+    entries.push(("mimetype".to_string(), b"application/epub+zip".to_vec()));
+    entries.push((
+        "META-INF/container.xml".to_string(),
+        CONTAINER_XML.as_bytes().to_vec(),
+    ));
+
+    let mut manifest = String::new();
+    let mut spine = String::new();
+    let mut nav_items = String::new();
+    for (position, page) in report.pages.iter().enumerate() {
+        let index = position + 1;
+        let file = format!("pages/{:03}-{}.xhtml", index, slugify(&page.title, index));
+        let title = display_title(page);
+        manifest.push_str(&format!(
+            "    <item id=\"page-{index}\" href=\"{}\" media-type=\"application/xhtml+xml\"/>\n",
+            escape_xml(&file)
+        ));
+        spine.push_str(&format!("    <itemref idref=\"page-{index}\"/>\n"));
+        nav_items.push_str(&format!(
+            "      <li><a href=\"{}\">{}</a></li>\n",
+            escape_xml(&file),
+            escape_xml(&title)
+        ));
+        entries.push((
+            format!("OEBPS/{file}"),
+            page_xhtml(&title, page).into_bytes(),
+        ));
+    }
+
+    let modified = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ");
+    let opf = format!(
+        "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+<package xmlns=\"http://www.idpf.org/2007/opf\" version=\"3.0\" unique-identifier=\"bookid\">\n\
+  <metadata xmlns:dc=\"http://purl.org/dc/elements/1.1/\">\n\
+    <dc:identifier id=\"bookid\">{}</dc:identifier>\n\
+    <dc:title>{}</dc:title>\n\
+    <dc:language>und</dc:language>\n\
+    <meta property=\"dcterms:modified\">{modified}</meta>\n\
+  </metadata>\n\
+  <manifest>\n\
+    <item id=\"nav\" href=\"nav.xhtml\" media-type=\"application/xhtml+xml\" properties=\"nav\"/>\n\
+{manifest}\
+\
+  </manifest>\n\
+  <spine>\n\
+{spine}\
+\
+  </spine>\n\
+</package>\n",
+        escape_xml(&report.seed_url),
+        escape_xml(&book_title)
+    );
+    entries.push(("OEBPS/content.opf".to_string(), opf.into_bytes()));
+
+    let nav = format!(
+        "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+<html xmlns=\"http://www.w3.org/1999/xhtml\" xmlns:epub=\"http://www.idpf.org/2007/ops\" xml:lang=\"und\">\n\
+<head><meta charset=\"utf-8\"/><title>Contents</title></head>\n\
+<body>\n\
+  <nav epub:type=\"toc\" id=\"toc\">\n\
+    <h1>Contents</h1>\n\
+    <ol>\n\
+{nav_items}\
+\
+    </ol>\n\
+  </nav>\n\
+</body>\n\
+</html>\n"
+    );
+    entries.push(("OEBPS/nav.xhtml".to_string(), nav.into_bytes()));
+
+    write_stored_zip(path, &entries)?;
+    Ok(entries.len())
+}
+
+fn display_title(page: &CrawledPage) -> String {
+    let title = page.title.trim();
+    if title.is_empty() {
+        page.url.clone()
+    } else {
+        title.to_string()
+    }
+}
+
+fn page_xhtml(title: &str, page: &CrawledPage) -> String {
+    let mut body = String::new();
+    body.push_str(&format!(
+        "<h1>{}</h1>\n<p class=\"source\"><a href=\"{}\">{}</a></p>\n",
+        escape_xml(title),
+        escape_xml(&page.url),
+        escape_xml(&page.url)
+    ));
+    if let Some(error) = &page.error {
+        body.push_str(&format!(
+            "<p class=\"error\">Error: {}</p>\n",
+            escape_xml(error)
+        ));
+    }
+    body.push_str(&format!("<pre>{}</pre>\n", escape_xml(&page.content)));
+    format!(
+        "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+<html xmlns=\"http://www.w3.org/1999/xhtml\" xml:lang=\"und\">\n\
+<head><meta charset=\"utf-8\"/><title>{}</title></head>\n\
+<body>\n{body}</body>\n\
+</html>\n",
+        escape_xml(title)
+    )
+}
+
+fn escape_xml(text: &str) -> String {
+    let mut escaped = String::with_capacity(text.len());
+    for character in text.chars() {
+        match character {
+            '&' => escaped.push_str("&amp;"),
+            '<' => escaped.push_str("&lt;"),
+            '>' => escaped.push_str("&gt;"),
+            '"' => escaped.push_str("&quot;"),
+            '\'' => escaped.push_str("&apos;"),
+            _ => escaped.push(character),
+        }
+    }
+    escaped
+}
+
+const CONTAINER_XML: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+<container version=\"1.0\" xmlns=\"urn:oasis:names:tc:opendocument:xmlns:container\">\n\
+  <rootfiles>\n\
+    <rootfile full-path=\"OEBPS/content.opf\" media-type=\"application/oebps-package+xml\"/>\n\
+  </rootfiles>\n\
+</container>\n";
+
 fn page_markdown(page: &CrawledPage) -> Vec<u8> {
     let mut content = String::new();
     content.push_str("---\n");
@@ -281,6 +432,83 @@ mod tests {
         let markdown = String::from_utf8(page_entry.data.clone()).unwrap();
         assert!(markdown.contains("url: \"https://example.com/post\""));
         assert!(markdown.contains("# Hello"));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn epub_contains_required_epub3_structure() {
+        let path = std::env::temp_dir().join(format!(
+            "tkless-epub-{}-{}.epub",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let report = SiteCrawlReport {
+            complete: true,
+            stop_reason: StopReason::Exhausted,
+            pending_urls: 0,
+            seed_url: "https://example.com/a?x=1&y=2".into(),
+            total_pages: 2,
+            total_tokens: 24,
+            pages: vec![
+                page("Hello & <World>", "<tag> & body"),
+                page("", "second page"),
+            ],
+        };
+        assert_eq!(write_epub(&report, &path).unwrap(), 6);
+
+        let bytes = std::fs::read(&path).unwrap();
+        let entries = parse_zip(&bytes);
+        assert_eq!(entries[0].name, "mimetype");
+        assert_eq!(entries[0].data, b"application/epub+zip");
+        let names: Vec<_> = entries.iter().map(|entry| entry.name.as_str()).collect();
+        for required in [
+            "META-INF/container.xml",
+            "OEBPS/content.opf",
+            "OEBPS/nav.xhtml",
+            "OEBPS/pages/001-hello-world.xhtml",
+        ] {
+            assert!(names.contains(&required), "missing {required} in {names:?}");
+        }
+
+        let entry = |name: &str| {
+            String::from_utf8(
+                entries
+                    .iter()
+                    .find(|entry| entry.name == name)
+                    .unwrap_or_else(|| panic!("missing {name}"))
+                    .data
+                    .clone(),
+            )
+            .unwrap()
+        };
+        let opf = entry("OEBPS/content.opf");
+        assert!(opf.contains("dcterms:modified"));
+        assert!(opf.contains("href=\"pages/001-hello-world.xhtml\""));
+        assert!(opf.contains("&amp;y=2"), "seed URL must be XML-escaped");
+        let nav = entry("OEBPS/nav.xhtml");
+        assert!(nav.contains("Hello &amp; &lt;World&gt;"));
+        let page = entry("OEBPS/pages/001-hello-world.xhtml");
+        assert!(page.contains("&lt;tag&gt; &amp; body"));
+        assert!(!page.contains("<tag>"));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn epub_rejects_empty_reports() {
+        let path = std::env::temp_dir().join("tkless-empty.epub");
+        let report = SiteCrawlReport {
+            complete: true,
+            stop_reason: StopReason::Exhausted,
+            pending_urls: 0,
+            seed_url: "https://example.com".into(),
+            total_pages: 0,
+            total_tokens: 0,
+            pages: Vec::new(),
+        };
+        assert!(write_epub(&report, &path).is_err());
         let _ = std::fs::remove_file(&path);
     }
 

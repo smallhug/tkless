@@ -281,6 +281,9 @@ pub async fn run(
             crawl_args.checkpoint.as_deref(),
             crawl_args.bundle.as_deref(),
         )?;
+        paths::distinct(crawl_args.output.as_deref(), crawl_args.epub.as_deref())?;
+        paths::distinct(crawl_args.checkpoint.as_deref(), crawl_args.epub.as_deref())?;
+        paths::distinct(crawl_args.bundle.as_deref(), crawl_args.epub.as_deref())?;
         let mut crawl_fetch_options = fetch_options.clone();
         if crawl_args.proxy.is_some() {
             crawl_fetch_options.proxy = crawl_args.proxy.clone();
@@ -344,6 +347,15 @@ pub async fn run(
                 eprintln!(
                     "[TkLess Crawl] Markdown bundle written ({files} files): {}",
                     bundle.display()
+                );
+            }
+        }
+        if let Some(epub) = crawl_args.epub.as_deref() {
+            let files = tkless_core::bundle::write_epub(&report, epub)?;
+            if !args.quiet {
+                eprintln!(
+                    "[TkLess Crawl] EPUB written ({files} files): {}",
+                    epub.display()
                 );
             }
         }
