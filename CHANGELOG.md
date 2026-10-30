@@ -19,6 +19,7 @@
 - 搜索新增 `--since`/`--until`/`--lang`/`--region`（及 MCP 对应参数），映射到 Bing 未公开参数；启用时报告附加 `search_filters_best_effort` 警告，非法日期或地区在发请求前报错。
 - 新增 `tkless auth` 本地凭据库（`set` 从 stdin 读取、`list`、`remove`）：Unix 下以 `0600` 原子写入，单 Cookie ≤ 64 KiB、最多 32 平台；仅在未提供 `--cookie`/`--cookie-file` 时按平台使用。
 - 新增 `--pdf`：通过 CDP `Page.printToPDF` 将渲染后的页面打印为 PDF（保留背景与 CSS 分页），与 `--screenshot` 共享导航、等待、自动滚动与拦截流程。
+- 新增 `--retry-budget N`（整个运行共享重试上限）与 `--log-format json`（stderr 结构化日志，每行一个 JSON 对象）。
 
 ### Fixed
 
