@@ -152,12 +152,15 @@ robots.txt 首版支持 `TkLess` / `*` 分组、Allow/Disallow、`*` 和尾部 `
 ```json
 {
   "timeout_ms":30000,
+  "include_shadow_dom":true,
+  "include_frames":true,
+  "capture":{"mime_prefixes":["application/json"],"max_responses":10,"max_body_bytes":262144,"same_origin_only":true},
   "steps":[
     {"action":"wait_for","selector":"#query","timeout_ms":5000},
     {"action":"fill","selector":"#query","value":"Rust"},
     {"action":"click","selector":"button.search"},
     {"action":"wait_for","selector":".results","timeout_ms":10000},
-    {"action":"scroll","pixels":600}
+    {"action":"scroll_until_stable","max_steps":20,"idle_rounds":2,"step_px":400}
   ]
 }
 ```
@@ -171,7 +174,10 @@ tkless browse https://example.com/search --plan ./browser.json -o rendered.json
 - 最多 32 步；单次等待最多 30 秒，整个浏览器调用最多 120 秒。
 - 支持文本类输入框及 textarea；不支持密码、文件上传、表单提交按钮、下载链接或打开新窗口的链接。
 - 不接受任意 JavaScript。默认拦截 GET/HEAD/OPTIONS 之外的 HTTP 请求，并限制跨源文档导航；因此依赖 POST 搜索接口的网站可能无法使用此模式。
-- 仅主文档 CSS 选择器，不包含 iframe、Shadow DOM、多标签页流程和验证码自动处理。
+- 滚动支持固定像素与 `scroll_until_stable`（按高度是否停止增长判定），只截断按高度判定；报告 `scroll_stopped_reason` 为 `stable` 或 `max_steps`。
+- `include_shadow_dom=true` 时把开放 shadow root 的内容序列化进宿主元素；`include_frames=true` 时把同源 iframe 内容内联为 `<div data-frame-url>`。二者默认关闭，关闭时保持原始 `outerHTML`。
+- `capture` 可选捕获 XHR/fetch 响应（默认只保留 `application/json`），受条数、单条字节数与同源限制；结果位于 `browse` 输出 `entity.network`，`PageDocument` 正文不受影响。请求头含 `Cookie`/`Authorization` 等凭据时该响应不捕获（登录态接口需改用直接请求模板并自行处理凭据）；首页导航尚未完成的慢响应可能不在快照内。
+- 仍不包含多标签页流程、跨源 iframe 读取与验证码自动处理；新增的 JSON 列表采集优先使用 `collect` 的 `request` 模板直接取接口。
 - 可将 BrowserPlan 放在采集配置的 `browser` 中，作用于每个 HTML 列表页；详情页独立使用 `details.browser`。游标 JSON API 仍走 HTTP。
 - 浏览器网络隔离仍有前述边界，见 [安全加固记录](09-security-hardening.md)。固定动作和 HTTP 方法限制并不能保证网站本身没有 GET 副作用，也不替代系统级出口隔离。
 
@@ -183,7 +189,7 @@ tkless browse https://example.com/search --plan ./browser.json -o rendered.json
 {"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"collect_pages","arguments":{"config":{"url":"https://example.com/articles","schema":{"items_selector":".article-card","fields":{"title":"h2","url":"a@href"}},"pagination":{"kind":"next_link","selector":"a[rel=next]"}}}}}
 ```
 
-本地回归覆盖分页与详情、游标编码、重复页和错误保留、同步不误删、爬虫恢复、时间与输出预算、robots.txt、CLI 文件保护及 MCP 参数校验。真实浏览器测试覆盖填写、点击、等待、实际导航 URL、截图和标签页清理：
+本地回归覆盖分页与详情、游标编码、重复页和错误保留、同步不误删、爬虫恢复、时间与输出预算、robots.txt、CLI 文件保护及 MCP 参数校验。真实浏览器测试覆盖填写、点击、等待、实际导航 URL、截图、标签页清理及 WS2 的 shadow DOM/iframe/滚动收敛/XHR 捕获（默认 `#[ignore]`）：
 
 ```bash
 cargo test --workspace

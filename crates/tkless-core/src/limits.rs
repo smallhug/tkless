@@ -21,6 +21,18 @@ pub const BROWSER_MAX_STEPS: usize = 32;
 pub const BROWSER_MAX_SELECTOR_BYTES: usize = 1024;
 pub const BROWSER_MAX_FILL_BYTES: usize = 16_384;
 pub const BROWSER_MAX_SCROLL_PIXELS: u32 = 10_000;
+pub const BROWSER_SCROLL_MAX_STEPS: u32 = 60;
+pub const BROWSER_SCROLL_DEFAULT_STEPS: u32 = 20;
+pub const BROWSER_SCROLL_DEFAULT_IDLE_ROUNDS: u32 = 2;
+pub const BROWSER_SCROLL_MAX_IDLE_ROUNDS: u32 = 10;
+/// Captured network responses are opt-in and bounded per page.
+pub const BROWSER_CAPTURE_DEFAULT_RESPONSES: usize = 20;
+pub const BROWSER_CAPTURE_MAX_RESPONSES: usize = 50;
+pub const BROWSER_CAPTURE_DEFAULT_BODY_BYTES: usize = 256 * 1024;
+pub const BROWSER_CAPTURE_MAX_BODY_BYTES: usize = 1024 * 1024;
+pub const BROWSER_CAPTURE_MIN_BODY_BYTES: usize = 1024;
+pub const BROWSER_CAPTURE_MAX_MIME_PREFIXES: usize = 8;
+pub const BROWSER_MAX_SNAPSHOT_BYTES: usize = 16 * 1024 * 1024;
 
 pub fn sync_state_bytes(megabytes: u64) -> Result<u64, crate::TklessError> {
     if !(1..=SYNC_MAX_STATE_MB).contains(&megabytes) {

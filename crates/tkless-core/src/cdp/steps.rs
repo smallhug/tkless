@@ -4,10 +4,26 @@ use crate::limits::*;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub enum BrowserStep {
-    WaitFor { selector: String, timeout_ms: u64 },
-    Click { selector: String },
-    Fill { selector: String, value: String },
-    Scroll { pixels: i32 },
+    WaitFor {
+        selector: String,
+        timeout_ms: u64,
+    },
+    Click {
+        selector: String,
+    },
+    Fill {
+        selector: String,
+        value: String,
+    },
+    Scroll {
+        pixels: i32,
+    },
+    /// Scrolls in fixed increments until page height stops growing.
+    ScrollUntilStable {
+        max_steps: u32,
+        idle_rounds: u32,
+        step_px: u32,
+    },
 }
 
 pub(crate) fn validate(steps: &[BrowserStep]) -> Result<(), TklessError> {
@@ -43,6 +59,24 @@ pub(crate) fn validate(steps: &[BrowserStep]) -> Result<(), TklessError> {
                     return Err(TklessError::InvalidArgument(
                         "Scroll distance exceeds 10000 pixels".into(),
                     ));
+                }
+                None
+            }
+            BrowserStep::ScrollUntilStable {
+                max_steps,
+                idle_rounds,
+                step_px,
+            } => {
+                if !(1..=BROWSER_SCROLL_MAX_STEPS).contains(max_steps)
+                    || !(1..=BROWSER_SCROLL_MAX_IDLE_ROUNDS).contains(idle_rounds)
+                    || !(1..=BROWSER_MAX_SCROLL_PIXELS).contains(step_px)
+                {
+                    return Err(TklessError::InvalidArgument(format!(
+                        "scroll_until_stable: max_steps 1..{}, idle_rounds 1..{}, step_px 1..{}",
+                        BROWSER_SCROLL_MAX_STEPS,
+                        BROWSER_SCROLL_MAX_IDLE_ROUNDS,
+                        BROWSER_MAX_SCROLL_PIXELS
+                    )));
                 }
                 None
             }
@@ -93,8 +127,9 @@ pub(super) async fn execute(
     guard: &mut BrowserRequestGuard,
     id: &mut u64,
     steps: &[BrowserStep],
-) -> Result<(), TklessError> {
+) -> Result<Option<String>, TklessError> {
     validate(steps)?;
+    let mut scroll_reason = None;
     for (index, step) in steps.iter().enumerate() {
         let result = async {
             match step {
@@ -108,6 +143,34 @@ pub(super) async fn execute(
                     }).await.map_err(|_| TklessError::CdpError("wait_for timed out".into()))??;
                 }
                 BrowserStep::Scroll { pixels } => { evaluate(ws, guard, id, format!("window.scrollBy(0,{pixels}); true")).await?; }
+                BrowserStep::ScrollUntilStable { max_steps, idle_rounds, step_px } => {
+                    let expression = format!(
+                        r#"new Promise((resolve) => {{
+                            const step = {step_px};
+                            const maxSteps = {max_steps};
+                            const idleMax = {idle_rounds};
+                            let last = -1;
+                            let idle = 0;
+                            let count = 0;
+                            const timer = setInterval(() => {{
+                                const height = Math.max(document.body ? document.body.scrollHeight : 0, document.documentElement ? document.documentElement.scrollHeight : 0);
+                                window.scrollBy(0, step);
+                                count += 1;
+                                if (height === last) {{ idle += 1; }} else {{ idle = 0; }}
+                                last = height;
+                                if (idle >= idleMax || count >= maxSteps) {{
+                                    clearInterval(timer);
+                                    resolve({{reason: idle >= idleMax ? 'stable' : 'max_steps', steps: count, height: height}});
+                                }}
+                            }}, 120);
+                        }})"#
+                    );
+                    let value = evaluate(ws, guard, id, expression).await?;
+                    scroll_reason = value
+                        .get("reason")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned);
+                }
                 BrowserStep::Click { selector } | BrowserStep::Fill { selector, .. } => {
                     let selector = serde_json::to_string(selector).unwrap();
                     let action = match step {
@@ -125,5 +188,45 @@ pub(super) async fn execute(
     }
     // Separate the final snapshot command ID from the last action response.
     *id += 1;
-    Ok(())
+    Ok(scroll_reason)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scroll_until_stable_bounds_are_enforced() {
+        let valid = BrowserStep::ScrollUntilStable {
+            max_steps: BROWSER_SCROLL_DEFAULT_STEPS,
+            idle_rounds: BROWSER_SCROLL_DEFAULT_IDLE_ROUNDS,
+            step_px: 400,
+        };
+        assert!(validate(&[valid]).is_ok());
+
+        for invalid in [
+            BrowserStep::ScrollUntilStable {
+                max_steps: 0,
+                idle_rounds: 1,
+                step_px: 400,
+            },
+            BrowserStep::ScrollUntilStable {
+                max_steps: BROWSER_SCROLL_MAX_STEPS + 1,
+                idle_rounds: 1,
+                step_px: 400,
+            },
+            BrowserStep::ScrollUntilStable {
+                max_steps: 5,
+                idle_rounds: 0,
+                step_px: 400,
+            },
+            BrowserStep::ScrollUntilStable {
+                max_steps: 5,
+                idle_rounds: 1,
+                step_px: 0,
+            },
+        ] {
+            assert!(validate(&[invalid]).is_err());
+        }
+    }
 }

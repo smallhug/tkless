@@ -111,7 +111,9 @@
 2. 配置含 `{{unknown}}`、body > 64 KiB、跨源无 `allow_cross_origin` 均返回参数错误（退出码 2）；
 3. `cargo test --workspace`、`clippy -D warnings`、`scripts/check-docs.cjs` 通过。
 
-### WS2 现代页面结构：网络捕获与 DOM 穿透（P0）
+### WS2 现代页面结构：网络捕获与 DOM 穿透（P0，部分实施）
+
+> 实施状态（2026-10-30）：已落地 `scroll_until_stable`、`include_shadow_dom`、`include_frames` 与可选 XHR 捕获（`capture`）；结果写入 `RenderedPage.network`，`browse` 输出 `entity.network`。真实浏览器用例为 `#[ignore]`。采集直接使用被捕获 JSON 的方式暂未实现，当前推荐用 WS1 的 `request` 模板直接请求接口。
 
 **现状与证据**：`browse_page` 只返回 `RenderedPage { html, final_url }`；`cdp/steps.rs` 仅 4 种动作；`cdp.rs` 的 DOM 读取基于 `document.documentElement.outerHTML`。
 
@@ -405,3 +407,4 @@ tkless watch --config ./watch.json --state ./watch-state --interval 3600
 | :--- | :--- |
 | 2026-10-30 | 建立文档：现状基线、10 个优化工作流、优先级与验收标准 |
 | 2026-10-30 | WS1 实施：模板化请求（GET/POST/PUT）、请求体占位符、游标体分页、校验与测试 |
+| 2026-10-30 | WS2 部分实施：滚动收敛、Shadow DOM/同源 iframe 序列化、可选 XHR 捕获与边界 |
