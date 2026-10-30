@@ -1529,6 +1529,22 @@ pub struct McpArgs {
     /// Custom directory for persistent file cache
     #[arg(long = "cache-dir", value_name = "DIR")]
     pub cache_dir: Option<PathBuf>,
+
+    /// 通过 HTTP 提供 JSON-RPC（例如 127.0.0.1:8787）；省略时使用 stdio
+    #[arg(long = "http", value_name = "ADDR")]
+    pub http: Option<String>,
+
+    /// 单次工具调用超时秒数
+    #[arg(long = "tool-timeout-secs", default_value_t = 300, value_parser = clap::value_parser!(u64).range(1..=3600))]
+    pub tool_timeout_secs: u64,
+
+    /// 从环境变量读取 Bearer Token；非回环绑定必须设置
+    #[arg(long = "auth-token-env", value_name = "NAME")]
+    pub auth_token_env: Option<String>,
+
+    /// 显式允许绑定非回环地址（必须同时提供 Token）
+    #[arg(long = "allow-public-bind")]
+    pub allow_public_bind: bool,
 }
 
 #[derive(clap::Args, Debug, Clone)]

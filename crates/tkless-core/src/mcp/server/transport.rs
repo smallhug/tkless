@@ -45,9 +45,10 @@ impl McpServer {
                         let tx = notify_tx.clone();
                         let task_key = key.clone();
                         let task = tasks.spawn(async move {
-                            let response = match tokio::time::timeout(std::time::Duration::from_secs(300), server.handle_message_with_notifier(&line, Some(&tx))).await {
+                            let timeout_secs = server.tool_timeout_secs;
+                            let response = match tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), server.handle_message_with_notifier(&line, Some(&tx))).await {
                                 Ok(response) => response,
-                                Err(_) => Some(JsonRpcResponse::error(id, -32001, "Tool call exceeded the 300 second timeout")),
+                                Err(_) => Some(JsonRpcResponse::error(id, -32001, format!("Tool call exceeded the {timeout_secs} second timeout"))),
                             };
                             (task_key, response)
                         });
