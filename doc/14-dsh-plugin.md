@@ -27,7 +27,7 @@ github:smallhug/tkless#v0.7.0
 dsh plugin add github:smallhug/tkless#v0.7.0
 ```
 
-> `v0.7.0` 尚未发布；发布前请用 `#<commit>` 或本地目录安装。`v0.6.0` 不包含这个 bundle。
+> `v0.7.0` 的 Release 资产（二进制与 `SHA256SUMS`）由发布流水线生成；`v0.6.0` 不包含这个 bundle。安装前请确认该 Release 已上传。
 
 安装后插件默认启用。**必须新开一个会话**才能看到 `web_search` 被移除；当前已打开的会话仍持有旧 preset revision，只能由 guard 拒绝调用。
 

@@ -79,7 +79,7 @@ tkless upgrade
 Plugins → Add plugin → github:smallhug/tkless#v0.7.0
 ```
 
-> `v0.7.0` 尚未发布；发布前请用 `#<commit>` 或本地目录安装。`v0.6.0` 不包含这个 bundle。
+> `v0.7.0` 的 Release 资产（二进制与 `SHA256SUMS`）由发布流水线生成；`v0.6.0` 不包含这个 bundle。
 
 - 支持 DSH `0.2.1-rc.5`；版本不匹配会被拒绝，升级 DSH 后需安装对应版本的插件。
 - Windows x64、Linux x64/ARM64 首次启用时自动下载 Release 二进制并校验 SHA-256；macOS 请设置 `binaryPath`。
