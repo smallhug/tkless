@@ -248,9 +248,10 @@ tkless watch --config ./watch.json --state ./watch-state --interval 3600
 
 | 能力 | 结论 | 说明 |
 | :--- | :--- | :--- |
-| PDF 打印 / 元素截图 | 已实施 | CDP `Page.printToPDF` 与截图共享流程 |
+| PDF 打印 | 已实施 | CDP `Page.printToPDF`；复用截图流程 |
 | Office 解析 | 已实施（DOCX/PPTX） | 内置 ZIP+XML；不渲染格式、图片、图表、批注或修订 |
 | EPUB 导出 | 已实施（原文） | `crawl --epub` 保留 Markdown 原文，不做渲染 |
+| 元素 / 区域截图 | 已舍弃 | 全页截图 + 外部裁剪；不引入 `clip` 定位（见 §9.1） |
 | 扫描件 PDF / 图片 OCR | 已舍弃 | 外部 `tesseract` 等工具先转文本/PDF，再交给 tkless |
 | XLSX | 已舍弃 | 先导出为 CSV |
 | 音视频转写 | 已舍弃 | 外部 `whisper` 或云转写先产出文本/字幕 |
@@ -396,9 +397,9 @@ tkless watch --config ./watch.json --state ./watch-state --interval 3600
 | 搜索 | 第二搜索引擎与 `trait SearchBackend`、跨查询持久指纹、结果缓存 TTL、每域名结果上限 | 非公开页面解析需长期跟随改版；持久缓存/指纹会模糊"结果完整"语义 | 固定 Bing；交叉验证交给外部搜索工具 |
 | MCP | SSE 通知流、`Mcp-Session-Id` 会话回收、超时自动转后台、`run_watch_once` job | 无状态 HTTP 传输更简单；隐式转后台使调用语义不稳定；watch 自带状态目录 | stdio progress + 显式 `jobs_start` |
 | 调度 | MCP `watch` 工具、`stdout` 通知 sink | watch 需要状态目录与外部调度；核心库禁止直接打印 | cron/Task Scheduler + file/http sink |
-| 浏览器 | `collect` 直接消费捕获的 XHR JSON | 捕获与采集器耦合，JSON Pointer、分页与多响应选择难以稳定 | `CollectionConfig.request` 模板直连接口 |
+| 浏览器 | `collect` 直接消费捕获的 XHR JSON、跨源 iframe 跳过警告 | 捕获与采集器耦合，JSON Pointer、分页与多响应选择难以稳定；跨源 frame 无法读取，警告需额外状态管道且不影响正文 | `CollectionConfig.request` 模板直连接口；同源 frame 合并，跨源静默跳过 |
 | 凭据 | Cookie 自动刷新、`LoginFlow` 抽象、跨子域 Cookie、加密/密钥环 | 平台刷新机制不公开；无公共后缀列表时跨子域有注入风险；无密钥环的加密仅转移密码问题 | 重新登录；`0600` 明文 + 精确主机 Jar |
-| 内容类型 | OCR、ASR、XLSX、Markdown 渲染式 EPUB | 依赖外部二进制/模型或额外 crate，质量与平台差异不可控 | 外部 OCR/ASR；XLSX 转 CSV；EPUB 保留 Markdown 原文 |
+| 内容类型 | OCR、ASR、XLSX、Markdown 渲染式 EPUB、元素/区域截图 | 依赖外部二进制/模型或额外 crate，质量与平台差异不可控；元素截图需 box-model 与穿透状态，收益低 | 外部 OCR/ASR；XLSX 转 CSV；EPUB 保留 Markdown 原文；全页截图 + 外部裁剪 |
 | 稳定性 | 代理池、OTLP、任务级下载总配额、缓存容量淘汰、运行统计快照 | 与代理管理器/可观测性平台职责重叠；状态机与依赖成本高 | `--proxy`、JSON 日志、`--circuit-breaker`、`manage_cache` |
 | 平台 | 批量编译式站点适配器、配置适配器的 `api`/`map` 映射 | 逐站点持续逆向与合规成本；与 WS1 请求模板重叠 | 22 个内置适配器 + `TKLESS_ADAPTERS_DIR`（hosts/path_prefix/schema）+ 按需单站点 |
 | 输出 | 通用 Sink 抽象、S3/对象存储、数据库写入 | 签名、幂等、凭据与供应商差异属于数据平台能力 | CLI 输出管道给 rclone/aws cli/数据库导入工具 |
