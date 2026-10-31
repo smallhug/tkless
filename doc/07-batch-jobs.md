@@ -67,7 +67,7 @@ JSON 报告包含 `total`、`succeeded`、`failed`、`resumed`、`fetched` 和 `
 }
 ```
 
-每项通过 `notifications/progress` 的 `params._meta["tkless/batch_item"]` 交付，包含完整条目；这是服务在 `capabilities.experimental` 中声明的扩展。宿主需要读取该扩展元数据，普通进度提示不等同于完整流式结果。
+每项通过 `notifications/progress` 的 `params._meta["tkless/batch_item"]` 交付，包含完整条目；这是服务在 `capabilities.extensions["tkless/batchStreaming"]` 中声明的扩展。宿主需要读取该扩展元数据，普通进度提示不等同于完整流式结果。
 
 结果通知使用有界队列并等待消费，全部条目通知写出后再写最终响应。最终 `structuredContent` 仅包含统计和 `streamed: true`，不包含 `results` 数组。全部失败时 `isError` 为 true；逐项错误已经在通知中交付。中断连接或取消调用后，可用同一检查点重新发起任务。
 

@@ -184,7 +184,7 @@ TkLess 原生实现了基于标准 stdio 的 JSON-RPC 2.0 MCP 协议，为确保
 
 ### 4. 规范工具名与当前协议
 - 调度器仅接受目录中的规范名称（如 `export_tables`），直接调用、动态执行、Schema 查询和激活使用相同名称。不得恢复旧工具别名或前缀转换。
-- MCP 只实现 `2025-11-25`；初始化始终声明该版本，不剥离输出 Schema 或结构化结果。CLI 参数只保留一个规范长名称及必要的短参数。
+- MCP 只实现 `2026-07-28`；每个请求在 `params._meta` 中携带协议版本与客户端能力，服务端实现 `server/discover`，结果必须带 `resultType`，不剥离输出 Schema 或结构化结果。CLI 参数只保留一个规范长名称及必要的短参数。
 
 ### 5. 两阶段动态工具发现规范 (Two-Stage Dynamic Tool Discovery)
 针对 MCP 客户端默认将所有工具定义注入 System Prompt 导致上下文过度消耗的问题，TkLess 提供了两阶段动态工具发现架构（`--dynamic` 或 `--profile dynamic` 或环境变量 `TKLESS_MCP_DYNAMIC=1`）：
@@ -196,7 +196,7 @@ TkLess 原生实现了基于标准 stdio 的 JSON-RPC 2.0 MCP 协议，为确保
     1. `discover_tools(query, category)`：按关键词或分类（`content`, `search`, `media`, `analysis`, `system`, `all`）检索专门工具目录及简述；
     2. `get_tool_schema(tool_name)`：按需获取指定工具的完整 `inputSchema` 和参数枚举定义；
     3. `execute_tool(tool_name, arguments)`：即使该工具未在 `tools/list` 声明中暴露，Agent 也可通过元工具立即无缝执行；
-    4. `activate_tools(tool_names)`：将会话所需工具动态载入当前激活列表，并通过 `notifications/tools/list_changed` 通知 MCP 宿主重新获取工具列表。
+    4. `activate_tools(tool_names)`：将会话所需工具动态载入当前激活列表；随后重新调用 `tools/list` 刷新声明（本服务不发送 `notifications/tools/list_changed`）。
 - **第二阶段：按需探查与执行 (Stage 2: On-Demand Discovery & Execution)**
   - Agent 在识别出特殊需求（如提取数据表格并转为 SQL、音视频字幕抓取、文档比对、语义切块）时，先调用 `discover_tools` / `get_tool_schema` 确定工具签名，随后既可直接通过 `execute_tool` 单次即时运行，也可调用 `activate_tools` 动态入库；
   - **直接调用**：动态模式也允许直接调用未激活的规范业务工具名称（如 `export_tables`），参数与输出仍经过同样的校验。

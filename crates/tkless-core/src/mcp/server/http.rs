@@ -4,6 +4,12 @@
 //! `GET /healthz`. Server-initiated notifications are not streamed: this
 //! transport is stateless and answers one request per connection.
 use super::{JsonRpcResponse, McpServer, TklessError};
+use crate::mcp::types::{
+    HEADER_MISMATCH, INTERNAL_ERROR, INVALID_PARAMS, INVALID_REQUEST, METHOD_NOT_FOUND,
+    MISSING_REQUIRED_CLIENT_CAPABILITY, PROTOCOL_VERSION, UNSUPPORTED_PROTOCOL_VERSION,
+};
+use base64::engine::general_purpose::STANDARD as BASE64;
+use base64::Engine as _;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -68,6 +74,9 @@ struct HttpRequest {
     host: Option<String>,
     origin: Option<String>,
     content_type: Option<String>,
+    mcp_protocol_version: Option<String>,
+    mcp_method: Option<String>,
+    mcp_name: Option<String>,
     body: Vec<u8>,
 }
 
@@ -134,8 +143,11 @@ async fn handle_connection(
         )
         .await;
     }
-    if request.method != "POST" || request.path != "/mcp" {
-        return write_text(&mut stream, 404, "Not Found", "Use POST /mcp").await;
+    if request.path != "/mcp" {
+        return write_text(&mut stream, 404, "Not Found", "Unknown endpoint").await;
+    }
+    if request.method != "POST" {
+        return write_text(&mut stream, 405, "Method Not Allowed", "Use POST /mcp").await;
     }
     if request.body.is_empty() {
         return write_text(&mut stream, 400, "Bad Request", "Request body is required").await;
@@ -165,24 +177,57 @@ async fn handle_connection(
         )
         .await;
     }
-    let line = match String::from_utf8(request.body) {
+    let line = match std::str::from_utf8(&request.body) {
         Ok(line) => line,
         Err(_) => return write_text(&mut stream, 400, "Bad Request", "Invalid UTF-8").await,
     };
 
+    // Parse once for header validation. Malformed JSON is left to the protocol
+    // layer so the client receives a JSON-RPC parse error.
+    let body: serde_json::Value = match serde_json::from_str(line) {
+        Ok(body) => body,
+        Err(_) => {
+            return match server.handle_message_with_notifier(line, None).await {
+                Some(response) => write_json(&mut stream, 200, &response).await,
+                None => write_text(&mut stream, 202, "Accepted", "").await,
+            };
+        }
+    };
+    if body.get("id").is_some() {
+        if body.get("method").and_then(serde_json::Value::as_str) == Some("initialize") {
+            // Give legacy clients a deterministic diagnostic even when they omit
+            // the modern transport headers.
+            let response = JsonRpcResponse::error_with_data(
+                body.get("id").cloned().unwrap_or(serde_json::Value::Null),
+                METHOD_NOT_FOUND,
+                format!(
+                    "'initialize' is not part of MCP {PROTOCOL_VERSION}; use server/discover and per-request _meta"
+                ),
+                serde_json::json!({"supported": [PROTOCOL_VERSION]}),
+            );
+            return write_json(&mut stream, 404, &response).await;
+        }
+        if let Err((status, response)) = validate_headers(&body, &request) {
+            return write_json(&mut stream, status, &response).await;
+        }
+    }
+
     let response = tokio::time::timeout(
         Duration::from_secs(server.tool_timeout_secs),
-        server.handle_message_with_notifier(&line, None),
+        server.handle_message_with_notifier(line, None),
     )
     .await;
     match response {
-        Ok(Some(response)) => write_json(&mut stream, 200, &response).await,
+        Ok(Some(response)) => {
+            let status = status_for(&response);
+            write_json(&mut stream, status, &response).await
+        }
         // Notifications have no JSON-RPC response.
         Ok(None) => write_text(&mut stream, 202, "Accepted", "").await,
         Err(_) => {
             let response = JsonRpcResponse::error(
                 serde_json::Value::Null,
-                -32001,
+                INTERNAL_ERROR,
                 format!(
                     "Request exceeded the configured {} second timeout",
                     server.tool_timeout_secs
@@ -190,6 +235,118 @@ async fn handle_connection(
             );
             write_json(&mut stream, 200, &response).await
         }
+    }
+}
+
+/// Validates the MCP 2026-07-28 Streamable HTTP headers against the request body.
+#[allow(clippy::result_large_err)]
+fn validate_headers(
+    body: &serde_json::Value,
+    request: &HttpRequest,
+) -> Result<(), (u16, JsonRpcResponse)> {
+    let id = body.get("id").cloned().unwrap_or(serde_json::Value::Null);
+    let method = body
+        .get("method")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    let body_version = body
+        .get("params")
+        .and_then(|params| params.get("_meta"))
+        .and_then(|meta| meta.get("io.modelcontextprotocol/protocolVersion"))
+        .and_then(serde_json::Value::as_str);
+
+    let header_version = request.mcp_protocol_version.as_deref().ok_or_else(|| {
+        (
+            400,
+            JsonRpcResponse::header_mismatch(id.clone(), "Missing MCP-Protocol-Version header"),
+        )
+    })?;
+    if let Some(body_version) = body_version {
+        if header_version != body_version {
+            return Err((
+                400,
+                JsonRpcResponse::header_mismatch(
+                    id,
+                    "MCP-Protocol-Version header does not match params._meta",
+                ),
+            ));
+        }
+    }
+    if header_version != PROTOCOL_VERSION {
+        return Err((
+            400,
+            JsonRpcResponse::unsupported_protocol_version(id, header_version),
+        ));
+    }
+
+    let header_method = request.mcp_method.as_deref().ok_or_else(|| {
+        (
+            400,
+            JsonRpcResponse::header_mismatch(id.clone(), "Missing Mcp-Method header"),
+        )
+    })?;
+    if header_method != method {
+        return Err((
+            400,
+            JsonRpcResponse::header_mismatch(
+                id,
+                "Mcp-Method header does not match the JSON-RPC method",
+            ),
+        ));
+    }
+
+    if method == "tools/call" {
+        let header_name = request.mcp_name.as_deref().ok_or_else(|| {
+            (
+                400,
+                JsonRpcResponse::header_mismatch(id.clone(), "Missing Mcp-Name header"),
+            )
+        })?;
+        let decoded = decode_header_value(header_name).ok_or_else(|| {
+            (
+                400,
+                JsonRpcResponse::header_mismatch(id.clone(), "Invalid Mcp-Name header encoding"),
+            )
+        })?;
+        let body_name = body
+            .get("params")
+            .and_then(|params| params.get("name"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        if decoded != body_name {
+            return Err((
+                400,
+                JsonRpcResponse::header_mismatch(id, "Mcp-Name header does not match params.name"),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Decodes the MCP header value sentinel `=?base64?...?=`, or returns the plain value.
+fn decode_header_value(value: &str) -> Option<String> {
+    let value = value.trim();
+    if let Some(encoded) = value
+        .strip_prefix("=?base64?")
+        .and_then(|value| value.strip_suffix("?="))
+    {
+        let bytes = BASE64.decode(encoded).ok()?;
+        return String::from_utf8(bytes).ok();
+    }
+    Some(value.to_string())
+}
+
+fn status_for(response: &JsonRpcResponse) -> u16 {
+    match response.error.as_ref().map(|error| error.code) {
+        Some(
+            HEADER_MISMATCH
+            | MISSING_REQUIRED_CLIENT_CAPABILITY
+            | UNSUPPORTED_PROTOCOL_VERSION
+            | INVALID_PARAMS
+            | INVALID_REQUEST,
+        ) => 400,
+        Some(METHOD_NOT_FOUND) => 404,
+        _ => 200,
     }
 }
 
@@ -229,6 +386,9 @@ async fn read_request(stream: &mut TcpStream) -> Result<HttpRequest, String> {
     let mut host = None;
     let mut origin = None;
     let mut content_type = None;
+    let mut mcp_protocol_version = None;
+    let mut mcp_method = None;
+    let mut mcp_name = None;
     let mut content_length = None;
     for line in lines {
         let Some((name, value)) = line.split_once(':') else {
@@ -241,6 +401,9 @@ async fn read_request(stream: &mut TcpStream) -> Result<HttpRequest, String> {
             "host" => host = Some(value.to_string()),
             "origin" => origin = Some(value.to_string()),
             "content-type" => content_type = Some(value.to_string()),
+            "mcp-protocol-version" => mcp_protocol_version = Some(value.to_string()),
+            "mcp-method" => mcp_method = Some(value.to_string()),
+            "mcp-name" => mcp_name = Some(value.to_string()),
             "content-length" => {
                 content_length = Some(
                     value
@@ -277,6 +440,9 @@ async fn read_request(stream: &mut TcpStream) -> Result<HttpRequest, String> {
             host,
             origin,
             content_type,
+            mcp_protocol_version,
+            mcp_method,
+            mcp_name,
             body: Vec::new(),
         });
     }
@@ -287,6 +453,9 @@ async fn read_request(stream: &mut TcpStream) -> Result<HttpRequest, String> {
         host,
         origin,
         content_type,
+        mcp_protocol_version,
+        mcp_method,
+        mcp_name,
         body: buffer[body_start..body_start + content_length].to_vec(),
     })
 }
@@ -407,8 +576,12 @@ async fn write_json<T: serde::Serialize>(
     let body = serde_json::to_vec(value).unwrap_or_else(|_| b"{}".to_vec());
     let reason = match status {
         200 => "OK",
-        401 => "Unauthorized",
         202 => "Accepted",
+        400 => "Bad Request",
+        401 => "Unauthorized",
+        403 => "Forbidden",
+        404 => "Not Found",
+        405 => "Method Not Allowed",
         _ => "OK",
     };
     let head = format!(

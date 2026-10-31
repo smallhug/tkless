@@ -6,7 +6,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.6.0"
+version = "0.7.0"
 edition = "2021"
 rust-version = "1.98.1"
 authors = ["TkLess Contributors"]
@@ -60,6 +60,7 @@ sha2 = "0.10"
 semver = "1"
 similar = "2.7"
 minisign-verify = "0.3"
+base64 = "0.22"
 
 [profile.release]
 opt-level = "z"

@@ -1,5 +1,11 @@
 # TkLess 更新说明
 
+## 未发布（0.7.0）
+
+### MCP
+
+- 协议升级到 `2026-07-28`：移除 `initialize` 握手、`ping` 与 `logging/setLevel`；每个请求在 `params._meta` 中携带协议版本与客户端能力，服务端实现 `server/discover`，所有结果带 `resultType`，`tools/list` 提供 `ttlMs`/`cacheScope`。HTTP 增加 `MCP-Protocol-Version`、`Mcp-Method`、`Mcp-Name` 校验。
+
 ## v0.6.0 - 2026-10-31
 
 本次发布聚焦代码审计修复、CLI 规范与文档一致性。完整条目见 [CHANGELOG](CHANGELOG.md)。
@@ -75,7 +81,7 @@ Rust 调用方将 `McpServer::run_stdio` 改为 `run_transport` 并传入输入�
 - `--checkpoint` 保存完整结果，`--resume` 继续未完成项，`--retry-failed` 仅重跑失败项；支持尾部半行恢复、任务身份校验和独占文件锁。
 - 单主机并发默认 2，支持单主机/全局任务启动间隔。完整 JSON 报告新增 `resumed` / `fetched`，每项新增从 0 开始的 `index`。
 - MCP 增加相同恢复参数及 `stream_results`，通过带 `tkless/batch_item` 元数据的进度通知流式交付，最终只返回统计。
-- MCP 仅实现 `2025-11-25`，移除旧协议输出降级、旧工具别名和前缀；CLI 长参数与子命令仅保留规范名称。
+- MCP 在 0.5.0 仅实现 `2025-11-25`，移除旧协议输出降级、旧工具别名和前缀；未发布的 0.7.0 已升级到 `2026-07-28`。CLI 长参数与子命令仅保留规范名称。
 - 删除弃用的无作用域 Cookie 接口及旧搜索入口；原生搜索统一为 `SearchOptions` / `SearchReport`。缓存键升级为 v3，文档必须包含当前来源字段，不迁移旧结构。
 
 示例及限制见 [批量任务](doc/07-batch-jobs.md)。当前恢复覆盖固定 URL 列表，站点爬虫队列恢复另行实现。

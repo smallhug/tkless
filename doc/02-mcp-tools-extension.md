@@ -28,22 +28,23 @@ TKLESS_MCP_TOKEN=... tkless mcp --http 0.0.0.0:8787 --allow-public-bind --auth-t
 
 ## 传输与协议
 
-服务通过 stdio 读取和输出单行 JSON-RPC 2.0，诊断日志写入 stderr。仅实现 `2025-11-25`，初始化始终声明该版本；不模拟旧协议，也不省略结构化输出。请求其他版本时仍返回自身支持的版本，客户端不支持该版本时应断开，遵循 [MCP 版本协商规范](https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle#version-negotiation)。
+服务通过 stdio 读取和输出单行 JSON-RPC 2.0，诊断日志写入 stderr。仅实现 `2026-07-28`：没有 `initialize` 握手，每个请求在 `params._meta` 中携带 `io.modelcontextprotocol/protocolVersion`（必须为 `2026-07-28`）与 `io.modelcontextprotocol/clientCapabilities`（可为空对象）。服务端实现 `server/discover`，所有结果带 `resultType: "complete"` 与 `_meta["io.modelcontextprotocol/serverInfo"]`。不支持的版本返回 `-32022` 并在 `data.supported` 列出 `2026-07-28`；缺少 `_meta` 返回 `-32602`。规范见 [MCP 2026-07-28](https://modelcontextprotocol.io/specification/2026-07-28)。
 
 ## HTTP 传输
 
-指定 `--http ADDR` 时改用 HTTP JSON-RPC：`POST /mcp` 每次发送一个 JSON-RPC 消息，`GET /healthz` 返回健康状态。该传输为无状态实现，单连接单请求（`Connection: close`），不提供 SSE 或服务端主动通知流；需要进度通知或取消的长任务仍应使用 stdio。
+指定 `--http ADDR` 时改用 HTTP JSON-RPC：`POST /mcp` 每次发送一个 JSON-RPC 消息，`GET /healthz` 返回健康状态。该传输为无状态实现，单连接单请求（`Connection: close`），不提供 SSE 或服务端主动通知流；`subscriptions/listen` 返回 `-32601`，服务不声明 `listChanged`。需要进度通知或取消的长任务仍应使用 stdio。
 
 - 默认只允许绑定回环地址；非回环地址必须同时指定 `--allow-public-bind` 与 `--auth-token-env`，否则启动失败。
 - 设置 Token 后，每个请求都必须携带 `Authorization: Bearer <token>`，否则返回 401。
+- 每个请求必须携带 `MCP-Protocol-Version`、`Mcp-Method`；`tools/call` 还必须携带 `Mcp-Name`，且头部值必须与请求体一致（`Mcp-Name` 支持 `=?base64?...?=` 编码），否则返回 400 与 `-32020`。
+- 不支持的协议版本返回 400 与 `-32022`；缺少或非法 `_meta` 返回 400 与 `-32602`；未知方法返回 404 与 `-32601`；GET/DELETE/PUT `/mcp` 返回 405。
 - 请求头上限 16 KiB、请求体上限 1 MiB，拒绝分块传输；单个 IP 未限制，但全局最多 32 个并发请求（超出排队）。
-- 单次请求超时由 `--tool-timeout-secs`（默认 300，1–3600）控制；超时返回 JSON-RPC 错误 `-32001`。
+- 单次请求超时由 `--tool-timeout-secs`（默认 300，1–3600）控制；超时返回 JSON-RPC 错误 `-32603`。
 - 不实现会话、鉴权刷新或多租户隔离；暴露到公网前应置于反向代理与 TLS 之后。
 
 ```jsonl
-{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"example-client","version":"1.0"}}}
-{"jsonrpc":"2.0","method":"notifications/initialized"}
-{"jsonrpc":"2.0","id":2,"method":"tools/list"}
+{"jsonrpc":"2.0","id":1,"method":"server/discover","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}
+{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}
 ```
 
 工具调用并发执行，最多 64 个在途调用，单次超时默认 300 秒（`--tool-timeout-secs` 可调，1–3600）。调用方可发送 `notifications/cancelled`，并在 `params.requestId` 中指定原请求 ID。JSON-RPC 协议错误和工具执行错误是两类响应，调用方都应处理。
@@ -51,7 +52,7 @@ TKLESS_MCP_TOKEN=... tkless mcp --http 0.0.0.0:8787 --allow-public-bind --auth-t
 ## Bing 搜索
 
 ```json
-{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"web_search","arguments":{"query":"Tokio","scope":"github","limit":10,"format":"json"}}}
+{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"web_search","arguments":{"query":"Tokio","scope":"github","limit":10,"format":"json"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}
 ```
 
 可选筛选参数：`since` / `until`（`YYYY-MM-DD`）、`language`（如 `zh-CN`）、`region`（两字母地区码）。它们使用 Bing 未公开参数，属于尽力而为；报告会附加 `search_filters_best_effort` 警告，宿主不应假定已严格生效。
@@ -108,13 +109,13 @@ TKLESS_MCP_TOKEN=... tkless mcp --http 0.0.0.0:8787 --allow-public-bind --auth-t
 | `discover_tools` | `query`、category；检索工具目录 |
 | `get_tool_schema` | `tool_name`；获取工具定义、`inputSchema` 和可选 `outputSchema` |
 | `execute_tool` | `tool_name`、`arguments`；无需先激活即可执行 |
-| `activate_tools` | `tool_names`；激活工具，并通知客户端刷新列表 |
+| `activate_tools` | `tool_names`；激活工具，随后需重新调用 `tools/list`（本服务不推送 `list_changed`） |
 
 ```json
 {"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"get_tool_schema","arguments":{"tool_name":"export_tables"}}}
 ```
 
-激活后发送 `notifications/tools/list_changed`。动态模式支持直接调用未激活业务工具；`execute_tool` 不能递归调用自身。所有路径只接受目录中的规范名称，例如 `web_search`；旧别名和 `tkless_` 前缀会报错。初始声明的 Token 开销取决于 Schema、分词器和宿主。
+激活后不会发送 `notifications/tools/list_changed`；请重新调用 `tools/list`（动态模式的 `ttlMs` 为 0，表示列表可能变化）。动态模式支持直接调用未激活业务工具；`execute_tool` 不能递归调用自身。所有路径只接受目录中的规范名称，例如 `web_search`；旧别名和 `tkless_` 前缀会报错。初始声明的 Token 开销取决于 Schema、分词器和宿主。
 
 ## 异步任务（jobs_*）
 

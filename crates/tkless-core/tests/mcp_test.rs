@@ -4,12 +4,25 @@ use tkless_core::mcp::McpServer;
 use tkless_core::TklessEngine;
 use tokio::io::AsyncReadExt;
 
+fn modern(id: u64, method: &str, mut params: serde_json::Value) -> String {
+    if !params.is_object() {
+        params = serde_json::json!({});
+    }
+    params["_meta"] = serde_json::json!({
+        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+        "io.modelcontextprotocol/clientInfo": {"name":"test-client","version":"1.0"},
+        "io.modelcontextprotocol/clientCapabilities": {}
+    });
+    serde_json::json!({"jsonrpc":"2.0","id":id,"method":method,"params":params}).to_string()
+}
+
 #[tokio::test]
 async fn structured_documents_preserve_text_and_report_strict_schema_errors() {
     let server = McpServer::new(
         TklessEngine::new().unwrap(),
         DocumentCache::memory_only(300),
-    );
+    )
+    .with_strict_request_meta(false);
     let html = "<html><body><h1>Rust runtime</h1><p>Original source content.</p></body></html>";
     let success = server
         .dispatch_tool_execution(
@@ -53,7 +66,8 @@ async fn catalog_parameter_types_and_dependencies_fail_before_network() {
     let server = McpServer::new(
         TklessEngine::new().unwrap(),
         DocumentCache::memory_only(300),
-    );
+    )
+    .with_strict_request_meta(false);
     for (name, args) in [
         (
             "web_search",
@@ -116,35 +130,95 @@ async fn only_current_protocol_is_advertised_and_outputs_never_downgrade() {
         DocumentCache::memory_only(300),
     );
     for version in ["2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"] {
-        let init = serde_json::json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":version}});
-        let initialized = server.handle_message(&init.to_string()).await.unwrap();
-        assert_eq!(initialized.result.unwrap()["protocolVersion"], "2025-11-25");
-        let list = server
-            .handle_message(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)
-            .await
-            .unwrap()
-            .result
-            .unwrap();
-        let tool = list["tools"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|tool| tool["name"] == "fetch_webpage")
-            .unwrap();
-        assert!(tool.get("outputSchema").is_some());
-        let call = serde_json::json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"clean_html","arguments":{"html":"<p>Source content</p>","mode":"full"}}});
-        let result = server
-            .handle_message(&call.to_string())
-            .await
-            .unwrap()
-            .result
-            .unwrap();
-        assert!(result.get("structuredContent").is_some());
-        assert!(result["content"][0]["text"]
-            .as_str()
-            .unwrap()
-            .contains("Source content"));
+        let discover = serde_json::json!({
+            "jsonrpc":"2.0","id":1,"method":"server/discover",
+            "params":{"_meta":{
+                "io.modelcontextprotocol/protocolVersion": version,
+                "io.modelcontextprotocol/clientCapabilities": {}
+            }}
+        });
+        let response = server.handle_message(&discover.to_string()).await.unwrap();
+        let error = response
+            .error
+            .expect("unsupported version must be rejected");
+        assert_eq!(error.code, tkless_core::mcp::UNSUPPORTED_PROTOCOL_VERSION);
+        let data = error.data.expect("error data");
+        assert_eq!(data["supported"], serde_json::json!(["2026-07-28"]));
+        assert_eq!(data["requested"], version);
     }
+
+    let discover = server
+        .handle_message(&modern(1, "server/discover", serde_json::json!({})))
+        .await
+        .unwrap()
+        .result
+        .unwrap();
+    assert_eq!(discover["resultType"], "complete");
+    assert_eq!(
+        discover["supportedVersions"],
+        serde_json::json!(["2026-07-28"])
+    );
+    assert!(discover["capabilities"]["tools"].is_object());
+    assert!(discover["capabilities"]["tools"]
+        .get("listChanged")
+        .is_none());
+    assert_eq!(
+        discover["_meta"]["io.modelcontextprotocol/serverInfo"]["name"],
+        "tkless"
+    );
+
+    let list = server
+        .handle_message(&modern(2, "tools/list", serde_json::json!({})))
+        .await
+        .unwrap()
+        .result
+        .unwrap();
+    assert_eq!(list["resultType"], "complete");
+    assert_eq!(list["ttlMs"], 300_000);
+    assert_eq!(list["cacheScope"], "public");
+    let tool = list["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|tool| tool["name"] == "fetch_webpage")
+        .unwrap();
+    assert!(tool.get("outputSchema").is_some());
+
+    let call = server
+        .handle_message(&modern(
+            3,
+            "tools/call",
+            serde_json::json!({"name":"clean_html","arguments":{"html":"<p>Source content</p>","mode":"full"}}),
+        ))
+        .await
+        .unwrap()
+        .result
+        .unwrap();
+    assert_eq!(call["resultType"], "complete");
+    assert_eq!(
+        call["_meta"]["io.modelcontextprotocol/serverInfo"]["name"],
+        "tkless"
+    );
+    assert!(call.get("structuredContent").is_some());
+    assert!(call["content"][0]["text"]
+        .as_str()
+        .unwrap()
+        .contains("Source content"));
+
+    let missing = r#"{"jsonrpc":"2.0","id":4,"method":"tools/list"}"#;
+    let response = server.handle_message(missing).await.unwrap();
+    assert_eq!(
+        response.error.unwrap().code,
+        tkless_core::mcp::INVALID_PARAMS
+    );
+    let legacy = server
+        .handle_message(&modern(5, "ping", serde_json::json!({})))
+        .await
+        .unwrap();
+    assert_eq!(
+        legacy.error.unwrap().code,
+        tkless_core::mcp::METHOD_NOT_FOUND
+    );
 }
 
 #[tokio::test]
@@ -152,7 +226,8 @@ async fn bing_search_schema_and_argument_validation_stay_in_sync() {
     let server = McpServer::new(
         TklessEngine::new().unwrap(),
         DocumentCache::memory_only(300),
-    );
+    )
+    .with_strict_request_meta(false);
     let tools = tkless_core::mcp::tools::get_available_tools();
     for name in ["web_search", "deep_research"] {
         let tool = tools.iter().find(|tool| tool.name == name).unwrap();
@@ -200,36 +275,40 @@ async fn bing_search_schema_and_argument_validation_stay_in_sync() {
 async fn test_mcp_protocol_lifecycle() {
     let engine = TklessEngine::new().expect("Engine should initialize");
     let cache = DocumentCache::memory_only(300);
-    let server = McpServer::new(engine, cache);
+    let server = McpServer::new(engine, cache).with_strict_request_meta(false);
 
-    // 1. Initialize
-    let init_req = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test-client","version":"1.0"}}}"#;
-    let init_res = server
-        .handle_message(init_req)
+    // 1. Discovery (2026-07-28 is stateless; there is no initialize handshake)
+    let discover = server
+        .handle_message(&modern(1, "server/discover", serde_json::json!({})))
         .await
         .expect("Should return response");
-    assert_eq!(init_res.id, serde_json::json!(1));
-    let res_val = init_res.result.expect("Result should be present");
-    assert_eq!(res_val["protocolVersion"], "2025-11-25");
-    assert_eq!(res_val["serverInfo"]["name"], "tkless");
+    let discover_val = discover.result.expect("Discovery result should be present");
+    assert_eq!(discover_val["resultType"], "complete");
+    assert_eq!(discover_val["supportedVersions"][0], "2026-07-28");
+    assert_eq!(
+        discover_val["_meta"]["io.modelcontextprotocol/serverInfo"]["name"],
+        "tkless"
+    );
 
-    // 2. Initialized Notification (should return None)
+    // 2. Notifications never receive a JSON-RPC response.
     let initialized_notif = r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#;
     assert!(server.handle_message(initialized_notif).await.is_none());
 
-    // 3. Ping
+    // 3. Legacy methods are rejected.
     let ping_req = r#"{"jsonrpc":"2.0","id":2,"method":"ping"}"#;
     let ping_res = server
         .handle_message(ping_req)
         .await
         .expect("Should return response");
-    assert_eq!(ping_res.id, serde_json::json!(2));
-    assert!(ping_res.result.is_some());
+    assert_eq!(
+        ping_res.error.expect("ping must fail").code,
+        tkless_core::mcp::METHOD_NOT_FOUND
+    );
 
     // 4. Tools List
-    let list_req = r#"{"jsonrpc":"2.0","id":3,"method":"tools/list"}"#;
+    let list_req = modern(3, "tools/list", serde_json::json!({}));
     let list_res = server
-        .handle_message(list_req)
+        .handle_message(&list_req)
         .await
         .expect("Should return response");
     let tools_val = list_res.result.expect("Tools list should be present");
@@ -856,7 +935,7 @@ async fn test_mcp_protocol_lifecycle() {
 async fn test_mcp_progress_notification_streaming() {
     let engine = TklessEngine::new().expect("Engine should initialize");
     let cache = DocumentCache::memory_only(300);
-    let server = McpServer::new(engine, cache);
+    let server = McpServer::new(engine, cache).with_strict_request_meta(false);
 
     let (notify_tx, mut notify_rx) = tokio::sync::mpsc::channel(16);
 
@@ -908,7 +987,8 @@ async fn test_mcp_two_stage_dynamic_discovery() {
 
     let engine = TklessEngine::new().expect("Engine should initialize");
     let cache = DocumentCache::memory_only(300);
-    let server = McpServer::new_with_mode(engine, cache, McpMode::Dynamic);
+    let server =
+        McpServer::new_with_mode(engine, cache, McpMode::Dynamic).with_strict_request_meta(false);
     assert_eq!(server.mode(), McpMode::Dynamic);
 
     // 1. Initial tools/list in Dynamic Mode: should expose only 6 tools (2 Core + 4 Meta)
@@ -1058,8 +1138,7 @@ async fn test_mcp_two_stage_dynamic_discovery() {
     assert!(exec_text.contains("INSERT INTO lang_bench"));
     assert!(exec_text.contains("Rust"));
 
-    // 6. Stage 2: activate_tools dynamic activation with list_changed notification
-    let (notify_tx, mut notify_rx) = tokio::sync::mpsc::channel(16);
+    // 6. Stage 2: activate_tools dynamic activation (no list_changed notification)
     let act_req = serde_json::json!({
         "jsonrpc": "2.0",
         "id": 6,
@@ -1072,7 +1151,7 @@ async fn test_mcp_two_stage_dynamic_discovery() {
         }
     });
     let act_res = server
-        .handle_message_with_notifier(&act_req.to_string(), Some(&notify_tx))
+        .handle_message(&act_req.to_string())
         .await
         .expect("Response");
     let act_text = act_res.result.unwrap()["content"][0]["text"]
@@ -1082,17 +1161,12 @@ async fn test_mcp_two_stage_dynamic_discovery() {
     assert!(act_text.contains("成功激活工具"));
     assert!(act_text.contains("export_tables"));
     assert!(act_text.contains("diff_documents"));
-
-    // Verify notifications/tools/list_changed was emitted
-    let notif = notify_rx
-        .try_recv()
-        .expect("Should receive list_changed notification");
-    assert_eq!(notif["method"], "notifications/tools/list_changed");
+    assert!(act_text.contains("重新调用"));
 
     // 7. Verify subsequent tools/list now includes the activated tools (6 -> 8)
-    let list_req2 = r#"{"jsonrpc":"2.0","id":7,"method":"tools/list"}"#;
+    let list_req2 = modern(7, "tools/list", serde_json::json!({}));
     let list_res2 = server
-        .handle_message(list_req2)
+        .handle_message(&list_req2)
         .await
         .expect("Should return response");
     let tools_val2 = list_res2.result.expect("Tools list should be present");
@@ -1147,7 +1221,8 @@ async fn background_jobs_start_status_cancel_and_list() {
     let server = McpServer::new(
         TklessEngine::new().unwrap(),
         DocumentCache::memory_only(300),
-    );
+    )
+    .with_strict_request_meta(false);
     let started = server
         .dispatch_tool_execution(
             "jobs_start",
