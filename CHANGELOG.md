@@ -61,6 +61,7 @@
 - URL 解析失败、缺少 TARGET、未知 `auth` 动作等参数错误统一返回退出码 2；JSON 日志模式下致命错误输出结构化 JSON。
 - `doctor` 实际执行缓存目录写入/读取/删除探测，并在浏览器或网络探测失败时汇总问题、返回非零退出码。
 - `--bili-order` 改为受限枚举；`--download-video`/`--download-cover` 的错误提示不再引用不存在的旧参数。
+- MCP 任务 TTL 改为 `>=` 到期判定，修复 Windows 粗粒度时钟下零 TTL 任务未被回收的偶发测试失败。
 
 ### Security
 

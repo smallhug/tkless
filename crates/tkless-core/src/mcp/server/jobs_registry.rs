@@ -201,9 +201,11 @@ impl JobHandle {
     fn expired(&self, now: SystemTime) -> bool {
         let state = self.lock();
         match state.finished {
+            // `>=` matters: SystemTime has coarse resolution on some platforms
+            // (notably Windows), so a zero TTL can observe an age of exactly zero.
             Some(finished) if !state.state.is_active() => now
                 .duration_since(finished)
-                .map(|age| age > self.ttl)
+                .map(|age| age >= self.ttl)
                 .unwrap_or(false),
             _ => false,
         }
