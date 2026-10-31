@@ -10,6 +10,9 @@
 cookies.txt
 .trae/
 
+# Runtime-downloaded DSH plugin binary
+/bin/
+
 # Never commit Minisign upgrade signing secrets
 minisign.key
 *.minisign.key

@@ -1,0 +1,30 @@
+{
+  "name": "tkless-dsh",
+  "version": "0.7.0",
+  "private": true,
+  "description": "TkLess web extraction, search and crawl tools for DeepSeek Harness, replacing the built-in web search.",
+  "type": "module",
+  "license": "MIT OR Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/smallhug/tkless.git"
+  },
+  "exports": {
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./assets/logo.svg"
+  },
+  "files": [
+    "cordis.patch.yml",
+    "dsh/index.js",
+    "locale/*.json",
+    "assets/logo.svg"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "engines": {
+    "dsh": "0.2.1-rc.5"
+  }
+}

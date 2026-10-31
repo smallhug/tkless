@@ -70,6 +70,24 @@ tkless upgrade
 当前源码还会验证下载大小、可执行文件格式、落盘内容及替换前后的 `--version` 输出；使用独占升级锁和独立暂存目录，失败时恢复原程序。Windows 下若旧程序仍被占用，会显示保留的备份路径。上述安装加固尚未发布到 GitHub Release。
 
 **从 0.4.0 更新的注意事项**：该版本升级器未跟随 GitHub 下载重定向，可能把 302 的空响应体安装成程序后报告成功。遇到此问题，请从 Release 页面手动下载对应二进制并核对 SHA-256，或在源码目录运行 `cargo install --path crates/tkless-cli --force --locked` 恢复。旧程序自身的升级代码不会因远程版本更新而自动修复。
+
+### 作为 DeepSeek Harness 插件
+
+仓库根目录同时是一个 DSH bundle。安装后，新会话不再注册 DSH 自带的 `web_search`，网页能力改由 `mcp__tkless__*` 工具提供；`web_fetch` 保留。
+
+```text
+Plugins → Add plugin → github:smallhug/tkless#v0.7.0
+```
+
+> `v0.7.0` 尚未发布；发布前请用 `#<commit>` 或本地目录安装。`v0.6.0` 不包含这个 bundle。
+
+- 支持 DSH `0.2.1-rc.5`；版本不匹配会被拒绝，升级 DSH 后需安装对应版本的插件。
+- Windows x64、Linux x64/ARM64 首次启用时自动下载 Release 二进制并校验 SHA-256；macOS 请设置 `binaryPath`。
+- **安装后必须新开会话**；已打开的会话由 guard 拒绝 `web_search`。
+- 卸载会删除包内下载的二进制。
+
+详见 [DSH 插件说明](doc/14-dsh-plugin.md)。
+
 ## 常用工作流
 
 示例中的 `example.com` URL、视频号和文件路径是占位符，需要替换为实际目标。不同子命令的选项支持范围请以各自的 `--help` 为准。
