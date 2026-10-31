@@ -1,0 +1,15 @@
+# TkLess self-update signing keys (Minisign public keys).
+#
+# Replace this file with the output of `minisign -G` (the .pub file), or paste
+# one or more public key blocks below. Each block is an `untrusted comment:`
+# line followed by a base64 public key line.
+#
+# The build embeds every base64 line in this file. If the file has no key, the
+# `tkless upgrade` command fails closed and refuses to replace the executable.
+#
+# Rotation: keep the current key first and add the next key as a second block.
+# Publish the rotation release signed by the current key; the next release can
+# be signed by the new key because this binary trusts both.
+#
+# untrusted comment: tkless upgrade public key
+# RWQf6LRCGA9i53mlYecO4IzT51TGPpvWucNSCh1CBM0QTaLn73Y7GFO3

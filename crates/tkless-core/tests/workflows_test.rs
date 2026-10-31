@@ -370,7 +370,10 @@ async fn crawl_output_budget_keeps_unfinished_page_resumable() {
     .await
     .unwrap();
     assert_eq!(report.stop_reason.as_str(), "output_budget");
-    assert_eq!(report.pending_urls, 1);
+    // The page that was already fetched is committed before stopping, so it is
+    // not re-queued or re-fetched on resume.
+    assert_eq!(report.total_pages, 1);
+    assert_eq!(report.pending_urls, 0);
     options.resume = true;
     options.max_output_bytes = Some(10000);
     assert!(

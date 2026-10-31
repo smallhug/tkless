@@ -7,8 +7,11 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, HashSet},
-    path::Path,
+    path::{Path, PathBuf},
 };
+
+/// Retain this many event files (including the generation being written).
+const SYNC_RETAIN_EVENTS: usize = 64;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SnapshotEntry {
@@ -183,6 +186,10 @@ pub async fn sync_collection(
         }
         manifest.generation = generation;
         let event_path = directory.join("events").join(format!("{generation}.json"));
+        // Reclaim history before enforcing the budget. Without this, a long-running
+        // sync/watch job eventually crosses max_state_bytes and can never recover.
+        let pending_paths: Vec<String> = snapshots.iter().map(|(path, _)| path.clone()).collect();
+        prune_sync_state(&directory, &manifest, &pending_paths)?;
         // Bound retained snapshots and history as well as this run's pending writes.
         let mut used = directory_bytes(&directory)?;
         for (_, value) in &snapshots {
@@ -208,6 +215,85 @@ pub async fn sync_collection(
     .await
 }
 
+fn prune_sync_state(
+    directory: &Path,
+    manifest: &Manifest,
+    pending_snapshots: &[String],
+) -> Result<(), TklessError> {
+    let events_dir = directory.join("events");
+    let mut event_files: Vec<(u64, PathBuf)> = Vec::new();
+    let mut unparsable_event = false;
+    if events_dir.is_dir() {
+        for entry in std::fs::read_dir(&events_dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.extension().and_then(|value| value.to_str()) != Some("json") {
+                continue;
+            }
+            match path
+                .file_stem()
+                .and_then(|value| value.to_str())
+                .and_then(|value| value.parse::<u64>().ok())
+            {
+                Some(generation) => event_files.push((generation, path)),
+                None => unparsable_event = true,
+            }
+        }
+    }
+    event_files.sort_by_key(|(generation, _)| *generation);
+    let keep_old = SYNC_RETAIN_EVENTS.saturating_sub(1);
+    let retain_from = event_files.len().saturating_sub(keep_old);
+    for (_, path) in event_files.iter().take(retain_from) {
+        let _ = std::fs::remove_file(path);
+    }
+
+    let mut referenced: HashSet<PathBuf> = HashSet::new();
+    for entry in manifest.records.values() {
+        referenced.insert(directory.join(&entry.snapshot));
+    }
+    for snapshot in pending_snapshots {
+        referenced.insert(directory.join(snapshot));
+    }
+
+    // Objects referenced by retained event history must survive even when they are
+    // no longer in the current manifest. If an event cannot be parsed, skip object
+    // GC rather than guessing.
+    let mut can_gc_objects = !unparsable_event;
+    for (_, path) in &event_files[retain_from..] {
+        match state_file::read::<SyncReport>(path) {
+            Ok(report) => {
+                for event in report.events {
+                    if let Some(previous) = event.previous {
+                        referenced.insert(directory.join(previous.snapshot));
+                    }
+                    if let Some(current) = event.current {
+                        referenced.insert(directory.join(current.snapshot));
+                    }
+                }
+            }
+            Err(_) => can_gc_objects = false,
+        }
+    }
+
+    if can_gc_objects {
+        let objects_dir = directory.join("objects");
+        if objects_dir.is_dir() {
+            for entry in std::fs::read_dir(&objects_dir)? {
+                let entry = entry?;
+                let path = entry.path();
+                if path.extension().and_then(|value| value.to_str()) != Some("json") {
+                    continue;
+                }
+                if !referenced.contains(&path) {
+                    let _ = std::fs::remove_file(&path);
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
 fn directory_bytes(directory: &Path) -> Result<u64, TklessError> {
     let mut total = 0u64;
     for dir in [
@@ -226,4 +312,86 @@ fn directory_bytes(directory: &Path) -> Result<u64, TklessError> {
         }
     }
     Ok(total)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::workflow::{StopReason, SyncEventKind};
+    use std::fs;
+
+    #[test]
+    fn prunes_old_events_and_unreferenced_objects() {
+        let directory = std::env::temp_dir().join(format!(
+            "tkless-sync-gc-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let _ = fs::remove_dir_all(&directory);
+        fs::create_dir_all(directory.join("events")).unwrap();
+        fs::create_dir_all(directory.join("objects")).unwrap();
+        fs::write(directory.join("objects/current.json"), b"{}").unwrap();
+        fs::write(directory.join("objects/pending.json"), b"{}").unwrap();
+        fs::write(directory.join("objects/history.json"), b"{}").unwrap();
+        fs::write(directory.join("objects/orphan.json"), b"{}").unwrap();
+
+        let mut manifest = Manifest {
+            version: 1,
+            identity: "test".into(),
+            generation: 100,
+            records: BTreeMap::new(),
+        };
+        manifest.records.insert(
+            "current".into(),
+            SnapshotEntry {
+                hash: "h".into(),
+                snapshot: "objects/current.json".into(),
+            },
+        );
+
+        for generation in 0..100u64 {
+            let report = SyncReport {
+                generation,
+                captured_at: 0,
+                complete: true,
+                stop_reason: StopReason::Exhausted,
+                deletions_applied: true,
+                events: vec![SyncEvent {
+                    kind: SyncEventKind::Updated,
+                    id: "history".into(),
+                    previous: Some(SnapshotEntry {
+                        hash: "h".into(),
+                        snapshot: "objects/history.json".into(),
+                    }),
+                    current: None,
+                    error: None,
+                }],
+                errors: Vec::new(),
+            };
+            state_file::write(
+                &directory.join(format!("events/{generation}.json")),
+                &report,
+            )
+            .unwrap();
+        }
+
+        prune_sync_state(&directory, &manifest, &["objects/pending.json".to_string()]).unwrap();
+
+        assert_eq!(
+            fs::read_dir(directory.join("events")).unwrap().count(),
+            SYNC_RETAIN_EVENTS - 1
+        );
+        assert!(directory.join("objects/current.json").exists());
+        assert!(directory.join("objects/pending.json").exists());
+        assert!(
+            directory.join("objects/history.json").exists(),
+            "objects referenced by retained events must survive"
+        );
+        assert!(!directory.join("objects/orphan.json").exists());
+
+        fs::remove_dir_all(directory).unwrap();
+    }
 }

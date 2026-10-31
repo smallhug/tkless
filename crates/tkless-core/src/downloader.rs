@@ -16,6 +16,10 @@ use url::Url;
 static MD_IMAGE_REGEX: LazyLock<regex::Regex> =
     LazyLock::new(|| regex::Regex::new(r"!\[(.*?)\]\(((?:https?://)[^\s\)]+)\)").unwrap());
 
+/// Upper bound for a single media download. This is a resource-exhaustion guard,
+/// not a claim about what a legitimate CDN can serve.
+const MAX_DOWNLOAD_BYTES: u64 = 16 * 1024 * 1024 * 1024;
+
 /// Trait for observing file download progress events.
 pub trait DownloadProgressReporter: Send + Sync {
     /// Called when the download transfer begins.
@@ -36,6 +40,9 @@ pub struct DownloadOptions<'a> {
     pub cookie: Option<&'a str>,
     pub reporter: Option<&'a dyn DownloadProgressReporter>,
     pub concurrency: Option<usize>,
+    /// Permit loopback/private IP literals. Callers should only set this for
+    /// trusted local media sources; the default rejects them.
+    pub allow_private_addresses: bool,
 }
 
 /// Downloads a remote file with optional multi-threaded Range chunking and progress reporting.
@@ -43,6 +50,28 @@ pub async fn download_file(
     client: &reqwest::Client,
     options: DownloadOptions<'_>,
 ) -> Result<u64, TklessError> {
+    // The caller is responsible for DNS-level SSRF protection; reject non-HTTP
+    // schemes and IP literals that cannot be legitimate media sources.
+    let parsed = Url::parse(options.url)
+        .map_err(|error| TklessError::InvalidArgument(format!("Invalid download URL: {error}")))?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err(TklessError::InvalidArgument(
+            "Media downloads only support http and https URLs".into(),
+        ));
+    }
+    if !options.allow_private_addresses {
+        let private = match parsed.host() {
+            Some(url::Host::Ipv4(ip)) => crate::fetcher::is_private_ip(std::net::IpAddr::V4(ip)),
+            Some(url::Host::Ipv6(ip)) => crate::fetcher::is_private_ip(std::net::IpAddr::V6(ip)),
+            _ => false,
+        };
+        if private {
+            return Err(TklessError::SsrfBlocked(
+                "Media download target is a private IP address".into(),
+            ));
+        }
+    }
+
     if let Some(parent) = options
         .destination
         .parent()
@@ -70,6 +99,7 @@ pub async fn download_file(
             cookie: options.cookie,
             reporter: options.reporter,
             concurrency: options.concurrency,
+            allow_private_addresses: options.allow_private_addresses,
         },
     )
     .await?;
@@ -112,6 +142,12 @@ async fn download_file_to_path(
         if let Some(total_bytes) =
             probe_range_support(client, options.url, options.referer, options.cookie).await
         {
+            if total_bytes > MAX_DOWNLOAD_BYTES {
+                return Err(TklessError::ResponseTooLarge {
+                    limit: MAX_DOWNLOAD_BYTES.min(usize::MAX as u64) as usize,
+                    received: total_bytes.min(usize::MAX as u64) as usize,
+                });
+            }
             // Only perform multi-threaded range downloads for files >= 4MB
             if total_bytes >= 4 * 1024 * 1024 {
                 debug!(
@@ -181,8 +217,17 @@ async fn download_file_concurrent(
     total_bytes: u64,
     concurrency: usize,
 ) -> Result<u64, TklessError> {
+    if total_bytes > MAX_DOWNLOAD_BYTES {
+        return Err(TklessError::ResponseTooLarge {
+            limit: MAX_DOWNLOAD_BYTES.min(usize::MAX as u64) as usize,
+            received: total_bytes.min(usize::MAX as u64) as usize,
+        });
+    }
+    if total_bytes == 0 {
+        return Ok(0);
+    }
     let threads = concurrency.clamp(2, 16);
-    let chunk_size = total_bytes.div_ceil(threads as u64);
+    let chunk_size = total_bytes.div_ceil(threads as u64).max(1);
 
     if let Some(reporter) = options.reporter {
         reporter.on_start(Some(total_bytes));
@@ -192,9 +237,16 @@ async fn download_file_concurrent(
     let mut part_files = Vec::new();
     let mut join_set = JoinSet::new();
 
-    for i in 0..threads {
-        let start = i as u64 * chunk_size;
-        let end = std::cmp::min((i as u64 + 1) * chunk_size - 1, total_bytes - 1);
+    for i in 0..threads as u64 {
+        let start = i.saturating_mul(chunk_size);
+        if start >= total_bytes {
+            break;
+        }
+        let end = start
+            .saturating_add(chunk_size)
+            .saturating_sub(1)
+            .min(total_bytes - 1);
+        let expected_len = end - start + 1;
         let part_path = PathBuf::from(format!("{}.part{}", options.destination.display(), i));
         part_files.push(part_path.clone());
 
@@ -239,8 +291,8 @@ async fn download_file_concurrent(
 
             let mut received = 0u64;
             while let Some(chunk) = resp.chunk().await.map_err(TklessError::Network)? {
-                received += chunk.len() as u64;
-                if received > end - start + 1 {
+                received = received.saturating_add(chunk.len() as u64);
+                if received > expected_len {
                     return Err(TklessError::InvalidArgument(
                         "Range response exceeds requested length".into(),
                     ));
@@ -248,7 +300,7 @@ async fn download_file_concurrent(
                 writer.write_all(&chunk).map_err(TklessError::Io)?;
                 progress.fetch_add(chunk.len() as u64, Ordering::Relaxed);
             }
-            if received != end - start + 1 {
+            if received != expected_len {
                 return Err(TklessError::InvalidArgument(
                     "Incomplete range response".into(),
                 ));
@@ -348,6 +400,14 @@ async fn download_file_single_stream(
     }
 
     let total_bytes = response.content_length();
+    if let Some(total) = total_bytes {
+        if total > MAX_DOWNLOAD_BYTES {
+            return Err(TklessError::ResponseTooLarge {
+                limit: MAX_DOWNLOAD_BYTES.min(usize::MAX as u64) as usize,
+                received: total.min(usize::MAX as u64) as usize,
+            });
+        }
+    }
     if let Some(reporter) = options.reporter {
         reporter.on_start(total_bytes);
     }
@@ -358,8 +418,14 @@ async fn download_file_single_stream(
 
     let download_result: Result<(), TklessError> = async {
         while let Some(chunk) = response.chunk().await? {
+            downloaded_bytes = downloaded_bytes.saturating_add(chunk.len() as u64);
+            if downloaded_bytes > MAX_DOWNLOAD_BYTES {
+                return Err(TklessError::ResponseTooLarge {
+                    limit: MAX_DOWNLOAD_BYTES.min(usize::MAX as u64) as usize,
+                    received: downloaded_bytes.min(usize::MAX as u64) as usize,
+                });
+            }
             writer.write_all(&chunk)?;
-            downloaded_bytes += chunk.len() as u64;
 
             if let Some(reporter) = options.reporter {
                 reporter.on_progress(downloaded_bytes, total_bytes);
@@ -553,6 +619,46 @@ fn write_asset_once(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn rejects_non_http_and_private_ip_targets_before_network() {
+        let client = reqwest::Client::new();
+        let destination = Path::new("unused-download-target");
+
+        let error = download_file(
+            &client,
+            DownloadOptions {
+                url: "file:///etc/passwd",
+                destination,
+                referer: None,
+                cookie: None,
+                reporter: None,
+                concurrency: None,
+                allow_private_addresses: false,
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(error, TklessError::InvalidArgument(_)));
+
+        for url in ["http://127.0.0.1/private", "http://[::1]/private"] {
+            let error = download_file(
+                &client,
+                DownloadOptions {
+                    url,
+                    destination,
+                    referer: None,
+                    cookie: None,
+                    reporter: None,
+                    concurrency: None,
+                    allow_private_addresses: false,
+                },
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(error, TklessError::SsrfBlocked(_)));
+        }
+    }
 
     #[test]
     fn test_format_bytes() {

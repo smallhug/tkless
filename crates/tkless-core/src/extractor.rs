@@ -463,7 +463,7 @@ pub fn extract_tables(doc: &Html) -> Vec<ExtractedTable> {
             }
         }
 
-        let clean_headers: Vec<String> = headers
+        let mut clean_headers: Vec<String> = headers
             .iter()
             .enumerate()
             .map(|(i, h)| {
@@ -474,6 +474,14 @@ pub fn extract_tables(doc: &Html) -> Vec<ExtractedTable> {
                 }
             })
             .collect();
+        // Ragged tables (colspan, extra <td>s) can have rows wider than the header.
+        // Name the missing columns so headers, records, CSV and Markdown agree.
+        let max_columns = clean_headers
+            .len()
+            .max(rows.iter().map(|row| row.len()).max().unwrap_or(0));
+        while clean_headers.len() < max_columns {
+            clean_headers.push(format!("col_{}", clean_headers.len() + 1));
+        }
 
         let mut records = Vec::new();
         for row in &rows {
@@ -490,7 +498,7 @@ pub fn extract_tables(doc: &Html) -> Vec<ExtractedTable> {
         }
 
         tables.push(ExtractedTable {
-            headers,
+            headers: clean_headers,
             rows,
             records,
         });
@@ -672,6 +680,28 @@ mod tests {
         let formatted =
             ExtractedTable::format_tables(&tables, crate::model::TableExportFormat::Csv);
         assert!(formatted.contains("Alice,Engineer,95"));
+    }
+
+    #[test]
+    fn test_ragged_table_headers_are_padded_and_consistent() {
+        let html = r#"
+            <table>
+                <thead><tr><th>Name</th></tr></thead>
+                <tbody><tr><td>Alice</td><td>Engineer</td></tr></tbody>
+            </table>
+        "#;
+        let doc = Html::parse_document(html);
+        let tables = extract_tables(&doc);
+        let table = &tables[0];
+
+        assert_eq!(table.headers, vec!["Name", "col_2"]);
+        assert_eq!(
+            table.records[0].get("col_2").map(String::as_str),
+            Some("Engineer")
+        );
+        assert!(table.to_csv().starts_with("Name,col_2\n"));
+        let markdown = table.to_markdown();
+        assert!(markdown.starts_with("| Name | col_2 |\n| --- | --- |\n"));
     }
 
     #[test]

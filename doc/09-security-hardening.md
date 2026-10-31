@@ -6,10 +6,10 @@
 
 - `Authorization`、`Proxy-Authorization`、`Cookie`、`Cookie2`、`X-API-Key`、`Api-Key`、`X-Auth-Token` 不再进入客户端默认请求头；仅发送至 `FetchOptions.initial_target_origin` 对应的协议、主机和端口。CLI 单 URL 请求自动设置该值。库调用者需要显式设置规范化 origin，例如 `https://example.com`；未设置时不发送这些自定义凭据。
 - 同源重定向保留凭据，跨源、端口变化和 HTTPS 降级不携带上述自定义凭据。`--cookie` 和 Cookie 文件仍使用原有的独立作用域规则。
-- 普通 HTTP 请求逐跳校验目标；DNS 查询失败不再放行。直接连接使用校验过的 DNS 解析结果，避免预检查和实际连接分别解析造成绕过。私有地址、回环地址和组播地址默认受限。
+- 普通 HTTP 请求逐跳校验目标；DNS 查询失败不再放行。预检查会解析并校验主机的全部 `A`/`AAAA` 记录，实际连接再由自定义 resolver 解析一次；两次解析之间仍存在 DNS 重绑定窗口，严格防护需要系统级 DNS 固定或出口代理。私有地址、回环地址和组播地址默认受限。
 - 适配器 GET 构造额外拒绝私有 IP 字面量；YouTube 字幕、Bilibili 封面及视频候选地址补上校验。
 - CDP 在导航前启用 `Fetch` 拦截并确认成功，检查当前页面会话中的导航、重定向及子资源请求；等待页面渲染期间继续处理拦截事件。截图先创建空白页再导航。`allow_private_addresses` 显式传入浏览器配置。
-- 新增本地凭据库（`tkless auth set|list|remove`）：写入采用临时文件+rename，Unix 下权限 `0600`；单 Cookie ≤ 64 KiB、最多 32 个平台；错误信息与日志不回显 Cookie；库只按平台名查询，仅在未提供 `--cookie`/`--cookie-file` 时使用。
+- 新增本地凭据库（`tkless auth set|list|remove`）：写入采用临时文件+rename，Unix 下权限 `0600`；单 Cookie ≤ 64 KiB、最多 32 个平台；错误信息与日志不回显 Cookie；库只按平台名查询，仅在未提供 `--cookie`/`--cookie-file` 时使用。（2026-10-31 复审补充：`tkless login` / MCP `login_platform` 写出的 `cookies.txt` 也已改为临时文件+rename，Unix 下 `0600`。）
 - 新增可选 Cookie Jar（`--cookie-jar` / `TKLESS_COOKIE_JAR`）：保存 `Set-Cookie` 到 JSON，仅回放至**精确主机**且满足路径、过期与 `Secure` 规则；`Domain` 属性被忽略，避免在缺少公共后缀列表时发生跨域 cookie 注入。Jar 限制 1024 条、单条值 4 KiB、文件 4 MiB；损坏文件启动时报错，不静默丢弃。
 
 ## HTML 与下载
@@ -30,6 +30,28 @@
 - 可选 `--retry-budget N` 为整个运行设置共享重试上限（默认不限）；预算耗尽后不再重试，直接返回当次错误，避免故障站点拖长任务。
 - 可选 `--circuit-breaker N` 按主机熔断：连续 N 次传输错误、超时、5xx 或 429 后冷却 30 秒，期间本地拒绝并返回 `circuit_open`；冷却后仅放行一个半开探测，再次失败将冷却翻倍至 5 分钟。默认禁用，避免改变既有重试行为。
 - Office 归档只在扩展名或媒体类型匹配时解析，普通 ZIP 不会进入该路径。读取限制 512 条目、单条目 32 MiB、总未压缩 64 MiB，拒绝加密、ZIP64 与未知压缩方法；仅读取固定的 XML 部件，不执行宏、外部关系、嵌入对象或任何脚本。
+
+## 2026-10-31 复审修复
+
+本轮针对 [代码审计报告](13-code-audit.md) 中的安全项完成以下修复：
+
+- **请求头作用域**：自定义头改为白名单。仅 `Accept`、`Accept-Language`、`Referer`、`Sec-*` 等非凭据头进入客户端默认头；其余自定义头（包括 `Private-Token`、`X-Goog-Api-Key`、`X-Amz-Security-Token` 等）仅在 `initial_target_origin` 匹配时发送。未设置 `initial_target_origin` 的调用（例如部分搜索/批量路径）不会发送非白名单自定义头；需要携带自定义头的场景请使用单 URL 提取或显式设置 origin 的库调用。
+- **Cookie 作用域**：无前缀 `--cookie` 不再按 apex 域放行，改为精确主机、同一凭据平台或初始主机子域；凭据平台选择比适配器识别更窄，`bilivideo.com` 不再获得 B 站会话，`qq.com` 不再整体映射为微信，仅 `mp.weixin.qq.com` / `weixin.qq.com`。显式提供 `--cookie` 或 `--cookie-file` 时不再回退到凭据库。
+- **凭据文件**：`save_platform_cookies_to_file` 改为同目录临时文件 + `rename`，Unix 下 `0600`，并新增权限回归测试。
+- **MCP HTTP**：回环绑定也校验 `Host`（必须为回环名称/IP 且端口匹配）、`Origin`（存在时必须为同端口回环来源）、`Content-Type: application/json`；Bearer 比较改为定长遍历；已完成任务增加 `MAX_RETAINED_JOBS = 64` 上限。
+- **SSRF / 下载器**：补齐 `192.88.99.0/24`、NAT64 `64:ff9b::/96`、6to4 `2002::/16`、IPv4-translated、`fec0::/10` 判定；`download_file` 拒绝非 HTTP(S) 与私网 IP 字面量，累计大小上限 16 GiB，Range 数学改为饱和运算，`DownloadOptions` 新增 `allow_private_addresses`。
+- **PDF**：HTTP 路径的 PDF 解析移入 `spawn_blocking`，增加 60 秒超时；frontmatter 使用 YAML 转义，标题换行归一化。
+- **CDP**：自动浏览器配置目录改为每进程随机路径并在 Unix 下 `0700`；本地端点判定改为 URL 主机精确解析。
+- **资源限制**：`Retry-After` 单次上限降为 60 秒；Cookie Jar 拒绝值内 `;` 与 `,`；缓存维护对单条目 16 MiB 上限，`clear()` 只删除 `*.json` 而非递归删除目录。
+
+验证入口：`cargo test --workspace --all-targets`、`cargo clippy --workspace --all-targets -- -D warnings`、`cargo fmt --all -- --check` 均已通过。
+
+### 本轮未消除的边界
+
+- 升级已改为 Minisign 签名清单（`SHA256SUMS` + `SHA256SUMS.minisig`），发布签名在受保护 `release-signing` Environment 中执行。仓库仍需把真实公钥写入 `crates/tkless-cli/assets/tkless-upgrade.pub` 并配置 `MINISIGN_SECRET_KEY`/`MINISIGN_PASSWORD`；未配置时升级会 fail closed。
+- MCP HTTP 回环绑定仍允许本机进程无 Token 调用；本轮阻断的是浏览器跨源/DNS rebinding，本机恶意进程不在防护模型内。
+- PDF 解析器在 `panic = "abort"` 的 release 配置下仍可能因恶意输入终止进程；60 秒超时只能限制挂起，不能回收阻塞线程。
+- 代理与 CDP 浏览器的实际出口 IP 仍不受预检查约束；严格隔离需要出口代理或系统级网络隔离。
 
 ## 尚未覆盖的边界
 

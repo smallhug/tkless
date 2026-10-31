@@ -94,8 +94,10 @@ tkless https://news.ycombinator.com/ --schema '{
 
 ### 2.5 语义感知分块与长文档目录拆分 (RAG 增强)
 ```bash
-# 启用语义切块（保护代码块与段落完整性，输出切块 JSON 流）
+# 启用语义切块（保护代码块与段落完整性；默认输出带标题路径与 Token 统计的 Markdown 分块）
 tkless https://docs.rs/tokio/latest/tokio/ --chunk --chunk-size 500
+
+# 需要机器可读结果时配合 -f json 输出完整文档结构
 
 # 将长篇文档按标题拆分为多个独立 Markdown 文件并生成 index.md 导航索引
 tkless https://en.wikipedia.org/wiki/Rust_(programming_language) --out-dir ./rust_doc
@@ -135,11 +137,15 @@ tkless shell
 # 交互式会话支持指令：
 #   fetch <url>         - 抓取目标网页并输出清洗后的 Markdown
 #   search <query>      - 全网免 Key 检索并以 Markdown 呈现结果列表
+#   research <topic>    - 多跳自主深度调研并生成摘录报告
 #   feed <url>          - 解析并排版输出 RSS 2.0 / Atom 1.0 订阅源列表
 #   tables <url>        - 提取页面中的全部表格并以 GFM Markdown 表格输出
+#   links <url>         - 提取页面超链接清单并去重展示
+#   cache [clear]       - 查看本地响应缓存统计或清空磁盘缓存
 #   summarize <url>     - 本地启发式提取页面核心要点速览
 #   chunk <url>         - 将长文档按标题与 Token 预算进行语义感知切块
 #   diff <url1> <url2>  - 对比两个网页版本的差异与行级变更比例
+#   adapters            - 列出支持的全部平台适配器与能力
 #   help / exit         - 查看帮助或退出会话
 ```
 

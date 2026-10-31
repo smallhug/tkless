@@ -34,6 +34,24 @@ static SECTION_HEADING_RE: LazyLock<Regex> = LazyLock::new(|| {
 static LIST_ITEM_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r#"^\s*(?:[•*⁃\-–—]\s+|\(?\d+\)[.\s]+|[a-z]\)[.\s]+)"#).unwrap());
 
+/// Quotes a value for a single-line YAML scalar, escaping backslashes, quotes and
+/// control characters so document metadata cannot break out of the frontmatter.
+fn yaml_quote(value: &str) -> String {
+    let mut out = String::with_capacity(value.len() + 2);
+    out.push('"');
+    for character in value.chars() {
+        match character {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' | '\r' | '\t' => out.push(' '),
+            c if c.is_control() => out.push(' '),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
 /// Checks if a byte slice starts with the standard PDF magic header (`%PDF-`).
 pub fn is_pdf_content(bytes: &[u8]) -> bool {
     bytes.starts_with(b"%PDF-")
@@ -164,18 +182,19 @@ pub fn structure_pdf_text_to_markdown(
 
     if options.frontmatter && options.format == OutputFormat::Markdown {
         md.push_str("---\n");
-        md.push_str(&format!("title: \"{}\"\n", title_str.replace('"', "\\\"")));
+        md.push_str(&format!("title: {}\n", yaml_quote(&title_str)));
         if let Some(author) = author_hint {
-            md.push_str(&format!("author: \"{}\"\n", author.replace('"', "\\\"")));
+            md.push_str(&format!("author: {}\n", yaml_quote(author)));
         }
         if let Some(url) = source_url {
-            md.push_str(&format!("source: \"{url}\"\n"));
+            md.push_str(&format!("source: {}\n", yaml_quote(url)));
         }
         md.push_str("format: \"pdf\"\n");
         md.push_str("---\n\n");
     }
 
-    md.push_str(&format!("# {title_str}\n\n"));
+    let heading = title_str.replace(['\n', '\r'], " ");
+    md.push_str(&format!("# {heading}\n\n"));
     if let Some(url) = source_url {
         md.push_str(&format!("> **来源**: [PDF 原始文档]({url})\n\n"));
     }

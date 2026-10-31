@@ -254,14 +254,18 @@ pub async fn run_once(
                     error: None,
                 };
                 if !job_report.events.is_empty() {
-                    let payload = notification_payload(&job_report, sync.captured_at)?;
-                    for sink in &job.notify {
-                        match deliver(sink, &payload).await {
-                            Ok(()) => job_report.notified += 1,
-                            Err(error) => job_report
-                                .notify_errors
-                                .push(format!("{}: {error}", sink_description(sink))),
+                    match notification_payload(&job_report, sync.captured_at) {
+                        Ok(payload) => {
+                            for sink in &job.notify {
+                                match deliver(sink, &payload).await {
+                                    Ok(()) => job_report.notified += 1,
+                                    Err(error) => job_report
+                                        .notify_errors
+                                        .push(format!("{}: {error}", sink_description(sink))),
+                                }
+                            }
                         }
+                        Err(error) => job_report.notify_errors.push(format!("payload: {error}")),
                     }
                 }
                 job_report

@@ -167,7 +167,16 @@ fn request_variables(body: &str) -> Result<Vec<&str>, TklessError> {
         let end = after.find("}}").ok_or_else(|| {
             TklessError::InvalidArgument("Unclosed request template placeholder".into())
         })?;
-        let name = after[..end].trim();
+        let raw_name = &after[..end];
+        let name = raw_name.trim();
+        // Expansion always looks for the exact `{{name}}` form. Reject spaced
+        // placeholders here instead of accepting them and silently sending the
+        // literal `{{ page }}` to the remote API.
+        if raw_name != name {
+            return Err(TklessError::InvalidArgument(
+                "Request template placeholders must not contain whitespace".into(),
+            ));
+        }
         if !REQUEST_VARIABLES.contains(&name) {
             return Err(TklessError::InvalidArgument(format!(
                 "Unsupported request template variable: {name}"
@@ -682,7 +691,10 @@ pub async fn collect_pages(
             report.records.push(record);
         }
         if report.stop_reason == crate::workflow::StopReason::ItemLimit {
-            report.next_url = Some(page_url.to_string());
+            // The limit was reached mid-page. Reusing this page as next_url would
+            // re-emit items that were already collected, and the report has no
+            // in-page offset field, so advertise no safe resume URL.
+            report.next_url = None;
             break;
         }
         report.next_url = Some(current.to_string());
@@ -935,6 +947,16 @@ mod tests {
         assert!(config_with(cursor_pagination(), unsupported_method)
             .validate()
             .is_err());
+    }
+
+    #[test]
+    fn template_placeholders_reject_whitespace() {
+        let spec = RequestSpec {
+            method: "POST".into(),
+            body: Some("{\"q\":\"{{ page }}\"}".into()),
+            ..Default::default()
+        };
+        assert!(spec.validate(&cursor_pagination()).is_err());
     }
 
     #[test]

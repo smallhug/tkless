@@ -5,11 +5,12 @@
 
 ---
 
-## [Unreleased]
+## [0.6.0] - 2026-10-31
+
+源码版本更新为 0.6.0；0.5.0 未发布到 GitHub Release，发布状态仍以远程标签和附件为准。
 
 ### Added
 
-- 微信账号历史采集：`wechat --history` 与 MCP 历史模式支持本地授权会话文件、历史游标翻页、头条/次条展开、检查点恢复及失败正文重试；会话失效明确返回 `session_required`，不将合集作为账号历史结果。
 - 微信公众号公开内容采集：新增 `wechat` 命令与 `list_wechat_articles` MCP 工具，支持按名称发现、文章身份提取、关联合集与游标自动翻页，以及可选正文抓取。
 - 合集增加账号约束、跨页去重、数量/页数预算、续取入口及部分失败保留；明确区分合集范围完成与全账号历史，验证页不会作为成功正文返回。
 - 采集支持模板化请求：`CollectionConfig.request` 可配置 GET/POST/PUT、请求头与请求体，请求体可用 `{{page}}`、`{{offset}}`、`{{cursor}}`、`{{limit}}` 占位符，游标可放在请求体中；请求体上限 64 KiB，禁止在模板头中写凭据，模板请求不跟随重定向。
@@ -28,13 +29,50 @@
 - 新增可选持久化 Cookie Jar（`--cookie-jar` 或 `TKLESS_COOKIE_JAR`）：保存 `Set-Cookie` 并按精确主机、路径、过期与 `Secure` 回放；`Domain` 属性被忽略，限制 1024 条与 4 MiB，损坏文件明确报错。
 - 新增可选每主机熔断（`--circuit-breaker N` 或 `TKLESS_CIRCUIT_BREAKER`）：连续失败后本地冷却 30 秒并放行单个半开探测，失败后冷却翻倍至 5 分钟；返回 `circuit_open` 与 `retry_after_secs`。默认 `0` 禁用。
 
+### Changed
+
+- CLI 选项规范化（含破坏性变更）：根 `--format`/`-o` 会被结构化子命令继承，不再静默忽略；`sync`/`watch` 的 `--config` 改用 `-C`，`batch`/`crawl` 的 `--concurrency` 改用 `-j`，`cache --clear` 与 `upgrade --force` 移除短选项；`research --max-pages` 改用 `-P`。
+- `--format` 在 `search`/`batch`/`crawl`/`diff`/`adapters` 仅接受 `markdown`、`json`、`jsonl`，`research` 仅接受 `markdown`、`json`；非法值在解析阶段报错。
+- 参数范围在 clap 层统一校验（`--max-size`、`--timeout`、`--cache-ttl`、`--max-tokens`、搜索/采集/调研数量与日期等）；`--screenshot` 与 `--pdf`、`--out-dir` 与 `-o` 互斥，`--chunk-size`、`--assets-dir`、`--mcp-dynamic` 声明依赖。
+- `--stats` 遥测改写到 stderr，保证 `-f json --stats` 的 stdout 仍是合法 JSON；`--log-format json` 同时覆盖致命错误。
+- MCP 的 `fetch_webpage` 增加 `jsonl` 与 `max_size_mb`，`batch_fetch_webpages` 增加 `extract_links`/`extract_tables`/`no_images`/`no_links`，`deep_research` 增加 `proxy`；MCP 缓存默认改为 opt-in，与 CLI 一致。
+- 文档与帮助同步：移除不存在的 `platforms`/`update` 别名与 `watch --once`；统一 MCP 业务工具数量为 31；修正 REPL 命令、`--chunk` 输出、退出码与安全边界描述。
+
+### Planned
+
+- 微信账号历史采集（尚未实现）：计划支持本地授权会话文件、历史游标翻页、头条/次条展开、检查点恢复及失败正文重试，并在会话失效时返回明确的 `session_required`。当前版本不提供 `wechat --history` 或 MCP 历史模式。
+
 ### Fixed
 
 - 微信公开文章识别脚本内的合集链接，解码转义并核对账号；短链接与合集长链接按文章身份去重，避免入口文章重复计数。
 - 自升级拒绝空文件、大小不符和非本机可执行产物；在 SHA-256 校验之外，增加落盘后的完整性检查及替换前后的 `--version` 启动检查。
 - 使用独占升级锁和独立暂存目录，避免固定临时文件被并发升级覆盖；替换失败恢复原程序，回滚失败保留备份并报告路径。
 - 发布工作流拒绝空产物，并在本机架构构建后检查程序版本；增加空重定向响应、文件截断、并发和回滚回归测试。
-- 核实 0.4.0 升级器未处理 GitHub 的 302 重定向，会把空响应体写成程序并报告成功。从该版本恢复需手动安装；0.5.0 已支持逐跳重定向和哈希校验，本轮继续加固安装阶段。
+- 搜索查询的年份前缀改为按字符边界处理，`20年`、`20日` 等查询不再 panic。
+- RSS/Atom 结果接入统一的摘要、截断、分块、哈希与指标管线，`--max-tokens`、`--chunk`、`--summarize` 不再被 feed 分支绕过。
+- 爬虫 robots 缓存锁不再跨网络请求持有；预算触发前先提交已抓取页面，避免续跑重复抓取。
+- `--selector` 零匹配返回错误；嵌套选择器只渲染最外层；≥10 个数学公式的占位符恢复不再前缀冲突。
+- `sync` 在预算检查前回收旧事件与未引用快照；`watch` 通知载荷超限只记录错误，不再中止整轮任务。
+- `research` 严格执行 3–20 页预算、Hop 2 复用近似去重，并在 Markdown 截断时设置 `truncated`。
+- 表格表头按最大列数补齐，CSV/TSV 表头与 records 使用同一套列名；GitHub 适配器不再把登录/设置/组织页误判为仓库。
+- 采集模板拒绝带空格的占位符；页内 `ItemLimit` 不再把已消费页面作为续跑 URL。
+- `chunk_size` 不再静默放大，分节使用调用方 tokenizer 并正确区分代码围栏类型；小数不再被摘要器拆成句子。
+- 无特征短文本使用原始文本哈希，避免被误判为近似重复；CDP 路径使用真实 `final_url`。
+- URL 解析失败、缺少 TARGET、未知 `auth` 动作等参数错误统一返回退出码 2；JSON 日志模式下致命错误输出结构化 JSON。
+- `doctor` 实际执行缓存目录写入/读取/删除探测，并在浏览器或网络探测失败时汇总问题、返回非零退出码。
+- `--bili-order` 改为受限枚举；`--download-video`/`--download-cover` 的错误提示不再引用不存在的旧参数。
+
+### Security
+
+- 自定义请求头改为白名单：非凭据头才进入默认请求头，其他头仅在显式授权的初始 origin 发送，避免 `Private-Token`、`X-Goog-Api-Key` 等随重定向发往第三方。
+- 无前缀 `--cookie` 不再按 apex 域放行；凭据平台映射收窄（`bilivideo.com`、`www.qq.com` 不再获得会话），显式 Cookie 来源存在时不再回退凭据库。
+- `tkless login` / MCP `login_platform` 写出的 `cookies.txt` 改为临时文件+rename，Unix 下 `0600`。
+- MCP HTTP 增加 `Host`/`Origin`/`Content-Type` 校验，阻断浏览器跨源与 DNS rebinding；Bearer 比较改为定长；已完成任务保留上限 64。
+- SSRF 判定补齐 NAT64、6to4、IPv4-translated、site-local 与 `192.88.99.0/24`；媒体下载拒绝非 HTTP(S) 与私网 IP 字面量，限制 16 GiB 并对 Range 运算使用饱和计算。
+- PDF 的 HTTP 解析移入阻塞线程并限制 60 秒；frontmatter 使用 YAML 转义。CDP 临时配置目录改为随机路径并设置 `0700`，端点判定改为精确主机解析。
+- `Retry-After` 单次上限降为 60 秒；Cookie Jar 拒绝值内 `;`/`,`；缓存维护增加单条大小上限，`clear()` 只删除 `*.json`。
+- 自升级改为验证 Minisign 签名清单：Release 发布 `SHA256SUMS` 与 `SHA256SUMS.minisig`，二进制内置公钥，校验版本、资产名与 SHA-256 后才替换；签名在受保护 `release-signing` Environment 中执行，未配置密钥时 fail closed。
+- 本次安全项的剩余边界记录在 [doc/09](doc/09-security-hardening.md) 与 [doc/13](doc/13-code-audit.md)。
 
 ## [0.5.0] - 2026-10-30
 
@@ -245,7 +283,7 @@
 - **独创 MCP 两阶段动态工具发现架构**：
   - 第一阶段常驻上下文仅保留 2 核心工具（`fetch_webpage`、`web_search`）+ 4 发现元工具（`discover_tools`、`get_tool_schema`、`execute_tool`、`activate_tools`），初始 Prompt Token 消耗骤降 **74.7%**（从 6,724 tokens 降至 1,700 tokens）。
   - 支持运行时通过 `execute_tool` 免注册即时执行，或通过 `activate_tools` 触发 `notifications/tools/list_changed` 动态扩容。
-- **全生态平台矩阵查看子命令**：新增 `tkless adapters`（别名 `platforms`），支持以 Markdown 表格或 JSON 结构展示全部 16+ 平台适配器能力。
+- **全生态平台矩阵查看子命令**：新增 `tkless adapters`，支持以 Markdown 表格或 JSON 结构展示全部 16+ 平台适配器能力。
 - **一键自升级子命令**：新增 `tkless upgrade`（别名 `update`），支持自动检查 GitHub Releases 并热替换更新本地二进制。
 
 ### Changed

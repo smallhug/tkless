@@ -225,10 +225,10 @@ pub async fn deep_research(
 
     if !(1..=2).contains(&options.depth)
         || !(2..=5).contains(&options.breadth)
-        || options.max_pages == 0
+        || !(3..=20).contains(&options.max_pages)
     {
         return Err(TklessError::InvalidArgument(
-            "Research depth must be 1-2, breadth 2-5, and max_pages positive".into(),
+            "Research depth must be 1-2, breadth 2-5, and max_pages 3-20".into(),
         ));
     }
     let core_entity = clean_core_entity(clean_topic);
@@ -305,16 +305,27 @@ pub async fn deep_research(
         dimension_search_results.push((angle_name.clone(), sub_query.clone(), unique_items));
     }
 
-    // Phase 3: Parallel Content Fetching & Extraction (Hop 1 Pages)
-    let max_hop1_pages = options.max_pages.min(8);
+    // Phase 3: Parallel Content Fetching & Extraction (Hop 1 Pages). Fill the
+    // queue round-robin so every dimension contributes, and honor the requested
+    // max_pages instead of silently capping Hop 1 at 8 pages.
+    let max_hop1_pages = options.max_pages;
     let mut page_fetch_queue = Vec::new();
-
-    for (dim_idx, (_angle, _q, items)) in dimension_search_results.iter().enumerate() {
-        for item in items.iter().take(2) {
-            if page_fetch_queue.len() < max_hop1_pages {
+    let mut round = 0usize;
+    while page_fetch_queue.len() < max_hop1_pages {
+        let mut added = false;
+        for (dim_idx, (_angle, _q, items)) in dimension_search_results.iter().enumerate() {
+            if page_fetch_queue.len() >= max_hop1_pages {
+                break;
+            }
+            if let Some(item) = items.get(round) {
                 page_fetch_queue.push((dim_idx, item.clone(), 1usize));
+                added = true;
             }
         }
+        if !added {
+            break;
+        }
+        round += 1;
     }
 
     let mut extraction_opts = ExtractionOptions {
@@ -427,7 +438,7 @@ pub async fn deep_research(
             count = candidate_hop2_urls.len(),
             "Hop 2: 追踪权威引文链接深度延伸"
         );
-        let remaining_budget = options.max_pages.saturating_sub(citations.len()).min(3);
+        let remaining_budget = options.max_pages.saturating_sub(citations.len());
         let mut hop2_fetch_queue = Vec::new();
 
         for (dim_idx, title, url) in candidate_hop2_urls {
@@ -458,6 +469,17 @@ pub async fn deep_research(
 
         while let Some(res) = hop2_join_set.join_next().await {
             if let Ok((dim_idx, item, hop, Ok(doc))) = res {
+                if options.dedup {
+                    let hash = crate::dedup::simhash(&doc.content);
+                    if seen_simhashes
+                        .iter()
+                        .any(|&previous| crate::dedup::is_near_duplicate(previous, hash, 3))
+                    {
+                        debug!(url = %item.url, "过滤 Hop 2 近似重复页面");
+                        continue;
+                    }
+                    seen_simhashes.push(hash);
+                }
                 let points = extract_key_takeaways(&doc.content, 3);
                 total_tokens += doc.token_count;
 
@@ -522,7 +544,7 @@ pub async fn deep_research(
         elapsed_ms,
     };
 
-    Ok(DeepResearchReport {
+    let mut report = DeepResearchReport {
         topic: clean_topic.to_string(),
         truncated: false,
         executive_summary,
@@ -531,7 +553,16 @@ pub async fn deep_research(
         comparative_analysis: None,
         citations,
         telemetry,
-    })
+    };
+    // Markdown rendering truncates to `max_tokens`; expose that state to library
+    // callers instead of leaving `truncated` permanently false.
+    if let Some(limit) = options.max_tokens {
+        let markdown = format_deep_research_markdown(&report);
+        if crate::token::count_tokens(&markdown, crate::model::TokenizerKind::default()) > limit {
+            report.truncated = true;
+        }
+    }
+    Ok(report)
 }
 
 /// Render the complete report within its budget, retaining valid JSON and explicit truncation.

@@ -28,6 +28,7 @@ url.workspace = true
 anyhow.workspace = true
 sha2.workspace = true
 semver.workspace = true
+minisign-verify.workspace = true
 
 [target.'cfg(windows)'.build-dependencies]
 winres.workspace = true

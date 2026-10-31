@@ -212,6 +212,11 @@ impl McpServer {
             _ => OutputFormat::Markdown,
         };
 
+        let proxy = args
+            .get("proxy")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+
         let options = crate::research::ResearchOptions {
             depth,
             breadth,
@@ -222,7 +227,26 @@ impl McpServer {
             format,
         };
 
-        match crate::research::deep_research(&self.engine, topic, &options).await {
+        let custom_engine;
+        let engine = if let Some(proxy) = proxy {
+            let mut fetch_opts = self.engine.fetcher().options().clone();
+            fetch_opts.proxy = Some(proxy);
+            match TklessEngine::with_options(fetch_opts) {
+                Ok(engine) => {
+                    custom_engine = engine;
+                    &custom_engine
+                }
+                Err(e) => {
+                    return McpToolCallResult::error(format!(
+                        "Failed to initialize engine with proxy: {e}"
+                    ))
+                }
+            }
+        } else {
+            &self.engine
+        };
+
+        match crate::research::deep_research(engine, topic, &options).await {
             Ok(report) => match crate::research::render_deep_research(&report, &options) {
                 Ok(text) => McpToolCallResult::success(text),
                 Err(e) => McpToolCallResult::error(e.to_string()),

@@ -37,6 +37,45 @@ static GITHUB_TRENDING_FORKS_SELECTOR: LazyLock<Selector> =
 static GITHUB_TRENDING_PERIOD_STARS_SELECTOR: LazyLock<Selector> = LazyLock::new(|| {
     Selector::parse("span.d-inline-block.float-sm-right, .float-sm-right").unwrap()
 });
+static GITHUB_RELEASE_SELECTOR: LazyLock<Selector> = LazyLock::new(|| {
+    Selector::parse("div.release-entry, section.release-entry, div.release").unwrap()
+});
+static GITHUB_RELEASE_TITLE_SELECTOR: LazyLock<Selector> =
+    LazyLock::new(|| Selector::parse("h1, h2, h3").unwrap());
+
+const GITHUB_RESERVED_ROOTS: &[&str] = &[
+    "login",
+    "logout",
+    "join",
+    "signup",
+    "settings",
+    "orgs",
+    "users",
+    "marketplace",
+    "explore",
+    "topics",
+    "sponsors",
+    "notifications",
+    "pulls",
+    "issues",
+    "search",
+    "new",
+    "features",
+    "about",
+    "pricing",
+    "enterprise",
+    "apps",
+    "collections",
+    "codespaces",
+    "copilot",
+    "security",
+    "site",
+    "dashboard",
+    "account",
+    "discussions",
+    "stars",
+    "watching",
+];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GithubRoute {
@@ -95,6 +134,13 @@ impl GithubAdapter {
             return None;
         }
 
+        if GITHUB_RESERVED_ROOTS
+            .iter()
+            .any(|root| segments[0].eq_ignore_ascii_case(root))
+        {
+            return None;
+        }
+
         let owner = segments[0].to_string();
         let repo = segments[1].to_string();
 
@@ -102,7 +148,7 @@ impl GithubAdapter {
             return Some(GithubRoute::Repo { owner, repo });
         }
 
-        match segments[2] {
+        match segments[2].to_ascii_lowercase().as_str() {
             "issues" => {
                 if let Some(num) = segments.get(3) {
                     Some(GithubRoute::Issue {
@@ -128,7 +174,14 @@ impl GithubAdapter {
                 }
             }
             "releases" => Some(GithubRoute::Releases { owner, repo }),
-            _ => Some(GithubRoute::Repo { owner, repo }),
+            "tree" | "blob" | "raw" | "commit" | "commits" | "compare" | "actions" | "wiki"
+            | "discussions" | "pulls" | "tags" | "branches" | "network" | "graphs" | "projects"
+            | "pulse" | "activity" | "contributors" | "community" | "license" | "archive"
+            | "code" | "find" | "security" | "settings" => Some(GithubRoute::Repo { owner, repo }),
+            // Unknown github.com paths are not repository pages. Returning None
+            // lets the caller use the generic HTML fallback instead of fabricating
+            // an `owner/repo` identity (for example `/settings/tokens`).
+            _ => None,
         }
     }
 
@@ -161,10 +214,10 @@ impl GithubAdapter {
         url: &Url,
         options: &ExtractionOptions,
     ) -> Result<PageDocument, TklessError> {
-        let route = Self::parse_route(url).unwrap_or(GithubRoute::Repo {
-            owner: "GitHub".into(),
-            repo: "Repository".into(),
-        });
+        let route = Self::parse_route(url).ok_or_else(|| TklessError::AdapterError {
+            platform: "github",
+            message: format!("Unsupported GitHub route: {url}"),
+        })?;
 
         match route {
             GithubRoute::Repo { owner, repo } => {
@@ -200,7 +253,20 @@ impl GithubAdapter {
         options: &ExtractionOptions,
     ) -> Result<PageDocument, TklessError> {
         let doc = Html::parse_document(raw_html);
-        let repo_title = format!("{owner}/{repo}");
+        let release_entries: Vec<_> = doc.select(&GITHUB_RELEASE_SELECTOR).collect();
+        let release_title = release_entries
+            .iter()
+            .find_map(|entry| entry.select(&GITHUB_RELEASE_TITLE_SELECTOR).next())
+            .map(|element| {
+                element
+                    .text()
+                    .collect::<Vec<_>>()
+                    .join(" ")
+                    .trim()
+                    .to_string()
+            })
+            .filter(|title| !title.is_empty());
+        let repo_title = release_title.unwrap_or_else(|| format!("{owner}/{repo}"));
 
         let desc = doc
             .select(&GITHUB_REPO_DESC_SELECTOR)
@@ -212,6 +278,15 @@ impl GithubAdapter {
             .select(&GITHUB_README_SELECTOR)
             .next()
             .map(|el| el.html())
+            .or_else(|| {
+                (!release_entries.is_empty()).then(|| {
+                    release_entries
+                        .iter()
+                        .map(|entry| entry.html())
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                })
+            })
             .unwrap_or_else(|| {
                 if let Ok(cleaned) =
                     crate::cleaner::clean_html(raw_html, Some(url.as_str()), options.mode)
@@ -549,8 +624,7 @@ impl PlatformAdapter for GithubAdapter {
     }
 
     fn matches(&self, url: &Url) -> bool {
-        let host = url.host_str().unwrap_or("");
-        crate::fetcher::is_subdomain_or_exact(host, "github.com")
+        Self::parse_route(url).is_some()
     }
 
     fn extract<'a>(
@@ -585,6 +659,30 @@ mod tests {
         assert!(adapter.matches(&u2));
         assert!(adapter.matches(&u3));
         assert!(!adapter.matches(&u4));
+
+        for reserved in [
+            "https://github.com/login",
+            "https://github.com/settings/tokens",
+            "https://github.com/orgs/rust-lang/people",
+            "https://github.com/marketplace/actions",
+            "https://github.com/topics/rust",
+        ] {
+            let url = Url::parse(reserved).unwrap();
+            assert!(
+                !adapter.matches(&url),
+                "{reserved} is not a repository page"
+            );
+            assert!(GithubAdapter::parse_route(&url).is_none());
+        }
+
+        let tree = Url::parse("https://github.com/tokio-rs/tokio/tree/master").unwrap();
+        assert_eq!(
+            GithubAdapter::parse_route(&tree),
+            Some(GithubRoute::Repo {
+                owner: "tokio-rs".into(),
+                repo: "tokio".into()
+            })
+        );
 
         assert_eq!(
             GithubAdapter::parse_route(&u1),
@@ -632,6 +730,20 @@ mod tests {
         assert!(doc.content.contains("A runtime for writing reliable"));
         assert!(doc.content.contains("## Overview"));
         assert!(doc.content.contains("Tokio provides event-driven"));
+    }
+
+    #[test]
+    fn test_github_unsupported_route_is_not_extracted_as_a_repo() {
+        let adapter = GithubAdapter::new();
+        let url = Url::parse("https://github.com/settings/tokens").unwrap();
+        let error = adapter
+            .parse_page(
+                "<html><body>token settings</body></html>",
+                &url,
+                &ExtractionOptions::default(),
+            )
+            .unwrap_err();
+        assert!(matches!(error, TklessError::AdapterError { .. }));
     }
 
     #[test]

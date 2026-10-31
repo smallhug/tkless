@@ -9,3 +9,8 @@
 .tkless_cache/
 cookies.txt
 .trae/
+
+# Never commit Minisign upgrade signing secrets
+minisign.key
+*.minisign.key
+crates/tkless-cli/assets/*.key

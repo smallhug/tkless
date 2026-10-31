@@ -48,7 +48,7 @@ tkless search '"near-duplicate" -advertising 2026' --diagnostics -f json
 tkless search "Tokio" --scope github --diagnostics -f jsonl
 ```
 
-JSON 始终为报告对象，JSONL 为单行报告；`--diagnostics` 控制 Markdown 诊断展示。`query` 是用户输入，`effective_query` 包含 scope 添加的 site: 条件。`status` 为 `results`、`no_results`（识别到明确的空结果标记）或 `filtered`（存在结果候选但被过滤）。验证码返回 `verification_required` 错误，未识别或损坏的结果结构返回 `search_parse_error`；后两种不作为空结果成功返回。
+JSON 始终为报告对象，JSONL 为单行报告；`--diagnostics` 控制 Markdown 诊断展示。`query` 是用户输入，`effective_query` 包含 scope 添加的 site: 条件。`status` 为 `results`、`no_results`（识别到明确的空结果标记）或 `filtered`（存在结果候选但被过滤）。验证码返回 `verification_required`（退出码 1），未识别或损坏的结果结构返回 `search_parse_error`（退出码 4），限流返回 `rate_limited`（退出码 3）；后几种都不作为空结果成功返回。
 
 每页 `diagnostics` 包含输入路径、候选数、无效项、域名过滤、重复项、广告过滤、严格/宽松匹配数、选中数和最终返回数。`selection` 为启发式选择方式，不是可信概率。跨页重复项不计入实际返回数；第二页普通读取/解析失败保留第一页并返回警告，429 则明确返回限流错误。CDP 当前只读取第一页。
 

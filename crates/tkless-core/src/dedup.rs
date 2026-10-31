@@ -10,7 +10,10 @@ use std::collections::HashMap;
 pub fn simhash(text: &str) -> u64 {
     let features = extract_features(text);
     if features.is_empty() {
-        return 0;
+        // Short/featureless documents used to collapse to the same hash (0),
+        // making unrelated pages look like near-duplicates. Fall back to a
+        // deterministic hash of the raw text instead.
+        return fnv1a_64(text.as_bytes());
     }
 
     let mut bit_counts = [0i32; 64];
@@ -208,5 +211,13 @@ mod tests {
             "Real Chinese article near-duplicates must have Hamming distance <= 3: {cjk_dist}"
         );
         assert!(is_near_duplicate(cjk_h1, cjk_h2, 3));
+    }
+
+    #[test]
+    fn featureless_texts_do_not_collapse_to_the_same_hash() {
+        let first = simhash("!!!");
+        let second = simhash("???");
+        assert_ne!(first, second);
+        assert!(!is_near_duplicate(first, second, 3));
     }
 }

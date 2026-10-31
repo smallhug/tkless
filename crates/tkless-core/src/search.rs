@@ -515,29 +515,38 @@ pub fn tokenize_query(query: &str) -> QueryTokens {
             continue;
         }
 
-        // Check if 4-digit year (e.g. 2024, 2025, 2026, 2027) or year prefix (e.g. 2026年)
-        if t.len() == 4 && t.chars().all(|c| c.is_ascii_digit()) {
+        // Check if 4-digit year (e.g. 2024, 2025, 2026, 2027) or year prefix (e.g. 2026年).
+        // Work on character boundaries: `t[..4]` can split a multi-byte CJK
+        // character (for example the query `20年`) and panic.
+        if t.len() == 4 && t.bytes().all(|b| b.is_ascii_digit()) {
             temporal_tokens.push(t.to_string());
-        } else if t.len() >= 4
-            && (t.starts_with("19") || t.starts_with("20"))
-            && t[..4].chars().all(|c| c.is_ascii_digit())
-        {
-            temporal_tokens.push(t[..4].to_string());
-            let rem = t[4..].trim_start_matches('年').trim();
-            if !rem.is_empty() {
-                core_tokens.push(rem.to_string());
-                if rem.chars().any(|c| (c as u32) >= 0x4E00) && rem.chars().count() >= 4 {
-                    let chars: Vec<char> = rem.chars().collect();
-                    let half = chars.len() / 2;
-                    let s1: String = chars[..half].iter().collect();
-                    let s2: String = chars[half..].iter().collect();
-                    if !core_tokens.contains(&s1) {
-                        core_tokens.push(s1);
-                    }
-                    if !core_tokens.contains(&s2) {
-                        core_tokens.push(s2);
+        } else if t.len() > 4 && (t.starts_with("19") || t.starts_with("20")) {
+            let first_four: String = t.chars().take(4).collect();
+            if first_four.len() == 4 && first_four.bytes().all(|b| b.is_ascii_digit()) {
+                temporal_tokens.push(first_four);
+                let boundary = t
+                    .char_indices()
+                    .nth(4)
+                    .map(|(index, _)| index)
+                    .unwrap_or(t.len());
+                let rem = t[boundary..].trim_start_matches('年').trim();
+                if !rem.is_empty() {
+                    core_tokens.push(rem.to_string());
+                    if rem.chars().any(|c| (c as u32) >= 0x4E00) && rem.chars().count() >= 4 {
+                        let chars: Vec<char> = rem.chars().collect();
+                        let half = chars.len() / 2;
+                        let s1: String = chars[..half].iter().collect();
+                        let s2: String = chars[half..].iter().collect();
+                        if !core_tokens.contains(&s1) {
+                            core_tokens.push(s1);
+                        }
+                        if !core_tokens.contains(&s2) {
+                            core_tokens.push(s2);
+                        }
                     }
                 }
+            } else {
+                core_tokens.push(t.to_string());
             }
         } else {
             core_tokens.push(t.to_string());
@@ -1793,6 +1802,22 @@ mod tests {
             vec!["tesla", "model", "3", "production"]
         );
         assert_eq!(tokens_en.temporal_tokens, vec!["2025"]);
+    }
+
+    #[test]
+    fn tokenize_query_never_slices_mid_character() {
+        for query in ["20年", "20日", "19号", "2026年", "2026年政策"] {
+            let tokens = tokenize_query(query);
+            assert!(!tokens.all_tokens.is_empty(), "query: {query}");
+        }
+
+        let tokens = tokenize_query("2026年政策");
+        assert!(tokens.temporal_tokens.contains(&"2026".to_string()));
+        assert!(tokens.core_tokens.contains(&"政策".to_string()));
+
+        let tokens = tokenize_query("20年");
+        assert!(tokens.core_tokens.contains(&"20年".to_string()));
+        assert!(tokens.temporal_tokens.is_empty());
     }
 
     #[test]

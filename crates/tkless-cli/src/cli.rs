@@ -201,11 +201,81 @@ impl CliSearchScope {
     }
 }
 
-fn positive_search_count(raw: &str) -> Result<usize, String> {
-    raw.parse::<usize>()
-        .ok()
-        .filter(|value| *value > 0)
-        .ok_or_else(|| "value must be a positive integer".into())
+fn bounded_usize(
+    min: usize,
+    max: usize,
+) -> impl Fn(&str) -> Result<usize, String> + Clone + Send + Sync + 'static {
+    move |raw: &str| {
+        raw.parse::<usize>()
+            .ok()
+            .filter(|value| (min..=max).contains(value))
+            .ok_or_else(|| format!("value must be between {min} and {max}"))
+    }
+}
+
+fn bounded_u64(
+    min: u64,
+    max: u64,
+) -> impl Fn(&str) -> Result<u64, String> + Clone + Send + Sync + 'static {
+    move |raw: &str| {
+        raw.parse::<u64>()
+            .ok()
+            .filter(|value| (min..=max).contains(value))
+            .ok_or_else(|| format!("value must be between {min} and {max}"))
+    }
+}
+
+fn bounded_u32(
+    min: u32,
+    max: u32,
+) -> impl Fn(&str) -> Result<u32, String> + Clone + Send + Sync + 'static {
+    move |raw: &str| {
+        raw.parse::<u32>()
+            .ok()
+            .filter(|value| (min..=max).contains(value))
+            .ok_or_else(|| format!("value must be between {min} and {max}"))
+    }
+}
+
+/// Validates a YYYY-MM-DD date without pulling in a date-time dependency.
+fn parse_ymd(raw: &str) -> Result<String, String> {
+    let mut parts = raw.split('-');
+    let (Some(year), Some(month), Some(day), None) =
+        (parts.next(), parts.next(), parts.next(), parts.next())
+    else {
+        return Err("date must use YYYY-MM-DD".into());
+    };
+    if year.len() != 4 || month.len() != 2 || day.len() != 2 {
+        return Err("date must use YYYY-MM-DD".into());
+    }
+    let year: u32 = year.parse().map_err(|_| "invalid year".to_string())?;
+    let month: u32 = month.parse().map_err(|_| "invalid month".to_string())?;
+    let day: u32 = day.parse().map_err(|_| "invalid day".to_string())?;
+    let leap = (year.is_multiple_of(4) && !year.is_multiple_of(100)) || year.is_multiple_of(400);
+    let max_day = match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if leap => 29,
+        2 => 28,
+        _ => return Err("invalid month".into()),
+    };
+    if !(1..=max_day).contains(&day) {
+        return Err("invalid day".into());
+    }
+    Ok(raw.to_string())
+}
+
+fn parse_sql_identifier(raw: &str) -> Result<String, String> {
+    let mut chars = raw.chars();
+    match chars.next() {
+        Some(first) if first.is_ascii_alphabetic() || first == '_' => {}
+        _ => return Err("identifier must start with a letter or underscore".into()),
+    }
+    if chars.all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        Ok(raw.to_string())
+    } else {
+        Err("identifier may only contain letters, digits, and underscores".into())
+    }
 }
 
 #[cfg(test)]
@@ -393,6 +463,29 @@ mod search_argument_tests {
     }
 }
 
+/// Sort order for Bilibili search results.
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum CliBiliOrder {
+    #[default]
+    Totalrank,
+    Click,
+    Pubdate,
+    Dm,
+    Stow,
+}
+
+impl CliBiliOrder {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Totalrank => "totalrank",
+            Self::Click => "click",
+            Self::Pubdate => "pubdate",
+            Self::Dm => "dm",
+            Self::Stow => "stow",
+        }
+    }
+}
+
 /// Table export format choices.
 #[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum CliTableFormat {
@@ -458,6 +551,7 @@ pub struct CliArgs {
         short = 't',
         long = "max-tokens",
         value_name = "N",
+        value_parser = bounded_usize(1, 10_000_000),
         help_heading = "通用提取选项 (General Options)"
     )]
     pub max_tokens: Option<usize>,
@@ -556,6 +650,8 @@ pub struct CliArgs {
     #[arg(
         long = "chunk-size",
         value_name = "N",
+        value_parser = bounded_usize(1, 100_000),
+        requires = "chunk",
         help_heading = "通用提取选项 (General Options)"
     )]
     pub chunk_size: Option<usize>,
@@ -564,6 +660,8 @@ pub struct CliArgs {
     #[arg(
         long = "chunk-overlap",
         value_name = "N",
+        value_parser = bounded_usize(0, 100_000),
+        requires = "chunk",
         help_heading = "通用提取选项 (General Options)"
     )]
     pub chunk_overlap: Option<usize>,
@@ -579,6 +677,7 @@ pub struct CliArgs {
     #[arg(
         long = "assets-dir",
         value_name = "DIR",
+        requires = "download_images",
         help_heading = "通用提取选项 (General Options)"
     )]
     pub assets_dir: Option<String>,
@@ -612,6 +711,7 @@ pub struct CliArgs {
     #[arg(
         long = "out-dir",
         value_name = "DIR",
+        conflicts_with = "output_file",
         help_heading = "通用提取选项 (General Options)"
     )]
     pub out_dir: Option<PathBuf>,
@@ -635,6 +735,7 @@ pub struct CliArgs {
     #[arg(
         long = "danmaku-limit",
         value_name = "N",
+        value_parser = bounded_usize(1, 10_000),
         help_heading = "哔哩哔哩专属 (Bilibili)"
     )]
     pub bili_dm_limit: Option<usize>,
@@ -647,6 +748,7 @@ pub struct CliArgs {
     #[arg(
         long = "comments-limit",
         value_name = "N",
+        value_parser = bounded_usize(1, 10_000),
         help_heading = "哔哩哔哩专属 (Bilibili)"
     )]
     pub bili_cm_limit: Option<usize>,
@@ -667,6 +769,7 @@ pub struct CliArgs {
     #[arg(
         long = "bili-page",
         value_name = "PAGE",
+        value_parser = bounded_u32(1, u32::MAX),
         help_heading = "哔哩哔哩专属 (Bilibili)"
     )]
     pub bili_page: Option<u32>,
@@ -674,10 +777,11 @@ pub struct CliArgs {
     /// 搜索排序规则: totalrank (默认), click (播放), pubdate (最新), dm (弹幕), stow (收藏)
     #[arg(
         long = "bili-order",
+        value_enum,
         value_name = "ORDER",
         help_heading = "哔哩哔哩专属 (Bilibili)"
     )]
-    pub bili_order: Option<String>,
+    pub bili_order: Option<CliBiliOrder>,
 
     /// 仅输出 B站 视频高清封面图片 URL
     #[arg(long = "cover", help_heading = "哔哩哔哩专属 (Bilibili)")]
@@ -749,7 +853,9 @@ pub struct CliArgs {
     )]
     pub user_agent: Option<String>,
 
-    /// Custom HTTP request headers in "Key: Value" format (can be specified multiple times)
+    /// Custom HTTP request headers in "Key: Value" format (can be specified multiple times).
+    /// Non-credential headers are applied to all requests; other headers are only sent to the
+    /// initial target origin to prevent credential leakage across redirects or third-party hosts.
     #[arg(
         short = 'H',
         long = "header",
@@ -763,6 +869,7 @@ pub struct CliArgs {
         long = "timeout",
         default_value_t = 15,
         value_name = "SECS",
+        value_parser = bounded_u64(1, 3600),
         help_heading = "网络与身份认证 (Network & Auth)"
     )]
     pub timeout_secs: u64,
@@ -772,6 +879,7 @@ pub struct CliArgs {
         long = "connect-timeout",
         default_value_t = 10,
         value_name = "SECS",
+        value_parser = bounded_u64(1, 3600),
         help_heading = "网络与身份认证 (Network & Auth)"
     )]
     pub connect_timeout: u64,
@@ -781,6 +889,7 @@ pub struct CliArgs {
         long = "retries",
         default_value_t = 0,
         value_name = "N",
+        value_parser = bounded_u32(0, 20),
         help_heading = "网络与身份认证 (Network & Auth)"
     )]
     pub retries: u32,
@@ -819,6 +928,7 @@ pub struct CliArgs {
         long = "max-size",
         default_value_t = 10,
         value_name = "MB",
+        value_parser = bounded_usize(1, 2048),
         help_heading = "网络与身份认证 (Network & Auth)"
     )]
     pub max_size_mb: usize,
@@ -846,6 +956,7 @@ pub struct CliArgs {
     #[arg(
         long = "cdp-wait",
         value_name = "MS",
+        value_parser = bounded_u64(0, 300_000),
         help_heading = "网络与身份认证 (Network & Auth)"
     )]
     pub cdp_wait_ms: Option<u64>,
@@ -878,6 +989,7 @@ pub struct CliArgs {
     #[arg(
         long = "screenshot",
         value_name = "PATH",
+        conflicts_with = "pdf",
         help_heading = "网络与身份认证 (Network & Auth)"
     )]
     pub screenshot: Option<PathBuf>,
@@ -949,6 +1061,7 @@ pub struct CliArgs {
         long = "cache-ttl",
         default_value_t = 900,
         value_name = "SECS",
+        value_parser = bounded_u64(1, 31_536_000),
         help_heading = "缓存与运行诊断 (Cache & Diagnostics)"
     )]
     pub cache_ttl: u64,
@@ -994,6 +1107,35 @@ pub struct CliArgs {
         help_heading = "缓存与运行诊断 (Cache & Diagnostics)"
     )]
     pub stats: bool,
+}
+
+impl CliArgs {
+    /// Resolves the output format for a structured subcommand, falling back to the
+    /// root `--format` value so `tkless -f json search q` is not silently ignored.
+    pub fn structured_format(
+        &self,
+        subcommand: Option<CliFormat>,
+        allow_jsonl: bool,
+    ) -> Result<CliFormat, tkless_core::TklessError> {
+        let format = subcommand.unwrap_or(self.format);
+        match format {
+            CliFormat::Markdown | CliFormat::Json => Ok(format),
+            CliFormat::Jsonl if allow_jsonl => Ok(format),
+            _ => Err(tkless_core::TklessError::InvalidArgument(if allow_jsonl {
+                "This subcommand supports markdown, json, or jsonl".into()
+            } else {
+                "This subcommand supports markdown or json".into()
+            })),
+        }
+    }
+
+    /// Resolves a subcommand output path, falling back to the root `-o` option.
+    pub fn output_path<'a>(
+        &'a self,
+        subcommand: Option<&'a std::path::Path>,
+    ) -> Option<&'a std::path::Path> {
+        subcommand.or(self.output_file.as_deref())
+    }
 }
 
 #[derive(Subcommand, Debug, Clone)]
@@ -1112,7 +1254,7 @@ pub enum SubCommand {
 #[derive(clap::Args, Debug, Clone)]
 pub struct CollectionArgs {
     /// JSON 采集配置文件
-    #[arg(long, short = 'c')]
+    #[arg(long, short = 'C')]
     pub config: PathBuf,
     #[arg(long, short = 'o')]
     pub output: Option<PathBuf>,
@@ -1135,7 +1277,7 @@ pub struct SyncArgs {
 #[derive(clap::Args, Debug, Clone)]
 pub struct AuthArgs {
     /// set、list 或 remove
-    #[arg(value_name = "ACTION")]
+    #[arg(value_name = "ACTION", value_parser = ["set", "list", "remove"])]
     pub action: String,
     /// 平台名称（set / remove 必填）
     #[arg(value_name = "PLATFORM")]
@@ -1145,7 +1287,7 @@ pub struct AuthArgs {
 #[derive(clap::Args, Debug, Clone)]
 pub struct WatchArgs {
     /// JSON 监控配置文件（jobs、diff 与通知目标）
-    #[arg(long, short = 'c')]
+    #[arg(long, short = 'C')]
     pub config: PathBuf,
     /// 快照与事件状态目录，每个 job 使用独立子目录
     #[arg(long)]
@@ -1174,11 +1316,20 @@ pub struct BrowseArgs {
 pub struct WechatArgs {
     /// 公众号显示名称、文章 URL 或公开合集 URL
     pub source: String,
-    #[arg(long, short = 'l', default_value_t = tkless_core::wechat::DEFAULT_LIMIT)]
+    #[arg(
+        long,
+        short = 'l',
+        default_value_t = tkless_core::wechat::DEFAULT_LIMIT,
+        value_parser = bounded_usize(1, tkless_core::wechat::MAX_LIMIT)
+    )]
     pub limit: usize,
-    #[arg(long, default_value_t = tkless_core::wechat::DEFAULT_PAGES)]
+    #[arg(
+        long,
+        default_value_t = tkless_core::wechat::DEFAULT_PAGES,
+        value_parser = bounded_usize(1, tkless_core::wechat::MAX_PAGES)
+    )]
     pub max_pages: usize,
-    #[arg(long, default_value_t = 300)]
+    #[arg(long, default_value_t = 300, value_parser = bounded_u64(0, 60_000))]
     pub delay_ms: u64,
     /// 获取列表中每篇文章的正文
     #[arg(long)]
@@ -1205,7 +1356,7 @@ pub struct UpgradeArgs {
     pub check: bool,
 
     /// 即使当前已是最新版本，亦强制重新下载并覆盖安装
-    #[arg(short = 'f', long = "force")]
+    #[arg(long = "force")]
     pub force: bool,
 
     /// 自定义 GitHub 仓库所有者与项目 (默认: 'smallhug/tkless')
@@ -1226,9 +1377,13 @@ pub struct DoctorArgs {
 
 #[derive(clap::Args, Debug, Clone, Default)]
 pub struct AdaptersArgs {
-    /// Output presentation format [default: markdown]
-    #[arg(short = 'f', long = "format", value_enum, default_value_t = CliFormat::Markdown)]
-    pub format: CliFormat,
+    /// Output presentation format: markdown, json, or jsonl [default: markdown]
+    #[arg(
+        short = 'f',
+        long = "format",
+        value_parser = search_output_formats(true)
+    )]
+    pub format: Option<CliFormat>,
 
     /// Write output payload to file instead of stdout
     #[arg(short = 'o', long = "output", value_name = "FILE")]
@@ -1243,22 +1398,41 @@ pub struct ResearchSubArgs {
     pub topic: String,
 
     /// Research hop depth (1: single-hop broad search, 2: two-hop citation tracking)
-    #[arg(short = 'd', long = "depth", default_value_t = 2, value_name = "HOPS")]
+    #[arg(
+        short = 'd',
+        long = "depth",
+        default_value_t = 2,
+        value_name = "HOPS",
+        value_parser = bounded_usize(1, 2)
+    )]
     pub depth: usize,
 
     /// Number of research dimensions/sub-queries to explore (2-5)
-    #[arg(short = 'b', long = "breadth", default_value_t = 3, value_name = "N")]
+    #[arg(
+        short = 'b',
+        long = "breadth",
+        default_value_t = 3,
+        value_name = "N",
+        value_parser = bounded_usize(2, 5)
+    )]
     pub breadth: usize,
 
     /// Maximum number of total pages to analyze (3-20)
-    #[arg(short = 'm', long = "max-pages", default_value_t = 8, value_name = "N")]
+    #[arg(
+        short = 'P',
+        long = "max-pages",
+        default_value_t = 8,
+        value_name = "N",
+        value_parser = bounded_usize(3, 20)
+    )]
     pub max_pages: usize,
 
     /// Maximum tokens extracted per webpage
     #[arg(
         long = "max-tokens-per-page",
         default_value_t = 1500,
-        value_name = "TOKENS"
+        value_name = "TOKENS",
+        value_parser = bounded_usize(1, 1_000_000)
     )]
     pub max_tokens_per_page: usize,
 
@@ -1267,13 +1441,14 @@ pub struct ResearchSubArgs {
         short = 't',
         long = "max-tokens",
         default_value_t = 8000,
-        value_name = "TOKENS"
+        value_name = "TOKENS",
+        value_parser = bounded_usize(1, 10_000_000)
     )]
     pub max_tokens: usize,
 
-    /// Output presentation format
-    #[arg(short = 'f', long = "format", default_value = "markdown", value_parser = search_output_formats(false))]
-    pub format: CliFormat,
+    /// Output presentation format: markdown or json [default: markdown]
+    #[arg(short = 'f', long = "format", value_parser = search_output_formats(false))]
+    pub format: Option<CliFormat>,
 
     /// Write compiled research report to file instead of stdout
     #[arg(short = 'o', long = "output", value_name = "FILE")]
@@ -1308,13 +1483,17 @@ pub struct DiffArgs {
     #[arg(value_name = "NEW_TARGET")]
     pub new_target: String,
 
-    /// Output presentation format [default: markdown]
-    #[arg(short = 'f', long = "format", value_enum, default_value_t = CliFormat::Markdown)]
-    pub format: CliFormat,
+    /// Output presentation format: markdown, json, or jsonl [default: markdown]
+    #[arg(
+        short = 'f',
+        long = "format",
+        value_parser = search_output_formats(true)
+    )]
+    pub format: Option<CliFormat>,
 
     /// Write output payload to file instead of stdout
     #[arg(short = 'o', long = "output", value_name = "FILE")]
-    pub output: Option<std::path::PathBuf>,
+    pub output: Option<PathBuf>,
 }
 
 #[derive(clap::Args, Debug, Clone)]
@@ -1333,7 +1512,11 @@ pub struct TablesArgs {
     pub format: CliTableFormat,
 
     /// Custom SQL table name identifier when format is 'sql' [default: 'extracted_table']
-    #[arg(long = "table-name", default_value = "extracted_table")]
+    #[arg(
+        long = "table-name",
+        default_value = "extracted_table",
+        value_parser = parse_sql_identifier
+    )]
     pub table_name: String,
 
     /// Optional 0-indexed specific table to extract
@@ -1352,7 +1535,7 @@ pub struct CacheSubArgs {
     pub stats: bool,
 
     /// 清理并删除全部本地磁盘与内存缓存条目
-    #[arg(long = "clear", short = 'c')]
+    #[arg(long = "clear")]
     pub clear: bool,
 
     /// 自定义缓存存储目录路径
@@ -1370,12 +1553,18 @@ pub struct SearchSubArgs {
     pub query: String,
 
     /// Maximum number of search results to return
-    #[arg(short = 'l', long = "limit", default_value_t = 10, value_name = "N", value_parser = positive_search_count)]
+    #[arg(
+        short = 'l',
+        long = "limit",
+        default_value_t = 10,
+        value_name = "N",
+        value_parser = bounded_usize(1, 100)
+    )]
     pub limit: usize,
 
-    /// Output presentation format
-    #[arg(short = 'f', long = "format", default_value = "markdown", value_parser = search_output_formats(true))]
-    pub format: CliFormat,
+    /// Output presentation format: markdown, json, or jsonl [default: markdown]
+    #[arg(short = 'f', long = "format", value_parser = search_output_formats(true))]
+    pub format: Option<CliFormat>,
 
     /// Write search results to file instead of stdout
     #[arg(short = 'o', long = "output", value_name = "FILE")]
@@ -1405,7 +1594,7 @@ pub struct SearchSubArgs {
         long = "max-tokens-per-page",
         value_name = "N",
         requires = "fetch_content",
-        value_parser = positive_search_count,
+        value_parser = bounded_usize(1, 1_000_000),
         help = "Maximum tokens extracted per webpage during search & fetch [default: 1500]"
     )]
     pub max_tokens_per_page: Option<usize>,
@@ -1427,11 +1616,11 @@ pub struct SearchSubArgs {
     pub mobile: bool,
 
     /// 仅返回该日期之后（含）的结果，格式 YYYY-MM-DD
-    #[arg(long = "since", value_name = "DATE")]
+    #[arg(long = "since", value_name = "DATE", value_parser = parse_ymd)]
     pub since: Option<String>,
 
     /// 仅返回该日期之前（含）的结果，格式 YYYY-MM-DD
-    #[arg(long = "until", value_name = "DATE")]
+    #[arg(long = "until", value_name = "DATE", value_parser = parse_ymd)]
     pub until: Option<String>,
 
     /// 结果语言，例如 zh-CN 或 en
@@ -1461,7 +1650,11 @@ pub struct BatchArgs {
     #[arg(long = "per-host-concurrency", default_value_t = 2, value_parser = batch_concurrency)]
     pub per_host_concurrency: usize,
     /// Minimum interval between page-task starts for a single host
-    #[arg(long = "per-host-delay-ms", default_value_t = 0)]
+    #[arg(
+        long = "per-host-delay-ms",
+        default_value_t = 0,
+        value_parser = bounded_u64(0, 3_600_000)
+    )]
     pub per_host_delay_ms: u64,
     /// Return success when some URLs fail; per-URL errors remain in the output
     #[arg(long = "allow-partial")]
@@ -1472,7 +1665,7 @@ pub struct BatchArgs {
 
     /// Concurrency limit for simultaneous network requests [default: 5]
     #[arg(
-        short = 'c',
+        short = 'j',
         long = "concurrency",
         default_value_t = 5,
         value_name = "N",
@@ -1480,12 +1673,21 @@ pub struct BatchArgs {
     )]
     pub concurrency: usize,
 
-    /// Output presentation format [default: markdown]
-    #[arg(short = 'f', long = "format", value_enum, default_value_t = CliFormat::Markdown)]
-    pub format: CliFormat,
+    /// Output presentation format: markdown, json, or jsonl [default: markdown]
+    #[arg(
+        short = 'f',
+        long = "format",
+        value_parser = search_output_formats(true)
+    )]
+    pub format: Option<CliFormat>,
 
     /// Maximum token budget per article
-    #[arg(short = 't', long = "max-tokens", value_name = "N")]
+    #[arg(
+        short = 't',
+        long = "max-tokens",
+        value_name = "N",
+        value_parser = bounded_usize(1, 10_000_000)
+    )]
     pub max_tokens: Option<usize>,
 
     /// CSS selector for targeted DOM extraction
@@ -1537,7 +1739,12 @@ pub struct BatchArgs {
     pub mobile: bool,
 
     /// 全局页面任务最小启动间隔 (毫秒)
-    #[arg(long = "delay-ms", default_value_t = 0, value_name = "MS")]
+    #[arg(
+        long = "delay-ms",
+        default_value_t = 0,
+        value_name = "MS",
+        value_parser = bounded_u64(0, 3_600_000)
+    )]
     pub delay_ms: u64,
 }
 
@@ -1584,7 +1791,12 @@ pub struct LoginArgs {
     pub no_browser: bool,
 
     /// Maximum waiting timeout in seconds
-    #[arg(long = "timeout", default_value_t = 180, value_name = "SECS")]
+    #[arg(
+        long = "timeout",
+        default_value_t = 180,
+        value_name = "SECS",
+        value_parser = bounded_u64(1, 3600)
+    )]
     pub timeout_secs: u64,
 }
 
@@ -1594,8 +1806,13 @@ pub struct McpArgs {
     #[arg(long = "dynamic")]
     pub dynamic: bool,
 
-    /// MCP 工具配置模式: 'full' (全量 27 工具) 或 'dynamic' (两阶段动态发现)
-    #[arg(long = "profile", default_value = "full", value_name = "PROFILE")]
+    /// MCP 工具配置模式: 'full' (全量 31 工具) 或 'dynamic' (两阶段动态发现)
+    #[arg(
+        long = "profile",
+        default_value = "full",
+        value_name = "PROFILE",
+        value_parser = ["full", "dynamic"]
+    )]
     pub profile: String,
 
     /// Disable response caching in MCP server
@@ -1603,7 +1820,12 @@ pub struct McpArgs {
     pub no_cache: bool,
 
     /// Cache TTL in seconds (default: 900 = 15 minutes)
-    #[arg(long = "cache-ttl", default_value_t = 900, value_name = "SECS")]
+    #[arg(
+        long = "cache-ttl",
+        default_value_t = 900,
+        value_name = "SECS",
+        value_parser = bounded_u64(1, 31_536_000)
+    )]
     pub cache_ttl: u64,
 
     /// Custom directory for persistent file cache
@@ -1635,11 +1857,11 @@ pub struct CrawlArgs {
     pub checkpoint: Option<PathBuf>,
     #[arg(long, requires = "checkpoint")]
     pub resume: bool,
-    #[arg(long)]
+    #[arg(long, value_parser = bounded_u64(1, 604_800))]
     pub max_seconds: Option<u64>,
-    #[arg(long)]
+    #[arg(long, value_parser = bounded_u64(1, 100_000_000_000))]
     pub max_output_bytes: Option<u64>,
-    #[arg(long, default_value_t = 10000)]
+    #[arg(long, default_value_t = 10000, value_parser = bounded_usize(1, 1_000_000))]
     pub max_pending_urls: usize,
     /// 读取 robots.txt 并按 TkLess / * 规则过滤页面
     #[arg(long)]
@@ -1652,7 +1874,13 @@ pub struct CrawlArgs {
     pub url: String,
 
     /// Maximum link traversal depth [default: 2]
-    #[arg(short = 'd', long = "max-depth", default_value_t = 2, value_name = "N")]
+    #[arg(
+        short = 'd',
+        long = "max-depth",
+        default_value_t = 2,
+        value_name = "N",
+        value_parser = bounded_usize(0, 10)
+    )]
     pub max_depth: usize,
 
     /// Maximum number of unique pages to crawl [default: 20]
@@ -1660,16 +1888,18 @@ pub struct CrawlArgs {
         short = 'P',
         long = "max-pages",
         default_value_t = 20,
-        value_name = "N"
+        value_name = "N",
+        value_parser = bounded_usize(1, 10_000)
     )]
     pub max_pages: usize,
 
     /// Concurrency limit for simultaneous network requests [default: 5]
     #[arg(
-        short = 'c',
+        short = 'j',
         long = "concurrency",
         default_value_t = 5,
-        value_name = "N"
+        value_name = "N",
+        value_parser = batch_concurrency
     )]
     pub concurrency: usize,
 
@@ -1680,9 +1910,13 @@ pub struct CrawlArgs {
     )]
     pub same_path_prefix: bool,
 
-    /// Output presentation format [default: markdown]
-    #[arg(short = 'f', long = "format", value_enum, default_value_t = CliFormat::Markdown)]
-    pub format: CliFormat,
+    /// Output presentation format: markdown, json, or jsonl [default: markdown]
+    #[arg(
+        short = 'f',
+        long = "format",
+        value_parser = search_output_formats(true)
+    )]
+    pub format: Option<CliFormat>,
 
     /// Write assembled crawl report to file instead of stdout
     #[arg(short = 'o', long = "output", value_name = "FILE")]
@@ -1719,7 +1953,12 @@ pub struct CrawlArgs {
     pub mobile: bool,
 
     /// 递归爬取单页面间歇延迟等待时间 (毫秒)，防止触发服务端 429 速率限制
-    #[arg(long = "delay-ms", default_value_t = 0, value_name = "MS")]
+    #[arg(
+        long = "delay-ms",
+        default_value_t = 0,
+        value_name = "MS",
+        value_parser = bounded_u64(0, 3_600_000)
+    )]
     pub delay_ms: u64,
 
     /// 将抓取结果打包为 Markdown ZIP（README 索引 + 每页一个 .md）
@@ -1729,4 +1968,164 @@ pub struct CrawlArgs {
     /// 将抓取结果导出为 EPUB 3 电子书
     #[arg(long = "epub", value_name = "FILE")]
     pub epub: Option<PathBuf>,
+}
+
+#[cfg(test)]
+mod output_contract_tests {
+    use super::*;
+
+    fn sub_format(args: &CliArgs) -> Option<CliFormat> {
+        match &args.command {
+            Some(SubCommand::Search(a)) => a.format,
+            Some(SubCommand::Research(a)) => a.format,
+            Some(SubCommand::Batch(a)) => a.format,
+            Some(SubCommand::Crawl(a)) => a.format,
+            Some(SubCommand::Diff(a)) => a.format,
+            Some(SubCommand::Adapters(a)) => a.format,
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn root_format_is_inherited_by_structured_subcommands() {
+        for argv in [
+            vec!["tkless", "-f", "json", "search", "Rust"],
+            vec!["tkless", "-f", "json", "batch", "urls.txt"],
+            vec!["tkless", "-f", "json", "crawl", "https://example.com"],
+            vec!["tkless", "-f", "json", "diff", "a.txt", "b.txt"],
+            vec!["tkless", "-f", "json", "adapters"],
+        ] {
+            let args = CliArgs::try_parse_from(argv.clone()).expect("valid root format");
+            assert_eq!(
+                args.structured_format(sub_format(&args), true).unwrap(),
+                CliFormat::Json,
+                "root -f json must reach {argv:?}"
+            );
+        }
+        let args = CliArgs::try_parse_from(["tkless", "-f", "json", "research", "topic"]).unwrap();
+        assert_eq!(
+            args.structured_format(sub_format(&args), false).unwrap(),
+            CliFormat::Json
+        );
+    }
+
+    #[test]
+    fn root_format_rejects_formats_the_subcommand_cannot_render() {
+        let args = CliArgs::try_parse_from(["tkless", "-f", "text", "search", "Rust"]).unwrap();
+        assert!(args.structured_format(sub_format(&args), true).is_err());
+        let args = CliArgs::try_parse_from(["tkless", "-f", "jsonl", "research", "Rust"]).unwrap();
+        assert!(args.structured_format(sub_format(&args), false).is_err());
+    }
+
+    #[test]
+    fn root_output_is_inherited_by_structured_subcommands() {
+        let args = CliArgs::try_parse_from(["tkless", "-o", "out.json", "adapters"]).unwrap();
+        assert_eq!(
+            args.output_path(None),
+            Some(std::path::Path::new("out.json"))
+        );
+        let args = CliArgs::try_parse_from(["tkless", "-o", "out.json", "search", "Rust"]).unwrap();
+        let Some(SubCommand::Search(search)) = &args.command else {
+            panic!("expected search");
+        };
+        assert_eq!(
+            args.output_path(search.output.as_deref()),
+            Some(std::path::Path::new("out.json"))
+        );
+    }
+
+    #[test]
+    fn conflicting_and_dependent_options_fail_at_parse_time() {
+        for argv in [
+            vec![
+                "tkless",
+                "https://example.com",
+                "--screenshot",
+                "a.png",
+                "--pdf",
+                "b.pdf",
+            ],
+            vec![
+                "tkless",
+                "https://example.com",
+                "--out-dir",
+                "dir",
+                "-o",
+                "out.md",
+            ],
+            vec!["tkless", "https://example.com", "--chunk-size", "100"],
+            vec!["tkless", "https://example.com", "--chunk-overlap", "10"],
+            vec!["tkless", "https://example.com", "--assets-dir", "assets"],
+        ] {
+            assert!(CliArgs::try_parse_from(argv.clone()).is_err(), "{argv:?}");
+        }
+        // --mcp-dynamic is validated at runtime so it can pair with the `mcp` subcommand.
+        assert!(CliArgs::try_parse_from(["tkless", "--mcp", "--mcp-dynamic"]).is_ok());
+        assert!(CliArgs::try_parse_from(["tkless", "--mcp-dynamic", "mcp"]).is_ok());
+    }
+
+    #[test]
+    fn numeric_ranges_are_enforced_at_parse_time() {
+        for argv in [
+            vec!["tkless", "https://example.com", "--max-size", "0"],
+            vec!["tkless", "https://example.com", "--timeout", "0"],
+            vec!["tkless", "https://example.com", "--connect-timeout", "0"],
+            vec!["tkless", "https://example.com", "--max-tokens", "0"],
+            vec!["tkless", "https://example.com", "--cache-ttl", "0"],
+            vec![
+                "tkless",
+                "https://example.com",
+                "--chunk",
+                "--chunk-size",
+                "0",
+            ],
+            vec!["tkless", "search", "Rust", "--limit", "101"],
+            vec!["tkless", "search", "Rust", "--since", "2026-02-30"],
+            vec!["tkless", "wechat", "source", "--limit", "1001"],
+            vec!["tkless", "research", "topic", "-P", "2"],
+            vec!["tkless", "crawl", "https://example.com", "-j", "0"],
+            vec![
+                "tkless",
+                "tables",
+                "https://example.com",
+                "--table-name",
+                "a; DROP TABLE x",
+            ],
+        ] {
+            assert!(CliArgs::try_parse_from(argv.clone()).is_err(), "{argv:?}");
+        }
+
+        assert!(CliArgs::try_parse_from([
+            "tkless",
+            "https://example.com",
+            "--bili-order",
+            "not-a-sort",
+        ])
+        .is_err());
+        assert!(CliArgs::try_parse_from([
+            "tkless",
+            "https://example.com",
+            "--bili-order",
+            "click"
+        ])
+        .is_ok());
+    }
+
+    #[test]
+    fn ambiguous_short_flags_are_gone() {
+        // `-c` now only means --cookie; config and concurrency use `-C` / `-j`.
+        assert!(CliArgs::try_parse_from(["tkless", "sync", "-c", "config.json"]).is_err());
+        assert!(CliArgs::try_parse_from([
+            "tkless",
+            "sync",
+            "-C",
+            "config.json",
+            "--state",
+            "state"
+        ])
+        .is_ok());
+        assert!(CliArgs::try_parse_from(["tkless", "batch", "urls.txt", "-j", "4"]).is_ok());
+        assert!(CliArgs::try_parse_from(["tkless", "cache", "-c"]).is_err());
+        assert!(CliArgs::try_parse_from(["tkless", "upgrade", "-f"]).is_err());
+    }
 }

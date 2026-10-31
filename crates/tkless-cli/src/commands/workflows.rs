@@ -1,11 +1,13 @@
 use crate::{cli::SubCommand, output};
 use anyhow::{bail, Result};
-use tkless_core::{ExtractionOptions, FetchOptions, TklessEngine};
+use std::path::Path;
+use tkless_core::{ExtractionOptions, FetchOptions, TklessEngine, TklessError};
 
 pub async fn run(
     command: &SubCommand,
     fetch_options: &FetchOptions,
     extraction_options: &ExtractionOptions,
+    root_output: Option<&Path>,
 ) -> Result<bool> {
     if let SubCommand::Wechat(args) = command {
         let options = tkless_core::wechat::WechatOptions {
@@ -28,7 +30,7 @@ pub async fn run(
                 .await?;
         output::write_payload(
             &serde_json::to_string_pretty(&report)?,
-            args.output.as_deref(),
+            args.output.as_deref().or(root_output),
         )?;
         if !report.complete && !args.allow_partial {
             bail!(
@@ -39,9 +41,14 @@ pub async fn run(
         return Ok(true);
     }
     if let SubCommand::Watch(watch) = command {
-        crate::paths::distinct(Some(&watch.config), watch.output.as_deref())?;
-        if watch.interval.is_some() && watch.output.is_some() {
-            bail!("--interval prints one JSON line per round and cannot be combined with --output");
+        let output_path = watch.output.as_deref().or(root_output);
+        crate::paths::distinct(Some(&watch.config), output_path)?;
+        if watch.interval.is_some() && output_path.is_some() {
+            return Err(TklessError::InvalidArgument(
+                "--interval prints one JSON line per round and cannot be combined with --output"
+                    .into(),
+            )
+            .into());
         }
         let config: tkless_core::watch::WatchConfig =
             serde_json::from_slice(&std::fs::read(&watch.config)?)?;
@@ -51,12 +58,12 @@ pub async fn run(
             let report =
                 tkless_core::watch::run_once(&engine, &config, extraction_options, &watch.state)
                     .await?;
-            let payload = if watch.interval.is_some() || watch.output.is_none() {
+            let payload = if watch.interval.is_some() || output_path.is_none() {
                 serde_json::to_string(&report)?
             } else {
                 serde_json::to_string_pretty(&report)?
             };
-            output::write_payload(&payload, watch.output.as_deref())?;
+            output::write_payload(&payload, output_path)?;
             if !report.complete && !watch.allow_partial {
                 bail!(
                     "Watch round incomplete: {} job error(s); inspect the report or use --allow-partial",
@@ -71,12 +78,13 @@ pub async fn run(
         return Ok(true);
     }
     if let SubCommand::Browse(browse) = command {
-        crate::paths::distinct(browse.output.as_deref(), Some(&browse.plan))?;
+        let output_path = browse.output.as_deref().or(root_output);
+        crate::paths::distinct(output_path, Some(&browse.plan))?;
         let plan: tkless_core::browser_workflow::BrowserPlan =
             serde_json::from_slice(&std::fs::read(&browse.plan)?)?;
         plan.validate()?;
         let mut fetch = fetch_options.clone();
-        let url = url::Url::parse(&browse.url)?;
+        let url = url::Url::parse(&browse.url).map_err(TklessError::UrlParse)?;
         fetch.initial_target_host = url.host_str().map(str::to_owned);
         fetch.initial_target_origin = Some(url.origin().ascii_serialization());
         let engine = TklessEngine::with_options(fetch)?;
@@ -87,22 +95,17 @@ pub async fn run(
             extraction_options,
         )
         .await?;
-        output::write_payload(
-            &serde_json::to_string_pretty(&doc)?,
-            browse.output.as_deref(),
-        )?;
+        output::write_payload(&serde_json::to_string_pretty(&doc)?, output_path)?;
         return Ok(true);
     }
     if let SubCommand::Sync(sync) = command {
-        crate::paths::distinct(
-            sync.collection.output.as_deref(),
-            Some(&sync.collection.config),
-        )?;
+        let output_path = sync.collection.output.as_deref().or(root_output);
+        crate::paths::distinct(output_path, Some(&sync.collection.config))?;
         let config: tkless_core::collection::CollectionConfig =
             serde_json::from_slice(&std::fs::read(&sync.collection.config)?)?;
         config.validate()?;
         std::fs::create_dir_all(&sync.state)?;
-        if let Some(output) = &sync.collection.output {
+        if let Some(output) = output_path {
             let parent = output
                 .parent()
                 .filter(|p| !p.as_os_str().is_empty())
@@ -111,11 +114,14 @@ pub async fn run(
                 .canonicalize()?
                 .starts_with(sync.state.canonicalize()?)
             {
-                bail!("Output must be outside the sync state directory");
+                return Err(TklessError::InvalidArgument(
+                    "Output must be outside the sync state directory".into(),
+                )
+                .into());
             }
         }
         let mut fetch = fetch_options.clone();
-        let url = url::Url::parse(&config.url)?;
+        let url = url::Url::parse(&config.url).map_err(TklessError::UrlParse)?;
         fetch.initial_target_host = url.host_str().map(str::to_owned);
         fetch.initial_target_origin = Some(url.origin().ascii_serialization());
         let engine = TklessEngine::with_options(fetch)?;
@@ -128,31 +134,26 @@ pub async fn run(
             budget,
         )
         .await?;
-        output::write_payload(
-            &serde_json::to_string_pretty(&report)?,
-            sync.collection.output.as_deref(),
-        )?;
+        output::write_payload(&serde_json::to_string_pretty(&report)?, output_path)?;
         if !report.complete && !sync.collection.allow_partial {
             bail!("Sync incomplete: {}", report.stop_reason);
         }
         return Ok(true);
     }
     if let SubCommand::Collect(collect) = command {
-        crate::paths::distinct(collect.output.as_deref(), Some(&collect.config))?;
+        let output_path = collect.output.as_deref().or(root_output);
+        crate::paths::distinct(output_path, Some(&collect.config))?;
         let config: tkless_core::collection::CollectionConfig =
             serde_json::from_slice(&std::fs::read(&collect.config)?)?;
         config.validate()?;
         let mut fetch = fetch_options.clone();
-        let url = url::Url::parse(&config.url)?;
+        let url = url::Url::parse(&config.url).map_err(TklessError::UrlParse)?;
         fetch.initial_target_host = url.host_str().map(str::to_owned);
         fetch.initial_target_origin = Some(url.origin().ascii_serialization());
         let engine = TklessEngine::with_options(fetch)?;
         let report =
             tkless_core::collection::collect_pages(&engine, &config, extraction_options).await?;
-        output::write_payload(
-            &serde_json::to_string_pretty(&report)?,
-            collect.output.as_deref(),
-        )?;
+        output::write_payload(&serde_json::to_string_pretty(&report)?, output_path)?;
         if !report.complete && !collect.allow_partial {
             bail!("Collection incomplete: {}", report.stop_reason);
         }

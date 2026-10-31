@@ -279,27 +279,32 @@ where
                 new_children.push((child.to_string(), depth));
             }
         }
-        if state.queue.len() + pending.len().saturating_sub(1) + new_children.len()
-            > options.max_pending_urls
-        {
-            reason = crate::workflow::StopReason::QueueBudget;
-            break 'crawl;
-        }
+        let queue_exceeded =
+            state.queue.len() + pending.len().saturating_sub(1) + new_children.len()
+                > options.max_pending_urls;
         let size = if is_map {
             0
         } else {
             serde_json::to_vec(&page)?.len() as u64
         };
-        if options
+        let output_exceeded = options
             .max_output_bytes
-            .is_some_and(|limit| output_bytes.saturating_add(size) > limit)
-        {
-            reason = crate::workflow::StopReason::OutputBudget;
-            break;
+            .is_some_and(|limit| output_bytes.saturating_add(size) > limit);
+        if queue_exceeded {
+            reason = crate::workflow::StopReason::QueueBudget;
         }
-        for (child, depth) in new_children {
-            state.visited.insert(normalize_url(&canonical_url(&child)?));
-            state.queue.push_back((child, depth));
+        if output_exceeded {
+            reason = crate::workflow::StopReason::OutputBudget;
+        }
+        let stop_after_page = queue_exceeded || output_exceeded;
+
+        // Commit the page that was already fetched before honoring the stop.
+        // Breaking earlier discarded it and caused a refetch on resume.
+        if !queue_exceeded {
+            for (child, depth) in new_children {
+                state.visited.insert(normalize_url(&canonical_url(&child)?));
+                state.queue.push_back((child, depth));
+            }
         }
         pending.remove(&rank);
         if !is_map {
@@ -322,6 +327,9 @@ where
         save(path, &lock, &state, &pending).await?;
         if let Some(cb) = &mut progress {
             cb(state.pages.len(), options.max_pages, &url);
+        }
+        if stop_after_page {
+            break 'crawl;
         }
     }
     tasks.abort_all();
@@ -381,11 +389,8 @@ async fn fetch_raw(
             .resolve_cookie_for_url(&canonical_url(url)?),
         ..Default::default()
     };
-    Ok((
-        crate::fetch_html_via_cdp(url, &options).await?,
-        url.into(),
-        200,
-    ))
+    let page = crate::cdp::fetch_rendered_page(url, &options).await?;
+    Ok((page.html, page.final_url, 200))
 }
 
 async fn check_robots(
@@ -394,20 +399,25 @@ async fn check_robots(
     cache: &tokio::sync::Mutex<BTreeMap<String, String>>,
 ) -> Result<(), TklessError> {
     let robots = url.join("/robots.txt")?;
-    let mut cache = cache.lock().await;
-    if let Some(text) = cache.get(robots.as_str()) {
-        return if robots_allowed(text, url) {
-            Ok(())
-        } else {
-            Err(TklessError::InvalidArgument(
-                "robots.txt disallows this URL for TkLess".into(),
-            ))
-        };
+    {
+        let cache = cache.lock().await;
+        if let Some(text) = cache.get(robots.as_str()) {
+            return if robots_allowed(text, url) {
+                Ok(())
+            } else {
+                Err(TklessError::InvalidArgument(
+                    "robots.txt disallows this URL for TkLess".into(),
+                ))
+            };
+        }
     }
+    // Do not hold the cache mutex across the network request: one slow hosts'
+    // robots.txt must not serialize every other crawl task.
     let raw = match engine.fetcher().fetch_api(robots.as_str()).await {
         Err(TklessError::HttpStatusError {
             status: 404 | 410, ..
         }) => {
+            let mut cache = cache.lock().await;
             if cache.len() >= 1000 {
                 cache.pop_first();
             }
@@ -417,6 +427,7 @@ async fn check_robots(
         result => result?,
     };
     if matches!(raw.status, 404 | 410) {
+        let mut cache = cache.lock().await;
         if cache.len() >= 1000 {
             cache.pop_first();
         }
@@ -432,10 +443,13 @@ async fn check_robots(
     if raw.truncated {
         return Err(TklessError::InvalidArgument("Truncated robots.txt".into()));
     }
-    if cache.len() >= 1000 {
-        cache.pop_first();
+    {
+        let mut cache = cache.lock().await;
+        if cache.len() >= 1000 {
+            cache.pop_first();
+        }
+        cache.insert(robots.to_string(), raw.html.clone());
     }
-    cache.insert(robots.to_string(), raw.html.clone());
     if !robots_allowed(&raw.html, url) {
         return Err(TklessError::InvalidArgument(
             "robots.txt disallows this URL for TkLess".into(),

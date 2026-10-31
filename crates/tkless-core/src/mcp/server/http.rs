@@ -11,6 +11,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Semaphore;
 use tracing::{debug, info};
+use url::Url;
 
 const MAX_HEADER_BYTES: usize = 16 * 1024;
 const MAX_BODY_BYTES: usize = 1024 * 1024;
@@ -64,6 +65,9 @@ struct HttpRequest {
     method: String,
     path: String,
     authorization: Option<String>,
+    host: Option<String>,
+    origin: Option<String>,
+    content_type: Option<String>,
     body: Vec<u8>,
 }
 
@@ -105,6 +109,22 @@ async fn handle_connection(
         Ok(Err(message)) => return write_text(&mut stream, 400, "Bad Request", &message).await,
         Err(_) => return write_text(&mut stream, 408, "Request Timeout", "").await,
     };
+    let listener_addr = stream.local_addr()?;
+
+    // Reject DNS-rebinding and cross-origin browser requests before dispatching any
+    // tool. Non-browser clients do not send `Origin`, so they remain supported.
+    if !host_header_allowed(request.host.as_deref(), listener_addr) {
+        return write_text(&mut stream, 403, "Forbidden", "Invalid Host header").await;
+    }
+    if !origin_allowed(request.origin.as_deref(), listener_addr) {
+        return write_text(
+            &mut stream,
+            403,
+            "Forbidden",
+            "Cross-origin requests are not allowed",
+        )
+        .await;
+    }
 
     if request.method == "GET" && request.path == "/healthz" {
         return write_json(
@@ -134,6 +154,16 @@ async fn handle_connection(
             )
             .await;
         }
+    }
+    // Simple cross-site form posts use `text/plain` and bypass CORS preflight.
+    if !is_json_content_type(request.content_type.as_deref()) {
+        return write_text(
+            &mut stream,
+            415,
+            "Unsupported Media Type",
+            "Content-Type must be application/json",
+        )
+        .await;
     }
     let line = match String::from_utf8(request.body) {
         Ok(line) => line,
@@ -196,6 +226,9 @@ async fn read_request(stream: &mut TcpStream) -> Result<HttpRequest, String> {
         .unwrap_or("/")
         .to_string();
     let mut authorization = None;
+    let mut host = None;
+    let mut origin = None;
+    let mut content_type = None;
     let mut content_length = None;
     for line in lines {
         let Some((name, value)) = line.split_once(':') else {
@@ -205,6 +238,9 @@ async fn read_request(stream: &mut TcpStream) -> Result<HttpRequest, String> {
         let value = value.trim();
         match name.as_str() {
             "authorization" => authorization = Some(value.to_string()),
+            "host" => host = Some(value.to_string()),
+            "origin" => origin = Some(value.to_string()),
+            "content-type" => content_type = Some(value.to_string()),
             "content-length" => {
                 content_length = Some(
                     value
@@ -238,6 +274,9 @@ async fn read_request(stream: &mut TcpStream) -> Result<HttpRequest, String> {
             method,
             path,
             authorization,
+            host,
+            origin,
+            content_type,
             body: Vec::new(),
         });
     }
@@ -245,6 +284,9 @@ async fn read_request(stream: &mut TcpStream) -> Result<HttpRequest, String> {
         method,
         path,
         authorization,
+        host,
+        origin,
+        content_type,
         body: buffer[body_start..body_start + content_length].to_vec(),
     })
 }
@@ -254,14 +296,91 @@ fn find_header_end(buffer: &[u8]) -> Option<usize> {
 }
 
 fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
-    if left.len() != right.len() {
-        return false;
-    }
-    let mut difference = 0u8;
-    for (a, b) in left.iter().zip(right.iter()) {
-        difference |= a ^ b;
+    let mut difference = left.len() ^ right.len();
+    let max_len = left.len().max(right.len());
+    for index in 0..max_len {
+        let a = left.get(index).copied().unwrap_or(0);
+        let b = right.get(index).copied().unwrap_or(0);
+        difference |= (a ^ b) as usize;
     }
     difference == 0
+}
+
+fn split_host_port(value: &str) -> (&str, Option<u16>) {
+    let value = value.trim();
+    if let Some(rest) = value.strip_prefix('[') {
+        if let Some(end) = rest.find(']') {
+            let port = rest[end + 1..]
+                .strip_prefix(':')
+                .and_then(|port| port.parse::<u16>().ok());
+            return (&rest[..end], port);
+        }
+    }
+    if let Some((host, port)) = value.rsplit_once(':') {
+        if let Ok(port) = port.parse::<u16>() {
+            return (host, Some(port));
+        }
+    }
+    (value, None)
+}
+
+fn is_loopback_name(host: &str) -> bool {
+    let host = host.trim().trim_start_matches('[').trim_end_matches(']');
+    host.eq_ignore_ascii_case("localhost")
+        || host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback())
+}
+
+fn host_header_allowed(value: Option<&str>, addr: SocketAddr) -> bool {
+    let Some(value) = value else {
+        return false;
+    };
+    let (host, port) = split_host_port(value);
+    if host.is_empty() {
+        return false;
+    }
+    if !addr.ip().is_loopback() {
+        // Public bindings already require a Bearer token; accept the configured
+        // interface name or IP and let the token provide the authorization.
+        return true;
+    }
+    if port.is_some_and(|port| port != addr.port()) {
+        return false;
+    }
+    is_loopback_name(host)
+}
+
+fn origin_allowed(origin: Option<&str>, addr: SocketAddr) -> bool {
+    let Some(origin) = origin else {
+        return true;
+    };
+    if !addr.ip().is_loopback() {
+        return true;
+    }
+    if origin.eq_ignore_ascii_case("null") {
+        return false;
+    }
+    let Ok(url) = Url::parse(origin) else {
+        return false;
+    };
+    if !matches!(url.scheme(), "http" | "https") {
+        return false;
+    }
+    if url.port_or_known_default() != Some(addr.port()) {
+        return false;
+    }
+    url.host_str().is_some_and(is_loopback_name)
+}
+
+fn is_json_content_type(value: Option<&str>) -> bool {
+    value
+        .and_then(|value| value.split(';').next())
+        .map(str::trim)
+        .is_some_and(|media_type| {
+            media_type.eq_ignore_ascii_case("application/json")
+                || media_type.to_ascii_lowercase().ends_with("+json")
+        })
 }
 
 async fn write_text(

@@ -229,8 +229,8 @@ tkless browse https://example.com/search --plan ./browser.json -o rendered.json
 ```
 
 ```bash
-# 单轮（推荐由 cron 调用），报告写到 stdout 或 -o 文件
-tkless watch --config ./watch.json --state ./watch-state --once -o ./round.json
+# 单轮（推荐由 cron 调用；省略 --interval 即只执行一轮），报告写到 stdout 或 -o 文件
+tkless watch --config ./watch.json --state ./watch-state -o ./round.json
 
 # 前台循环，每 3600 秒一轮；每轮输出一行 JSON
 TKLESS_WEBHOOK_SECRET=... tkless watch --config ./watch.json --state ./watch-state --interval 3600

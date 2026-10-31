@@ -51,12 +51,38 @@ pub async fn run_doctor(
 
     // 3. Local Storage & Response Cache
     out.push_str("\n[3/4] 本地响应缓存 (Response Cache):\n");
+    let mut failures = 0usize;
     let cache = DocumentCache::new(None, 900);
     let stats = cache.stats();
     let cache_dir_disp = stats
         .cache_dir
+        .clone()
         .unwrap_or_else(|| "系统标准缓存目录".to_string());
-    out.push_str("  - 读写状态 : 缓存存储读写正常\n");
+    match stats.cache_dir.as_deref() {
+        Some(dir) => {
+            let probe = std::path::Path::new(dir).join(format!(
+                ".tkless-doctor-{}-{}.probe",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_nanos())
+                    .unwrap_or_default()
+            ));
+            let probe_ok = std::fs::create_dir_all(dir).is_ok()
+                && std::fs::write(&probe, b"tkless-doctor").is_ok()
+                && std::fs::read(&probe).is_ok_and(|data| data == b"tkless-doctor")
+                && std::fs::remove_file(&probe).is_ok();
+            if probe_ok {
+                out.push_str("  - 读写状态 : 缓存存储读写正常\n");
+            } else {
+                failures += 1;
+                out.push_str("  - 读写状态 : 缓存目录不可写，请检查目录权限或 --cache-dir\n");
+            }
+        }
+        None => {
+            out.push_str("  - 读写状态 : 未启用磁盘缓存（仅使用内存缓存）\n");
+        }
+    }
     out.push_str(&format!("  - 缓存目录 : {}\n", cache_dir_disp));
     out.push_str(&format!(
         "  - 活跃容量 : {} 项内存条目, {} 项磁盘条目 (总占用: {})\n",
@@ -102,6 +128,7 @@ pub async fn run_doctor(
             ));
         }
         Err(e) => {
+            failures += 1;
             out.push_str(&format!("  - Microsoft Bing 搜索  : 连接失败 ({})\n", e));
         }
     }
@@ -127,10 +154,22 @@ pub async fn run_doctor(
             ));
         }
         Err(e) => {
+            failures += 1;
             out.push_str(&format!("  - Bilibili 开放接口     : 连接失败 ({})\n", e));
         }
     }
 
-    out.push_str("\n诊断完成！所有核心子系统均已完成自检。\n");
-    crate::output::write_payload(&out, doc_args.output.as_deref().or(output_file))
+    if failures == 0 {
+        out.push_str("\n诊断完成！所有核心子系统均已完成自检。\n");
+    } else {
+        out.push_str(&format!(
+            "\n诊断完成，但发现 {} 项问题，请检查上方输出。\n",
+            failures
+        ));
+    }
+    crate::output::write_payload(&out, doc_args.output.as_deref().or(output_file))?;
+    if failures > 0 {
+        anyhow::bail!("Doctor detected {failures} problem(s)");
+    }
+    Ok(())
 }

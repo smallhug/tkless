@@ -51,6 +51,7 @@ async fn http_transport_serves_json_rpc_and_health() {
     // Malformed payloads still receive a JSON-RPC error rather than a transport panic.
     let response = client
         .post(format!("{base}/mcp"))
+        .header("Content-Type", "application/json")
         .body("not json")
         .send()
         .await
@@ -66,6 +67,42 @@ async fn http_transport_serves_json_rpc_and_health() {
         .await
         .unwrap();
     assert_eq!(response.status(), 404);
+    task.abort();
+}
+
+#[tokio::test]
+async fn http_transport_rejects_cross_origin_and_non_json_requests() {
+    let (base, task) = spawn_server(None).await;
+    let client = client();
+
+    let cross_origin = client
+        .post(format!("{base}/mcp"))
+        .header("Origin", "https://attacker.example")
+        .json(&serde_json::json!({"jsonrpc":"2.0","id":1,"method":"ping"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(cross_origin.status(), 403);
+
+    // DNS rebinding keeps the socket on loopback but sends the attacker's hostname.
+    let rebound_host = client
+        .post(format!("{base}/mcp"))
+        .header("Host", "attacker.example")
+        .json(&serde_json::json!({"jsonrpc":"2.0","id":1,"method":"ping"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(rebound_host.status(), 403);
+
+    let simple_form_post = client
+        .post(format!("{base}/mcp"))
+        .header("Content-Type", "text/plain")
+        .body("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(simple_form_post.status(), 415);
+
     task.abort();
 }
 

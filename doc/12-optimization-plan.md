@@ -1,6 +1,6 @@
 # 12 - 能力缺口与优化方案
 
-> 对齐日期：2026-10-30。对应 0.5.0 及当前未发布工作区（公众号授权历史采集已移除，公开文章/合集/名称发现保留）。
+> 对齐日期：2026-10-31。对应 0.6.0 源码（未发布；公众号授权历史采集已移除，公开文章/合集/名称发现保留）。
 > 本文是规划文档，**不代表任何条目已经实现**；所有工作量与收益均为估算，不作为交付承诺。
 
 ---
@@ -152,9 +152,11 @@
 **方案**：新增 `watch` 子命令，采用"单轮执行 + 外部调度"模型，避免内建常驻进程：
 
 ```
-tkless watch --config ./watch.json --state ./watch-state --once -o events.jsonl
+tkless watch --config ./watch.json --state ./watch-state -o events.jsonl
 tkless watch --config ./watch.json --state ./watch-state --interval 3600
 ```
+
+省略 `--interval` 时只执行一轮。
 
 `watch.json`：
 
@@ -176,7 +178,7 @@ tkless watch --config ./watch.json --state ./watch-state --interval 3600
 设计要点：
 
 - 复用 `sync.rs` 的快照与事件模型（`added/updated/removed/unchanged/error`），状态文件沿用 `state_file` 的锁与原子写；
-- `--once` 供 cron / Task Scheduler / systemd timer 调用；`--interval` 仅在本地前台运行，不注册系统服务；
+- 省略 `--interval` 时只执行一轮，供 cron / Task Scheduler / systemd timer 调用；`--interval` 仅在本地前台运行，不注册系统服务；
 - 通知 sink 首期支持 `stdout`、`file`、`http`（POST JSON）；HTTP sink 必须做 SSRF 校验，重试与超时受限，失败不影响本轮 `complete` 语义但写入 `errors`；
 - webhook 签名可选：`HMAC-SHA256(secret, body)`，密钥仅从环境变量或文件读取，不落日志与报告；
 - 预算：每个 job 有 `max_pages`/`max_items`/`time_budget_ms`；整轮有总时长上限，超时保留已完成 job 并标记 `partial`。
@@ -185,7 +187,7 @@ tkless watch --config ./watch.json --state ./watch-state --interval 3600
 
 - 两次运行之间制造"新增/修改/删除"各一项，事件类型与 ID 稳定；
 - 单轮超时、webhook 5xx、状态文件损坏分别返回可区分的错误码；
-- `--once` 退出码语义：本轮全部 job 完整为 0，存在部分结果为 1（可 `--allow-partial`）。
+- 单轮退出码语义：本轮全部 job 完整为 0，存在部分结果为 1（可 `--allow-partial`）。
 
 ### WS4 MCP 传输、异步任务与协议演进（P1，已实施；SSE / 会话已舍弃）
 
