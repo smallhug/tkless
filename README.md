@@ -337,6 +337,8 @@ tkless completions powershell
 - `--stream` 当前在内容处理完成后逐行写出并 flush，并非网络获取、解析和输出同时进行。
 - 单页、`search`、`batch`、`crawl`、`adapters`、`diff` 支持 JSONL。列表型结果逐项输出，单文档输出一个完整 JSON 对象；`research` 仅支持 Markdown 和 JSON。子命令会拒绝未支持的格式。
 
+以下能力明确不在计划内：第二搜索引擎、OCR/ASR 模型、XLSX 解析、代理池、OTLP、S3/对象存储或数据库 sink、MCP SSE/持久会话、批量编译式站点适配器。需要时请用外部工具预处理/后处理；决策记录见 [优化方案 §9.1](doc/12-optimization-plan.md#91-已舍弃的候选功能2026-10-31-决策)。
+
 ## MCP 接入
 
 当前服务默认通过 stdio 传输，也可用 `--http ADDR` 提供无状态 HTTP JSON-RPC（`POST /mcp`、`GET /healthz`，默认仅回环，非回环需 `--allow-public-bind` 与 Bearer Token），仅实现 `2025-11-25` 协议。工具调用并发执行，支持 `notifications/cancelled`，单次调用超时默认 300 秒（`--tool-timeout-secs` 可调），最多 64 个在途调用；动态模式声明 `tools.listChanged`。长任务可用 `jobs_start` 转为后台执行并以 `jobs_status` 轮询。业务工具和参数见 [tools.rs](crates/tkless-core/src/mcp/tools.rs)。
