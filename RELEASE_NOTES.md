@@ -1,10 +1,20 @@
 # TkLess 更新说明
 
-## 未发布（0.7.0）
+## v0.7.0 - 2026-10-31
+
+本次发布聚焦 MCP `2026-07-28` 协议与 DeepSeek Harness 插件。
 
 ### MCP
 
 - 协议升级到 `2026-07-28`：移除 `initialize` 握手、`ping` 与 `logging/setLevel`；每个请求在 `params._meta` 中携带协议版本与客户端能力，服务端实现 `server/discover`，所有结果带 `resultType`，`tools/list` 提供 `ttlMs`/`cacheScope`。HTTP 增加 `MCP-Protocol-Version`、`Mcp-Method`、`Mcp-Name` 校验。
+
+### DeepSeek Harness
+
+- 新增根目录 DSH bundle：覆盖 `standard`/`ptc`/`cordis` 三个 agent preset，移除内置 `web_search` 并保留 `web_fetch`；以 `mcp__tkless__*` 暴露动态工具，并转发 `structuredContent`、支持批量 `stream_results`。
+- 安装地址 `github:smallhug/tkless#v0.7.0`；首次启用自动下载并校验 Release 的 `SHA256SUMS`，Windows x64 与 Linux x64/ARM64 支持自动下载，macOS 需设置 `binaryPath`。
+- 版本锁定 DSH `0.2.1-rc.5`；升级 DSH 后需用 `scripts/sync-dsh-presets.cjs` 重新生成 preset 覆盖并发布新版本插件。
+- 新会话不再注册 `web_search`；安装前已打开的会话由 guard 拒绝调用。安装后需新开会话观察。
+- 若发布环境未配置 Minisign Secrets，本次仍上传未签名 `SHA256SUMS`；`tkless upgrade` 继续 fail closed，DSH 插件仅依赖 `SHA256SUMS`。
 
 ## v0.6.0 - 2026-10-31
 
