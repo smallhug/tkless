@@ -73,7 +73,7 @@
 - SSRF 判定补齐 NAT64、6to4、IPv4-translated、site-local 与 `192.88.99.0/24`；媒体下载拒绝非 HTTP(S) 与私网 IP 字面量，限制 16 GiB 并对 Range 运算使用饱和计算。
 - PDF 的 HTTP 解析移入阻塞线程并限制 60 秒；frontmatter 使用 YAML 转义。CDP 临时配置目录改为随机路径并设置 `0700`，端点判定改为精确主机解析。
 - `Retry-After` 单次上限降为 60 秒；Cookie Jar 拒绝值内 `;`/`,`；缓存维护增加单条大小上限，`clear()` 只删除 `*.json`。
-- 自升级改为验证 Minisign 签名清单：Release 发布 `SHA256SUMS` 与 `SHA256SUMS.minisig`，二进制内置公钥，校验版本、资产名与 SHA-256 后才替换；签名在受保护 `release-signing` Environment 中执行，未配置密钥时 fail closed。
+- 自升级改为验证 Minisign 签名清单：Release 发布 `SHA256SUMS` 与 `SHA256SUMS.minisig`，二进制内置公钥，校验版本、资产名与 SHA-256 后才替换；签名在受保护 `release-signing` Environment 中执行。未配置密钥时发布流水线仍会生成未签名 Release，但 `tkless upgrade` fail closed；配置后才上传签名清单。
 - 本次安全项的剩余边界记录在 [doc/09](doc/09-security-hardening.md) 与 [doc/13](doc/13-code-audit.md)。
 
 ## [0.5.0] - 2026-10-30

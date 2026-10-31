@@ -64,14 +64,14 @@ TkLess 遵循 [SemVer 2.0.0](https://semver.org/) 规范：
    - 配置 Required reviewers（至少一名维护者）
    - 仅允许受保护分支/标签触发（按 GitHub 当前可用策略配置）
 
-4. 在该 Environment 中保存 Secrets：
+4. 在该 Environment 中可选地保存 Secrets（用于签名发布）：
 
    | Secret | 内容 |
    | :--- | :--- |
    | `MINISIGN_SECRET_KEY` | Minisign 私钥文件的 base64 编码（`base64 -w0 tkless-upgrade.key`） |
    | `MINISIGN_PASSWORD` | 私钥密码 |
 
-   私钥不要提交到仓库，也不要放进普通仓库级 Secret；只放在受保护 Environment 中。
+   私钥不要提交到仓库，也不要放进普通仓库级 Secret；只放在受保护 Environment 中。未配置这两个 Secret 时，发布流水线仍会创建 Release，但只上传未签名的 `SHA256SUMS`；`tkless upgrade` 因缺少 `SHA256SUMS.minisig` 而 fail closed。
 
 > 本地源码构建默认没有内置公钥（仓库中的 `tkless-upgrade.pub` 是占位文件），因此 `tkless upgrade` 会 fail closed。需要先按上述步骤写入真实公钥并重新构建，或使用官方签名版本。
 
@@ -87,9 +87,9 @@ TkLess 遵循 [SemVer 2.0.0](https://semver.org/) 规范：
   ...
   ```
 
-- 使用 `minisign -Sm SHA256SUMS` 生成 `SHA256SUMS.minisig`。
-- 用仓库内公钥执行 `minisign -Vm SHA256SUMS -p ...` 自检；失败则整个发布失败，不会创建 Release。
-- 上传全部产物、`SHA256SUMS` 与 `SHA256SUMS.minisig`。
+- 若已配置 Minisign Secrets：使用 `minisign -Sm SHA256SUMS` 生成 `SHA256SUMS.minisig`，并用仓库内公钥执行 `minisign -Vm SHA256SUMS -p ...` 自检；失败则整个发布失败，不会创建 Release。
+- 若未配置 Secrets：输出警告并上传未签名清单，不创建 `SHA256SUMS.minisig`。
+- 上传全部产物与 `SHA256SUMS`；签名成功时同时上传 `SHA256SUMS.minisig`。
 
 **密钥轮换：**
 
@@ -140,7 +140,7 @@ strip = true            # 自动剥离全部调试符号
 
 体积随目标平台、依赖、feature 和工具链变化，应记录对应构建产物的实际大小，不使用固定体积作为已达成的跨平台保证。
 
-发布工作流为每个二进制或 DMG 生成同名 `.sha256` 文件（兼容旧客户端），并在受保护环境中生成、签名 `SHA256SUMS`。新版本自升级只信任已签名清单中的哈希；缺少签名、签名无效或版本不匹配时拒绝替换。
+发布工作流为每个二进制或 DMG 生成同名 `.sha256` 文件（兼容旧客户端），并在受保护环境中生成 `SHA256SUMS`。配置 Minisign Secrets 时会额外签名并验证；未配置时仅发布未签名清单。新版本自升级只信任已签名清单中的哈希；缺少签名、签名无效或版本不匹配时拒绝替换。
 
 工作区更新说明不代表已经发布；版本标签、版本号与 Release 正文应在发版时共同核对。
 

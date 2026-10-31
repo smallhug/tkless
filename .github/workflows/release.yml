@@ -162,6 +162,7 @@ jobs:
           sudo apt-get install -y minisign expect
 
       - name: Create and sign release manifest
+        id: manifest
         env:
           MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
           MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
@@ -169,29 +170,10 @@ jobs:
           set -euo pipefail
 
           version="${GITHUB_REF_NAME#v}"
-          test -n "$MINISIGN_SECRET_KEY" || {
-            echo "Missing MINISIGN_SECRET_KEY in the release-signing environment" >&2
-            exit 1
-          }
-          test -n "$MINISIGN_PASSWORD" || {
-            echo "Missing MINISIGN_PASSWORD in the release-signing environment" >&2
-            exit 1
-          }
 
-          key="$RUNNER_TEMP/minisign.key"
-          public_key="$RUNNER_TEMP/minisign.pub"
-          trap 'rm -f "$key" "$public_key"' EXIT
-
-          printf '%s' "$MINISIGN_SECRET_KEY" | base64 -d > "$key"
-          chmod 600 "$key"
-
-          test -s crates/tkless-cli/assets/tkless-upgrade.pub || {
-            echo "Missing crates/tkless-cli/assets/tkless-upgrade.pub" >&2
-            exit 1
-          }
-
-          # Include real platform artifacts only; the per-asset .sha256 files are
-          # kept for older clients but are not part of the signed manifest.
+          # Always generate the checksum manifest. Signing is optional until the
+          # release-signing environment provides a Minisign key; publishing an
+          # unsigned release must not block the whole pipeline.
           (
             cd dist
             find . -maxdepth 1 -type f ! -name '*.sha256' -printf '%f\n' \
@@ -205,6 +187,24 @@ jobs:
             cat SHA256SUMS
           } > SHA256SUMS.tmp
           mv SHA256SUMS.tmp SHA256SUMS
+
+          if [ -z "${MINISIGN_SECRET_KEY:-}" ] || [ -z "${MINISIGN_PASSWORD:-}" ]; then
+            echo "::warning::MINISIGN_SECRET_KEY or MINISIGN_PASSWORD is not configured; publishing an unsigned manifest. tkless upgrade remains fail-closed until a real public key and signature are available."
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          key="$RUNNER_TEMP/minisign.key"
+          public_key="$RUNNER_TEMP/minisign.pub"
+          trap 'rm -f "$key" "$public_key"' EXIT
+
+          printf '%s' "$MINISIGN_SECRET_KEY" | base64 -d > "$key"
+          chmod 600 "$key"
+
+          test -s crates/tkless-cli/assets/tkless-upgrade.pub || {
+            echo "Missing crates/tkless-cli/assets/tkless-upgrade.pub" >&2
+            exit 1
+          }
 
           expect <<'EOF'
           set timeout 60
@@ -235,13 +235,27 @@ jobs:
             exit 1
           fi
 
-      - name: Publish GitHub Release
+          echo "signed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Publish GitHub Release (signed)
+        if: steps.manifest.outputs.signed == 'true'
         uses: softprops/action-gh-release@v2
         with:
           files: |
             dist/*
             SHA256SUMS
             SHA256SUMS.minisig
+          body_path: RELEASE_NOTES.md
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish GitHub Release (unsigned)
+        if: steps.manifest.outputs.signed != 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*
+            SHA256SUMS
           body_path: RELEASE_NOTES.md
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
