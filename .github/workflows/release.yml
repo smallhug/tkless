@@ -35,7 +35,9 @@ jobs:
             pkg_type: binary
             use_cross: true
           - target: x86_64-apple-darwin
-            os: macos-13
+            # Intel macOS runners are retired; cross-compile the x86_64 binary on an
+            # Apple Silicon runner (the Rust target is added by rust-toolchain).
+            os: macos-latest
             artifact_name: tkless-macos-amd64.dmg
             binary_name: tkless
             pkg_type: dmg

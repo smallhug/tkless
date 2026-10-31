@@ -37,6 +37,7 @@
 - `--stats` 遥测改写到 stderr，保证 `-f json --stats` 的 stdout 仍是合法 JSON；`--log-format json` 同时覆盖致命错误。
 - MCP 的 `fetch_webpage` 增加 `jsonl` 与 `max_size_mb`，`batch_fetch_webpages` 增加 `extract_links`/`extract_tables`/`no_images`/`no_links`，`deep_research` 增加 `proxy`；MCP 缓存默认改为 opt-in，与 CLI 一致。
 - 文档与帮助同步：移除不存在的 `platforms`/`update` 别名与 `watch --once`；统一 MCP 业务工具数量为 31；修正 REPL 命令、`--chunk` 输出、退出码与安全边界描述。
+- CI/Release 的 checkout、cache、artifact actions 升级到 Node 24 运行时版本；x86_64 macOS DMG 改在 `macos-latest` 上交叉编译，避免 Intel runner 退役导致发布排队。
 
 ### Planned
 
