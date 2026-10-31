@@ -1,5 +1,7 @@
 # TkLess 0.5.0 更新说明
 
+> 当前源码版本为 **0.6.0**。本文件保留 0.5.0 的功能说明；0.6.0 的 CLI 规范、安全与文档变更见 [CHANGELOG](CHANGELOG.md)。
+
 更新日期：2026-10-30。本说明对应 0.5.0 源码，不代表已经发布到 GitHub Release。已发布版本以 Release 标签和附件为准。
 
 ## 0.5.0 新增工作流
@@ -92,7 +94,7 @@ tkless search "DeepSeek" --cdp http://127.0.0.1:9222 --cdp-wait 1500 -f json
 
 MCP 搜索 `limit` 范围为 1–20，默认 10；`auto_cdp` 默认 false。搜索与调研拒绝未声明参数。`dedup`=true、`max_tokens_per_page`、`schema` 要求 `fetch_content`=true。
 
-完整模式提供 27 个业务工具；动态模式初始提供 2 个核心工具和 4 个发现元工具。完整 Schema 以 `tools/list` 或动态工具 `get_tool_schema` 返回为准。
+完整模式提供 31 个业务工具；动态模式初始提供 2 个核心工具和 4 个发现元工具。完整 Schema 以 `tools/list` 或动态工具 `get_tool_schema` 返回为准。
 
 ## 其他当前能力与边界
 

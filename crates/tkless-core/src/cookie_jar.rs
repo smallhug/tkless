@@ -205,7 +205,7 @@ fn parse_set_cookie(
     if value.len() >= 2 && value.starts_with('"') && value.ends_with('"') {
         value = &value[1..value.len() - 1];
     }
-    if value.len() > MAX_VALUE_BYTES || value.chars().any(|c| c.is_control() || c == ';') {
+    if !valid_cookie_value(value) {
         return None;
     }
 
@@ -297,10 +297,17 @@ fn valid_name(name: &str) -> bool {
         })
 }
 
+/// Rejects characters that can break out of a `name=value` cookie pair.
+fn valid_cookie_value(value: &str) -> bool {
+    value.len() <= MAX_VALUE_BYTES
+        && !value
+            .chars()
+            .any(|c| c.is_control() || matches!(c, ';' | ','))
+}
+
 fn valid_cookie(cookie: &StoredCookie) -> bool {
     valid_name(&cookie.name)
-        && cookie.value.len() <= MAX_VALUE_BYTES
-        && !cookie.value.chars().any(|c| c.is_control())
+        && valid_cookie_value(&cookie.value)
         && !cookie.domain.is_empty()
         && cookie.domain.len() <= MAX_DOMAIN_BYTES
         && cookie.path.starts_with('/')

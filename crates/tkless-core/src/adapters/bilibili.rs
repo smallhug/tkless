@@ -552,6 +552,7 @@ impl BilibiliAdapter {
                 cookie: cookie_str.as_deref(),
                 reporter,
                 concurrency: None,
+                allow_private_addresses: fetcher.options().allow_private_addresses,
             },
         )
         .await?;
@@ -653,6 +654,7 @@ impl BilibiliAdapter {
                     cookie: cookie_str.as_deref(),
                     reporter,
                     concurrency: Some(4), // 4-thread concurrent HTTP Range download to saturate bandwidth
+                    allow_private_addresses: fetcher.options().allow_private_addresses,
                 },
             )
             .await

@@ -206,6 +206,32 @@ fn test_integration_selector_targeted_extraction() {
 }
 
 #[test]
+fn test_integration_selector_zero_match_and_nested_duplicates() {
+    let engine = TklessEngine::new().expect("Failed to initialize engine");
+
+    let options = ExtractionOptions {
+        selector: Some(".does-not-exist".to_string()),
+        ..Default::default()
+    };
+    assert!(
+        engine
+            .process_html("<html><body><p>Hello</p></body></html>", None, &options)
+            .is_err(),
+        "a selector that matches nothing must not look like a successful extraction"
+    );
+
+    let nested_html = r#"<html><body><div class="outer"><div class="inner">UniqueNeedle</div></div></body></html>"#;
+    let nested_options = ExtractionOptions {
+        selector: Some(".outer, .inner".to_string()),
+        ..Default::default()
+    };
+    let doc = engine
+        .process_html(nested_html, None, &nested_options)
+        .unwrap();
+    assert_eq!(doc.content.matches("UniqueNeedle").count(), 1);
+}
+
+#[test]
 fn test_integration_extract_assets_and_tables_json() {
     let engine = TklessEngine::new().expect("Failed to initialize engine");
 
@@ -573,6 +599,53 @@ fn test_integration_extraction_metrics_telemetry() {
         "Noise reduction percent must be positive"
     );
     assert_eq!(metrics.final_token_count, doc.token_count);
+}
+
+#[test]
+fn test_integration_feed_respects_budget_and_chunking() {
+    let engine = TklessEngine::new().expect("Failed to initialize engine");
+    let sample_rss = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <rss version="2.0">
+            <channel>
+                <title>Long Feed</title>
+                <link>https://example.com/feed</link>
+                <description>Feed used to verify the shared extraction pipeline.</description>
+                <item>
+                    <title>First advisory</title>
+                    <link>https://example.com/1</link>
+                    <description>Critical vulnerability remediation details for the first advisory, with enough text to exceed a small token budget.</description>
+                </item>
+                <item>
+                    <title>Second advisory</title>
+                    <link>https://example.com/2</link>
+                    <description>Additional operational guidance and mitigation steps for the second advisory.</description>
+                </item>
+            </channel>
+        </rss>
+    "#;
+
+    let options = ExtractionOptions {
+        format: OutputFormat::Markdown,
+        max_tokens: Some(20),
+        chunk: true,
+        chunk_size: Some(50),
+        chunk_overlap: Some(0),
+        summarize: true,
+        ..Default::default()
+    };
+    let doc = engine
+        .process_html(sample_rss, Some("https://example.com/feed"), &options)
+        .expect("Failed to process RSS feed XML");
+
+    assert!(doc.truncated, "feed must honor max_tokens");
+    assert!(doc
+        .content
+        .contains("[Content truncated by TkLess: token limit reached]"));
+    assert!(
+        doc.chunks.as_ref().is_some_and(|chunks| !chunks.is_empty()),
+        "feed must produce chunks when --chunk is enabled"
+    );
+    assert!(doc.content_hash.is_some());
 }
 
 #[test]

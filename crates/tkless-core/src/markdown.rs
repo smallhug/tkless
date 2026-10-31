@@ -201,7 +201,11 @@ impl MathPlaceholderProtector {
 
     fn restore(&self, markdown: &str) -> String {
         let mut result = markdown.to_string();
-        for (id, (is_block, formula)) in self.formulas.iter().enumerate() {
+        // Replace highest ids first: `TKLESSMATHINLINE1` is a prefix of
+        // `TKLESSMATHINLINE10`, so ascending order would corrupt formulas >= 10.
+        let mut ordered: Vec<_> = self.formulas.iter().enumerate().collect();
+        ordered.sort_by_key(|(id, _)| std::cmp::Reverse(*id));
+        for (id, (is_block, formula)) in ordered {
             if *is_block {
                 let token = format!("TKLESSMATHBLOCK{id}");
                 let replacement = format!("\n\n$$\n{formula}\n$$\n\n");
@@ -394,6 +398,20 @@ pub fn strip_code_line_numbers(code: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn restores_more_than_ten_math_placeholders() {
+        let html: String = (0..12)
+            .map(|index| format!("<script type=\"math/tex\">f{index}</script>"))
+            .collect();
+        let restored = normalize_math_formulas(&html);
+        for index in 0..12 {
+            assert!(
+                restored.contains(&format!("$f{index}$")),
+                "formula {index} was corrupted: {restored}"
+            );
+        }
+    }
 
     #[test]
     fn test_html_to_markdown_basic() {

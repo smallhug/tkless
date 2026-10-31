@@ -9,7 +9,7 @@
   面向 AI Agent 与 LLM 管道的 Rust 网页抓取、正文清洗、结构化提取与搜索工具。
 </p>
 
-当前源码版本：**0.5.0**，文档对齐日期：**2026-10-30**。本说明按当前工作区实现整理；尚未发布的提交可能领先于 GitHub Release。
+当前源码版本：**0.6.0**，文档对齐日期：**2026-10-31**。本说明按当前工作区实现整理；尚未发布的提交可能领先于 GitHub Release。
 
 ## 核心能力
 
@@ -69,7 +69,7 @@ tkless upgrade
 
 升级下载会逐跳检查地址、限制产物大小，并在替换前验证 GitHub Release 的 SHA-256 digest 或配套 `.sha256` 文件。缺少校验信息或校验不一致时拒绝替换；版本比较采用语义化版本规则。
 
-当前源码还会验证下载大小、可执行文件格式、落盘内容及替换前后的 `--version` 输出；使用独占升级锁和独立暂存目录，失败时恢复原程序。Windows 下若旧程序仍被占用，会显示保留的备份路径。上述安装加固尚未随 0.5.0 发布。
+当前源码还会验证下载大小、可执行文件格式、落盘内容及替换前后的 `--version` 输出；使用独占升级锁和独立暂存目录，失败时恢复原程序。Windows 下若旧程序仍被占用，会显示保留的备份路径。上述安装加固尚未发布到 GitHub Release。
 
 **从 0.4.0 更新的注意事项**：该版本升级器未跟随 GitHub 下载重定向，可能把 302 的空响应体安装成程序后报告成功。遇到此问题，请从 Release 页面手动下载对应二进制并核对 SHA-256，或在源码目录运行 `cargo install --path crates/tkless-cli --force --locked` 恢复。旧程序自身的升级代码不会因远程版本更新而自动修复。
 ## 常用工作流
@@ -176,9 +176,9 @@ tkless search "Rust async" --lang zh-CN --region cn -f json
 
 `--scope` 支持 `all`、`wechat`、`zhihu`、`github`、`juejin`、`csdn`、`medium`、`substack`、`arxiv`、`huggingface`、`wikipedia`、`reddit`、`stackoverflow`、`v2ex`、`baike`。平台定向转换为 Bing 的 `site:` 查询，并在本地校验结果 URL；关键词中已有 `site:` 过滤时优先保留原过滤。
 
-`--limit` 必须为正整数；`--dedup`、`--max-tokens-per-page` 要求 `--fetch-content`。`--since`/`--until`/`--lang`/`--region` 使用 Bing 未公开的参数，属于尽力而为：启用时报告附加 `search_filters_best_effort` 警告，请核验结果。CLI、Shell 和 MCP 均直接使用 Bing；旧的引擎选择参数及平台布尔开关已移除。搜索结果仍保留 `engine: "bing"` 来源字段。
+`--limit` 范围为 1–100；`--dedup`、`--max-tokens-per-page` 要求 `--fetch-content`。`--since`/`--until`/`--lang`/`--region` 使用 Bing 未公开的参数，属于尽力而为：启用时报告附加 `search_filters_best_effort` 警告，请核验结果。CLI、Shell 和 MCP 均直接使用 Bing；旧的引擎选择参数及平台布尔开关已移除。搜索结果仍保留 `engine: "bing"` 来源字段。
 
-搜索前默认在后台执行 HTTPS 连接预检，成功缓存 60 秒、失败缓存 5 秒。慢连接或状态未知仍尝试搜索，限流按 `Retry-After` 冷却。使用 `-vv` 查看诊断，结构化输出包含查询与页面诊断。`--log-format json` 可把 stderr 日志改成每行一个 JSON 对象（便于采集）；`--retry-budget N` 为整个运行设置共享重试上限，避免失败站点耗尽重试。详细用法见 [Bing 搜索说明](doc/06-bing-search.md)。
+搜索前默认在后台执行 HTTPS 连接预检，成功缓存 60 秒、失败缓存 5 秒。慢连接或状态未知仍尝试搜索，限流按 `Retry-After` 冷却。使用 `-vv` 查看诊断，结构化输出包含查询与页面诊断。`--retry-budget N` 是根选项，为整个运行设置共享重试上限，避免失败站点耗尽重试；`--log-format json` 可把 stderr 日志（含致命错误）改成每行一个 JSON 对象（便于采集）。详细用法见 [Bing 搜索说明](doc/06-bing-search.md)。
 
 搜索保留原始查询的连字符、引号、排除词和年份，不再自动放宽查询。JSON 始终返回报告对象，JSONL 返回单行报告；`--diagnostics` 控制 Markdown 中是否展示详细诊断，包含原始与实际查询、页面状态、过滤计数及警告。未知页面结构会报解析错误，不会作为“无结果”成功返回。
 
@@ -427,17 +427,17 @@ tkless [OPTIONS] [TARGET] [COMMAND]
 | `login` | B站扫码登录或知乎登录指引 |
 | `auth` | 管理本地凭据存储（`set` 从 stdin 读取 Cookie，`list`，`remove`） |
 | `cache` | 缓存统计与清理 |
-| `adapters`（`platforms`） | 平台及能力目录 |
+| `adapters` | 平台及能力目录 |
 | `doctor` | 浏览器、缓存目录和网络连通性自检 |
 | `shell` | 交互式 REPL |
 | `completions` | Bash / Zsh / Fish / PowerShell / Elvish 补全 |
-| `upgrade`（`update`） | 检查及安装 GitHub Release |
+| `upgrade` | 检查及安装 GitHub Release |
 
 根命令常用选项：
 
 | 选项 | 说明 |
 |---|---|
-| `-f, --format` | 单页常用 `markdown`、`json`、`text`、`html`、`raw` |
+| `-f, --format` | 单页常用 `markdown`、`json`、`jsonl`、`text`、`html`、`raw`；子命令支持 `markdown`、`json`、`jsonl`（`research` 仅支持前两种），根选项会被子命令继承 |
 | `-m, --mode` | `article`（默认）、`full`、`raw` |
 | `-t, --max-tokens` | 正文截断目标 |
 | `--tokenizer` | `o200k`（默认）、`cl100k`、`heuristic` |
@@ -452,13 +452,13 @@ tkless [OPTIONS] [TARGET] [COMMAND]
 | `--timeout` / `--connect-timeout` / `--retries` | 默认 15 秒 / 10 秒 / 0 次 |
 | `--max-size` / `--on-too-large` | 默认 10 MB；超限默认报错，可选择截断 |
 | `--cdp` / `--auto-cdp` / `--screenshot` | 浏览器端点 / 挑战回退 / 截图（另支持 `--pdf` 打印） |
-| `--retry-budget N` | 整个运行共享的重试次数上限；省略时不限制 |
+| `--retry-budget N` | 根选项：整个运行共享的重试次数上限；省略时不限制 |
 | `--circuit-breaker N` | 同一主机连续失败 N 次后熔断；默认 `0` 禁用 |
 | `--log-format plain\|json` | stderr 日志格式；json 每行一个对象 |
 | `-p, --proxy` / `--mobile` | 代理 / 移动端 UA |
 | `--cache` / `--cache-ttl` / `--cache-dir` | 缓存开关 / TTL / 目录 |
 | `-o, --output` | 输出文件 |
-| `--stats` / `-v` / `-q` | 提取统计 / 增加日志详细度（可重复）/ 关闭诊断日志 |
+| `--stats` / `-v` / `-q` | 提取统计（写入 stderr，不污染 stdout）/ 增加日志详细度（可重复）/ 关闭诊断日志 |
 
 完整且最新的参数说明由程序生成，避免依赖过期的帮助快照：
 
@@ -475,10 +475,10 @@ tkless mcp --help
 | 代码 | 含义 |
 |---|---|
 | `0` | 命令成功；使用 `--allow-http-errors` 时也可处理非 2xx 页面 |
-| `1` | 通用、I/O、平台适配器、CDP、Schema、搜索等未单独映射的错误 |
+| `1` | 通用、I/O、平台适配器、CDP、Schema、搜索反爬验证（`verification_required`）、状态与后台任务等未单独映射的错误 |
 | `2` | 参数或 URL 格式错误 |
-| `3` | 网络错误、超时或 HTTP 5xx |
-| `4` | 解码、清洗、转换、PDF / Office / 搜索页解析错误或 HTTP 4xx |
+| `3` | 网络错误、超时、限流（`rate_limited`）或 HTTP 5xx |
+| `4` | 解码、清洗、转换、PDF / Office / 搜索页解析（`search_parse_error`）错误或 HTTP 4xx |
 | `5` | 响应体超过大小限制 |
 | `6` | SSRF 地址检查拦截 |
 

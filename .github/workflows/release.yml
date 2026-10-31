@@ -6,12 +6,15 @@ on:
       - 'v*.*.*'
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  build-and-release:
+  build:
     name: Build - ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+      actions: write
     strategy:
       matrix:
         include:
@@ -91,7 +94,7 @@ jobs:
           fi
         shell: bash
 
-      - name: Generate SHA-256 Checksum
+      - name: Generate SHA-256 Checksum (compatibility)
         run: |
           test -s "${{ matrix.artifact_name }}" || { echo "Release artifact is empty or missing" >&2; exit 1; }
           if command -v sha256sum >/dev/null 2>&1; then
@@ -101,12 +104,142 @@ jobs:
           fi
         shell: bash
 
-      - name: Publish GitHub Release Asset
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: |
+            ${{ matrix.artifact_name }}
+            ${{ matrix.artifact_name }}.sha256
+          if-no-files-found: error
+          retention-days: 7
+
+  # Signing happens in a protected environment. Configure the environment in
+  # GitHub repository settings with required reviewers, and store:
+  #   - MINISIGN_SECRET_KEY: base64 of the Minisign secret key file
+  #   - MINISIGN_PASSWORD:   password for that secret key
+  # The matching public key(s) must be committed to
+  # crates/tkless-cli/assets/tkless-upgrade.pub.
+  publish:
+    name: Sign and publish release
+    needs: build
+    runs-on: ubuntu-latest
+    environment: release-signing
+    permissions:
+      contents: write
+      actions: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Verify expected artifacts
+        run: |
+          set -euo pipefail
+          for name in \
+            tkless-windows-amd64.exe \
+            tkless-linux-amd64 \
+            tkless-linux-arm64 \
+            tkless-macos-amd64.dmg \
+            tkless-macos-arm64.dmg; do
+            test -s "dist/$name" || {
+              echo "Missing build artifact: $name" >&2
+              exit 1
+            }
+          done
+
+      - name: Install Minisign
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y minisign expect
+
+      - name: Create and sign release manifest
+        env:
+          MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
+          MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          version="${GITHUB_REF_NAME#v}"
+          test -n "$MINISIGN_SECRET_KEY" || {
+            echo "Missing MINISIGN_SECRET_KEY in the release-signing environment" >&2
+            exit 1
+          }
+          test -n "$MINISIGN_PASSWORD" || {
+            echo "Missing MINISIGN_PASSWORD in the release-signing environment" >&2
+            exit 1
+          }
+
+          key="$RUNNER_TEMP/minisign.key"
+          public_key="$RUNNER_TEMP/minisign.pub"
+          trap 'rm -f "$key" "$public_key"' EXIT
+
+          printf '%s' "$MINISIGN_SECRET_KEY" | base64 -d > "$key"
+          chmod 600 "$key"
+
+          test -s crates/tkless-cli/assets/tkless-upgrade.pub || {
+            echo "Missing crates/tkless-cli/assets/tkless-upgrade.pub" >&2
+            exit 1
+          }
+
+          # Include real platform artifacts only; the per-asset .sha256 files are
+          # kept for older clients but are not part of the signed manifest.
+          (
+            cd dist
+            find . -maxdepth 1 -type f ! -name '*.sha256' -printf '%f\n' \
+              | sort \
+              | xargs -r sha256sum
+          ) > SHA256SUMS
+
+          {
+            echo "# version: $version"
+            echo "# generated: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            cat SHA256SUMS
+          } > SHA256SUMS.tmp
+          mv SHA256SUMS.tmp SHA256SUMS
+
+          expect <<'EOF'
+          set timeout 60
+          spawn minisign -Sm SHA256SUMS -s $env(RUNNER_TEMP)/minisign.key
+          expect {
+            "Password:" { send "$env(MINISIGN_PASSWORD)\r"; exp_continue }
+            eof
+          }
+          EOF
+
+          # Verify against every embedded public key so a rotation release can be
+          # signed by either the current or the next key.
+          verified=0
+          while IFS= read -r embedded_key; do
+            {
+              echo "untrusted comment: tkless upgrade public key"
+              echo "$embedded_key"
+            } > "$public_key"
+            if minisign -Vm SHA256SUMS -p "$public_key" >/dev/null 2>&1; then
+              verified=1
+              break
+            fi
+          done < <(awk '!/^#/ && !/^untrusted comment:/ && NF { print }' \
+            crates/tkless-cli/assets/tkless-upgrade.pub)
+
+          if [ "$verified" != "1" ]; then
+            echo "Signature does not match any embedded public key" >&2
+            exit 1
+          fi
+
+      - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            ${{ matrix.artifact_name }}
-            ${{ matrix.artifact_name }}.sha256
+            dist/*
+            SHA256SUMS
+            SHA256SUMS.minisig
           body_path: RELEASE_NOTES.md
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

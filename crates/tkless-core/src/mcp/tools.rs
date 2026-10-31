@@ -358,7 +358,7 @@ pub fn get_available_tools() -> Vec<McpTool> {
                     "url": { "type": "string", "description": "Target webpage or Bilibili video URL / BV ID" },
                     "format": {
                         "type": "string",
-                        "enum": ["markdown", "json", "text", "html", "raw"],
+                        "enum": ["markdown", "json", "jsonl", "text", "html", "raw"],
                         "default": "markdown",
                         "description": "Output format"
                     },
@@ -391,9 +391,10 @@ pub fn get_available_tools() -> Vec<McpTool> {
                         "default": "error",
                         "description": "Action when response exceeds max-size"
                     },
+                    "max_size_mb": { "type": "integer", "minimum": 1, "maximum": 2048, "default": 10, "description": "Maximum response download size in megabytes" },
                     "allow_private_addresses": { "type": "boolean", "default": false, "description": "Allow private/localhost IPs (bypasses SSRF guard)" },
                     "allow_http_errors": { "type": "boolean", "default": false, "description": "Do not fail on HTTP 4xx or 5xx responses" },
-                    "use_cache": { "type": "boolean", "default": true, "description": "Enable response caching" },
+                    "use_cache": { "type": "boolean", "default": false, "description": "Enable response caching (opt-in, matching the CLI)" },
                     "selector": { "type": "string", "description": "CSS selector to extract" },
                     "remove_selector": { "type": "string", "description": "CSS selector to exclude/prune" },
                     "extract_links": { "type": "boolean", "default": false, "description": "Extract structured hyperlinks list" },
@@ -459,7 +460,7 @@ pub fn get_available_tools() -> Vec<McpTool> {
                     },
                     "format": { "type": "string", "enum": ["markdown", "json"], "default": "markdown", "description": "Output format" },
                     "max_tokens": { "type": "integer", "description": "Max token budget" },
-                    "use_cache": { "type": "boolean", "default": true, "description": "Enable response caching" }
+                    "use_cache": { "type": "boolean", "default": false, "description": "Enable response caching (opt-in, matching the CLI)" }
                 }
             }),
         },
@@ -495,7 +496,7 @@ pub fn get_available_tools() -> Vec<McpTool> {
                         "description": "Sort order"
                     },
                     "format": { "type": "string", "enum": ["markdown", "json"], "default": "markdown", "description": "Output format" },
-                    "use_cache": { "type": "boolean", "default": true, "description": "Enable response caching" }
+                    "use_cache": { "type": "boolean", "default": false, "description": "Enable response caching (opt-in, matching the CLI)" }
                 },
                 "required": ["keyword"]
             }),
@@ -551,6 +552,7 @@ pub fn get_available_tools() -> Vec<McpTool> {
                     "max_tokens_per_page": { "type": "integer", "default": 1500, "description": "Max tokens per webpage during deep analysis" },
                     "max_tokens": { "type": "integer", "default": 8000, "description": "Overall token budget for the compiled research report" },
                     "dedup": { "type": "boolean", "default": true, "description": "Filter near-duplicate pages via SimHash" },
+                    "proxy": { "type": "string", "description": "HTTP/HTTPS proxy URL" },
                     "format": { "type": "string", "enum": ["markdown", "json"], "default": "markdown", "description": "Output presentation format" }
                 },
                 "required": ["topic"]
@@ -608,6 +610,10 @@ pub fn get_available_tools() -> Vec<McpTool> {
                     "max_tokens_per_page": { "type": "integer", "description": "Max token budget per webpage" },
                     "selector": { "type": "string", "description": "CSS selector to extract across all pages" },
                     "remove_selector": { "type": "string", "description": "CSS selector to exclude/prune across all pages" },
+                    "extract_links": { "type": "boolean", "default": false, "description": "Extract structured hyperlinks from each page" },
+                    "extract_tables": { "type": "boolean", "default": false, "description": "Extract structured tables from each page" },
+                    "no_images": { "type": "boolean", "default": false, "description": "Strip images from Markdown output" },
+                    "no_links": { "type": "boolean", "default": false, "description": "Strip hyperlinks, keeping anchor text" },
                     "schema": { "type": "string", "description": "Extraction schema for structured entities" },
                     "schema_strict": { "type": "boolean", "default": false, "description": "Fail on Schema parsing or extraction errors instead of returning fallback content; requires schema" },
                     "cdp_endpoint": { "type": "string", "description": "CDP endpoint for JS rendering" },

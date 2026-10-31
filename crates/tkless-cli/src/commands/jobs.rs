@@ -16,6 +16,7 @@ pub async fn run(
     // Execution Branch 1.5: Zero-API-Key Web Search
     // -------------------------------------------------------------------------
     if let Some(SubCommand::Search(ref search_args)) = args.command {
+        let format = args.structured_format(search_args.format, true)?;
         let search_cdp_endpoint = tkless_core::cdp::resolve_cdp_endpoint(
             search_args.cdp.as_deref().or(args.cdp.as_deref()),
             false,
@@ -88,11 +89,11 @@ pub async fn run(
                 search_args.dedup,
             )
             .await?;
-            match search_args.format {
+            match format {
                 CliFormat::Json | CliFormat::Jsonl => {
                     let value = serde_json::json!({"query":report.query,"effective_query":report.effective_query,
                         "status":report.status,"results":items,"diagnostics":report.diagnostics,"warnings":report.warnings});
-                    if search_args.format == CliFormat::Jsonl {
+                    if format == CliFormat::Jsonl {
                         serde_json::to_string(&value)?
                     } else {
                         serde_json::to_string_pretty(&value)?
@@ -104,9 +105,9 @@ pub async fn run(
                 }
             }
         } else {
-            match search_args.format {
+            match format {
                 CliFormat::Json | CliFormat::Jsonl => {
-                    if search_args.format == CliFormat::Jsonl {
+                    if format == CliFormat::Jsonl {
                         serde_json::to_string(&report)?
                     } else {
                         serde_json::to_string_pretty(&report)?
@@ -118,7 +119,7 @@ pub async fn run(
                 }
             }
         };
-        output::write_payload(&payload, search_args.output.as_deref())?;
+        output::write_payload(&payload, args.output_path(search_args.output.as_deref()))?;
         return Ok(true);
     }
 
@@ -126,6 +127,7 @@ pub async fn run(
     // Execution Branch 1.55: Autonomous Multi-Hop Deep Web Research
     // -------------------------------------------------------------------------
     if let Some(SubCommand::Research(ref res_args)) = args.command {
+        let format = args.structured_format(res_args.format, false)?;
         let mut res_fetch_options = fetch_options.clone();
         if res_args.proxy.is_some() {
             res_fetch_options.proxy = res_args.proxy.clone();
@@ -141,7 +143,7 @@ pub async fn run(
             max_tokens_per_page: res_args.max_tokens_per_page,
             max_tokens: Some(res_args.max_tokens),
             dedup: !res_args.no_dedup,
-            format: res_args.format.into(),
+            format: format.into(),
         };
 
         let report = tkless_core::deep_research(&engine, &res_args.topic, &options)
@@ -150,7 +152,7 @@ pub async fn run(
 
         let payload = tkless_core::research::render_deep_research(&report, &options)?;
 
-        output::write_payload(&payload, res_args.output.as_deref())?;
+        output::write_payload(&payload, args.output_path(res_args.output.as_deref()))?;
         return Ok(true);
     }
 
@@ -158,6 +160,17 @@ pub async fn run(
     // Execution Branch 1.6: Concurrent Batch URL Fetch & Extraction
     // -------------------------------------------------------------------------
     if let Some(SubCommand::Batch(ref batch_args)) = args.command {
+        let format = args.structured_format(batch_args.format, true)?;
+        if batch_args.cdp_wait_ms.or(args.cdp_wait_ms).is_some()
+            && batch_args.cdp.is_none()
+            && args.cdp.is_none()
+            && !args.auto_cdp
+        {
+            return Err(TklessError::InvalidArgument(
+                "--cdp-wait requires an explicit --cdp endpoint (or --auto-cdp)".into(),
+            )
+            .into());
+        }
         let raw_lines = if batch_args.file == "-" {
             let mut stdin_content = String::new();
             io::stdin()
@@ -176,7 +189,11 @@ pub async fn run(
             .collect();
 
         if urls.is_empty() {
-            bail!("No valid URLs found in '{}'", batch_args.file);
+            return Err(TklessError::InvalidArgument(format!(
+                "No valid URLs found in '{}'",
+                batch_args.file
+            ))
+            .into());
         }
 
         let mut batch_fetch_options = fetch_options.clone();
@@ -192,11 +209,11 @@ pub async fn run(
 
         let batch_extraction_opts = std::sync::Arc::new(ExtractionOptions {
             mode: args.mode.into(),
-            format: batch_args.format.into(),
+            format: format.into(),
             max_tokens: batch_args.max_tokens,
             tokenizer: args.tokenizer.into(),
             include_metadata: !args.no_metadata,
-            include_json_ld: matches!(batch_args.format, CliFormat::Json | CliFormat::Jsonl),
+            include_json_ld: matches!(format, CliFormat::Json | CliFormat::Jsonl),
             strip_images: batch_args.no_images,
             strip_links: batch_args.no_links,
             frontmatter: args.frontmatter,
@@ -249,8 +266,8 @@ pub async fn run(
             &batch_extraction_opts,
             &job,
             batch::BatchOutput {
-                format: batch_args.format,
-                path: batch_args.output.as_deref(),
+                format,
+                path: args.output_path(batch_args.output.as_deref()),
                 input: (batch_args.file != "-").then(|| Path::new(&batch_args.file)),
                 quiet: args.quiet,
             },
@@ -272,6 +289,17 @@ pub async fn run(
     // Execution Branch 1.7: Deep Site Crawl & Knowledge Base Assembly
     // -------------------------------------------------------------------------
     if let Some(SubCommand::Crawl(ref crawl_args)) = args.command {
+        let format = args.structured_format(crawl_args.format, true)?;
+        if crawl_args.cdp_wait_ms.or(args.cdp_wait_ms).is_some()
+            && crawl_args.cdp.is_none()
+            && args.cdp.is_none()
+            && !args.auto_cdp
+        {
+            return Err(TklessError::InvalidArgument(
+                "--cdp-wait requires an explicit --cdp endpoint (or --auto-cdp)".into(),
+            )
+            .into());
+        }
         paths::distinct(
             crawl_args.output.as_deref(),
             crawl_args.checkpoint.as_deref(),
@@ -326,21 +354,16 @@ pub async fn run(
         .await
         .context("Failed to crawl site")?;
 
-        let mut payload = match crawl_args.format {
+        let mut payload = match format {
             CliFormat::Json => serde_json::to_string_pretty(&report)
                 .context("Failed to serialize crawl report to JSON")?,
             CliFormat::Jsonl => tkless_core::format_crawl_report_jsonl(&report),
             _ => tkless_core::format_crawl_report_markdown(&report),
         };
 
-        payload = output::apply_budget(
-            payload,
-            crawl_args.format,
-            args.max_tokens,
-            args.tokenizer.into(),
-        )?;
+        payload = output::apply_budget(payload, format, args.max_tokens, args.tokenizer.into())?;
 
-        output::write_payload(&payload, crawl_args.output.as_deref())?;
+        output::write_payload(&payload, args.output_path(crawl_args.output.as_deref()))?;
         if let Some(bundle) = crawl_args.bundle.as_deref() {
             let files = tkless_core::bundle::write_markdown_bundle(&report, bundle)?;
             if !args.quiet {

@@ -172,10 +172,27 @@ pub fn extract_selector(
     // Resolve effective base URL (auto-discovering <base href="..."> if present)
     let base_url = resolve_effective_base_url(&document, base_url_str);
 
+    let matches: Vec<_> = document.select(&selector).collect();
+    if matches.is_empty() {
+        return Err(TklessError::CleaningError(format!(
+            "Selector '{selector_str}' matched no elements"
+        )));
+    }
+
+    // A selector can match both an ancestor and one of its descendants. Rendering
+    // the ancestor already includes the descendant, so skip nested matches to
+    // avoid duplicating content.
+    let selected_ids: std::collections::HashSet<_> = matches.iter().map(|el| el.id()).collect();
     let mut out_html = String::new();
     let mut matched_count = 0;
 
-    for element_ref in document.select(&selector) {
+    for element_ref in matches {
+        if element_ref
+            .ancestors()
+            .any(|ancestor| selected_ids.contains(&ancestor.id()))
+        {
+            continue;
+        }
         matched_count += 1;
         render_cleaned_node(
             element_ref.id(),

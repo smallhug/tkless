@@ -14,6 +14,9 @@ use tokio::task::AbortHandle;
 
 /// Maximum number of queued or running jobs per server instance.
 pub const MAX_ACTIVE_JOBS: usize = 4;
+/// Maximum number of finished jobs retained regardless of TTL, so a client cannot
+/// grow the registry indefinitely by completing jobs quickly.
+pub const MAX_RETAINED_JOBS: usize = 64;
 /// Retention after a job reaches a terminal state.
 pub const DEFAULT_JOB_TTL_SECS: u64 = 3600;
 pub const MIN_JOB_TTL_SECS: u64 = 60;
@@ -340,6 +343,20 @@ impl RegistryInner {
     fn prune(&mut self) {
         let now = SystemTime::now();
         self.jobs.retain(|_, job| !job.expired(now));
+        while self.jobs.len() > MAX_RETAINED_JOBS {
+            let oldest = self
+                .jobs
+                .iter()
+                .filter(|(_, job)| !job.state().is_active())
+                .min_by_key(|(_, job)| job.seq)
+                .map(|(id, _)| id.clone());
+            match oldest {
+                Some(id) => {
+                    self.jobs.remove(&id);
+                }
+                None => break,
+            }
+        }
     }
 }
 

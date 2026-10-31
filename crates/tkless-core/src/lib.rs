@@ -94,7 +94,10 @@ pub use search::{
     normalize_url_for_dedup, web_search, SearchFetchItem, SearchOptions, SearchPageDiagnostics,
     SearchReport, SearchResultItem, SearchStatus,
 };
-pub use splitter::{export_sections_to_dir, split_markdown_by_headings, DocumentSection};
+pub use splitter::{
+    export_sections_to_dir, split_markdown_by_headings, split_markdown_by_headings_with_tokenizer,
+    DocumentSection,
+};
 pub use summarizer::{extract_key_takeaways, summarize_markdown};
 
 use cleaner::{clean_html, extract_selector};
@@ -123,6 +126,104 @@ pub struct TklessEngine {
 impl Default for TklessEngine {
     fn default() -> Self {
         Self::new().expect("Failed to initialize default TklessEngine")
+    }
+}
+
+struct FinalizedContent {
+    content: String,
+    token_count: usize,
+    truncated: bool,
+    chunks: Option<Vec<model::DocumentChunk>>,
+    content_hash: Option<String>,
+    metrics: Option<ExtractionMetrics>,
+}
+
+/// Applies the shared summarize/truncate/chunk/hash/telemetry pipeline.
+/// Used by both the HTML path and the RSS/Atom fast path so feeds cannot bypass
+/// the token budget or chunking options.
+fn finalize_content(
+    mut content: String,
+    raw_html: &str,
+    clean_start: Instant,
+    options: &ExtractionOptions,
+) -> FinalizedContent {
+    if options.summarize
+        && (options.format == OutputFormat::Markdown || options.format == OutputFormat::Json)
+        && !content.is_empty()
+    {
+        content = summarizer::summarize_markdown(&content, 3);
+    }
+
+    let initial_token_count = count_tokens(&content, options.tokenizer);
+    let mut truncated = false;
+    if let Some(limit) = options.max_tokens {
+        if initial_token_count > limit {
+            debug!(
+                current = initial_token_count,
+                limit = limit,
+                "Truncating content to token limit"
+            );
+            let (truncated_content, was_truncated) =
+                truncate_to_tokens(&content, limit, options.tokenizer);
+            content = truncated_content;
+            truncated = was_truncated;
+        }
+    }
+
+    let final_token_count = if truncated {
+        count_tokens(&content, options.tokenizer)
+    } else {
+        initial_token_count
+    };
+
+    let chunks = if options.chunk {
+        Some(chunker::chunk_markdown(
+            &content,
+            options.chunk_size.unwrap_or(500),
+            options.chunk_overlap.unwrap_or(50),
+            options.tokenizer,
+        ))
+    } else {
+        None
+    };
+
+    let content_hash = Some(format!("{:016x}", dedup::simhash(&content)));
+
+    let metrics = if options.stats {
+        let raw_bytes = raw_html.len();
+        let cleaned_bytes = content.len();
+        let raw_token_estimate = count_tokens(raw_html, options.tokenizer);
+        let token_savings_percent = ((raw_token_estimate.saturating_sub(final_token_count)) as f64
+            / raw_token_estimate.max(1) as f64
+            * 100.0)
+            .clamp(0.0, 100.0);
+        let noise_reduction_percent =
+            ((raw_bytes.saturating_sub(cleaned_bytes)) as f64 / raw_bytes.max(1) as f64 * 100.0)
+                .clamp(0.0, 100.0);
+        let clean_time_ms = clean_start.elapsed().as_millis() as u64;
+
+        Some(ExtractionMetrics {
+            fetch_time_ms: 0,
+            clean_time_ms,
+            total_time_ms: clean_time_ms,
+            raw_bytes,
+            cleaned_bytes,
+            raw_token_estimate,
+            final_token_count,
+            token_savings_percent,
+            noise_reduction_percent,
+        })
+    } else {
+        None
+    };
+
+    FinalizedContent {
+        content,
+        token_count: final_token_count,
+        truncated,
+        chunks,
+        content_hash,
+        metrics,
     }
 }
 
@@ -516,8 +617,33 @@ impl TklessEngine {
                     url = url,
                     "Directing response to native PDF extraction pipeline"
                 );
-                let mut doc =
-                    pdf::extract_pdf_to_document(bytes, Some(&response.final_url), options)?;
+                // PDF parsing and stream decompression are synchronous and can be
+                // CPU/memory intensive. Keep them off the async workers and bound the
+                // wall-clock time so a crafted document cannot stall the runtime.
+                let pdf_bytes = bytes.clone();
+                let pdf_url = response.final_url.clone();
+                let pdf_options = options.clone();
+                let extraction = tokio::task::spawn_blocking(move || {
+                    pdf::extract_pdf_to_document(&pdf_bytes, Some(pdf_url.as_str()), &pdf_options)
+                });
+                let mut doc = match tokio::time::timeout(
+                    std::time::Duration::from_secs(60),
+                    extraction,
+                )
+                .await
+                {
+                    Ok(Ok(result)) => result?,
+                    Ok(Err(join_error)) => {
+                        return Err(TklessError::PdfError(format!(
+                            "PDF extraction task failed: {join_error}"
+                        )))
+                    }
+                    Err(_) => {
+                        return Err(TklessError::PdfError(
+                            "PDF extraction exceeded the 60 second limit".into(),
+                        ))
+                    }
+                };
                 doc.extraction.transport = "http".into();
                 doc.url = response.requested_url;
                 doc.final_url = response.final_url;
@@ -585,11 +711,13 @@ impl TklessEngine {
             scroll_count: Some(5),
             ..Default::default()
         };
-        let html = cdp::fetch_html_via_cdp(url, &cdp_opts).await?;
-        let mut doc = self.process_html(&html, Some(url), options)?;
+        let page = cdp::fetch_rendered_page(url, &cdp_opts).await?;
+        let mut doc = self.process_html(&page.html, Some(&page.final_url), options)?;
         doc.extraction.transport = "cdp".into();
         doc.url = url.to_string();
-        doc.final_url = url.to_string();
+        doc.final_url = page.final_url;
+        // CDP does not currently expose the main-document HTTP status here;
+        // keep the legacy 200 marker while using the real final URL.
         doc.status = 200;
         Ok(doc)
     }
@@ -730,13 +858,13 @@ impl TklessEngine {
                         .unwrap_or_else(|_| feed::format_feed_markdown(&channel)),
                     _ => feed::format_feed_markdown(&channel),
                 };
-                let token_count = count_tokens(&content, options.tokenizer);
                 let title = Some(channel.title.clone());
                 let metadata = PageMetadata {
                     description: Some(channel.description.clone()),
                     canonical_url: Some(channel.link.clone()),
                     ..Default::default()
                 };
+                let finalized = finalize_content(content, raw_html, clean_start, options);
 
                 return Ok(PageDocument {
                     extraction: ExtractionProvenance {
@@ -749,12 +877,12 @@ impl TklessEngine {
                     status: 200,
                     title,
                     byline: None,
-                    content,
+                    content: finalized.content,
                     metadata,
                     json_ld: Vec::new(),
-                    token_count,
+                    token_count: finalized.token_count,
                     tokenizer: options.tokenizer.as_str().to_string(),
-                    truncated: false,
+                    truncated: finalized.truncated,
                     subtitles: None,
                     danmaku: None,
                     comments: None,
@@ -763,9 +891,9 @@ impl TklessEngine {
                     images: None,
                     tables: None,
                     entity: None,
-                    chunks: None,
-                    content_hash: None,
-                    metrics: None,
+                    chunks: finalized.chunks,
+                    content_hash: finalized.content_hash,
+                    metrics: finalized.metrics,
                 });
             }
         }
@@ -926,80 +1054,7 @@ impl TklessEngine {
             }
         }
 
-        // 4.5 Prepend heuristic extractive summary if requested
-        if options.summarize
-            && (options.format == OutputFormat::Markdown || options.format == OutputFormat::Json)
-            && !content.is_empty()
-        {
-            content = summarizer::summarize_markdown(&content, 3);
-        }
-
-        // 5. Token counting and truncation
-        let initial_token_count = count_tokens(&content, options.tokenizer);
-        let mut truncated = false;
-
-        if let Some(limit) = options.max_tokens {
-            if initial_token_count > limit {
-                debug!(
-                    current = initial_token_count,
-                    limit = limit,
-                    "Truncating content to token limit"
-                );
-                let (truncated_content, was_truncated) =
-                    truncate_to_tokens(&content, limit, options.tokenizer);
-                content = truncated_content;
-                truncated = was_truncated;
-            }
-        }
-
-        let final_token_count = if truncated {
-            count_tokens(&content, options.tokenizer)
-        } else {
-            initial_token_count
-        };
-
-        let chunks = if options.chunk {
-            Some(chunker::chunk_markdown(
-                &content,
-                options.chunk_size.unwrap_or(500),
-                options.chunk_overlap.unwrap_or(50),
-                options.tokenizer,
-            ))
-        } else {
-            None
-        };
-
-        let content_hash = Some(format!("{:016x}", dedup::simhash(&content)));
-
-        let metrics = if options.stats {
-            let raw_bytes = raw_html.len();
-            let cleaned_bytes = content.len();
-            let raw_token_estimate = count_tokens(raw_html, options.tokenizer);
-            let token_savings_percent = ((raw_token_estimate.saturating_sub(final_token_count))
-                as f64
-                / raw_token_estimate.max(1) as f64
-                * 100.0)
-                .clamp(0.0, 100.0);
-            let noise_reduction_percent = ((raw_bytes.saturating_sub(cleaned_bytes)) as f64
-                / raw_bytes.max(1) as f64
-                * 100.0)
-                .clamp(0.0, 100.0);
-            let clean_time_ms = clean_start.elapsed().as_millis() as u64;
-
-            Some(ExtractionMetrics {
-                fetch_time_ms: 0,
-                clean_time_ms,
-                total_time_ms: clean_time_ms,
-                raw_bytes,
-                cleaned_bytes,
-                raw_token_estimate,
-                final_token_count,
-                token_savings_percent,
-                noise_reduction_percent,
-            })
-        } else {
-            None
-        };
+        let finalized = finalize_content(content, raw_html, clean_start, options);
 
         Ok(PageDocument {
             extraction: ExtractionProvenance {
@@ -1015,12 +1070,12 @@ impl TklessEngine {
             status: 200,
             title,
             byline: cleaned.byline.or_else(|| metadata.author.clone()),
-            content,
+            content: finalized.content,
             metadata,
             json_ld,
-            token_count: final_token_count,
+            token_count: finalized.token_count,
             tokenizer: options.tokenizer.as_str().to_string(),
-            truncated,
+            truncated: finalized.truncated,
             subtitles: None,
             danmaku: None,
             comments: None,
@@ -1029,9 +1084,9 @@ impl TklessEngine {
             images,
             tables,
             entity,
-            chunks,
-            content_hash,
-            metrics,
+            chunks: finalized.chunks,
+            content_hash: finalized.content_hash,
+            metrics: finalized.metrics,
         })
     }
 }

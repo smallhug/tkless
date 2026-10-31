@@ -10,6 +10,9 @@ use std::sync::{Arc, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{debug, warn};
 
+/// Maximum serialized size of one on-disk cache entry.
+const MAX_DISK_ENTRY_BYTES: u64 = 16 * 1024 * 1024;
+
 /// Cached entry holding extracted document and expiration metadata.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CacheEntry {
@@ -111,7 +114,7 @@ impl DocumentCache {
             let file_path = dir.join(format!("{key}.json"));
             if file_path.is_file() {
                 if let Ok(file) = File::open(&file_path) {
-                    let reader = BufReader::new(file.take(16 * 1024 * 1024));
+                    let reader = BufReader::new(file.take(MAX_DISK_ENTRY_BYTES));
                     if let Ok(entry) = serde_json::from_reader::<_, CacheEntry>(reader) {
                         if !entry.is_expired(now) {
                             debug!(key = key, path = %file_path.display(), "L2 disk cache hit");
@@ -196,7 +199,7 @@ impl DocumentCache {
             let file_path = dir.join(format!("{key}.json"));
             if file_path.is_file() {
                 if let Ok(file) = File::open(&file_path) {
-                    let reader = BufReader::new(file.take(16 * 1024 * 1024));
+                    let reader = BufReader::new(file.take(MAX_DISK_ENTRY_BYTES));
                     if let Ok(entry) = serde_json::from_reader::<_, CacheEntry>(reader) {
                         // Backfill L1 memory
                         if let Ok(mut mem) = self.memory.write() {
@@ -247,6 +250,12 @@ impl DocumentCache {
                 for entry_res in entries.flatten() {
                     let path = entry_res.path();
                     if path.extension().and_then(|s| s.to_str()) == Some("json") {
+                        let Ok(metadata) = entry_res.metadata() else {
+                            continue;
+                        };
+                        if metadata.len() > MAX_DISK_ENTRY_BYTES {
+                            continue;
+                        }
                         if let Ok(file) = File::open(&path) {
                             let reader = BufReader::new(file);
                             if let Ok(cached) = serde_json::from_reader::<_, CacheEntry>(reader) {
@@ -301,8 +310,16 @@ impl DocumentCache {
 
         if let Some(ref dir) = self.cache_dir {
             if dir.is_dir() {
-                fs::remove_dir_all(dir).map_err(|e| TklessError::CacheError(e.to_string()))?;
-                let _ = fs::create_dir_all(dir);
+                // Remove only cache entries instead of recursively deleting the
+                // configured directory, which may contain unrelated user files.
+                for entry in fs::read_dir(dir)?.flatten() {
+                    let path = entry.path();
+                    if path.extension().and_then(|s| s.to_str()) == Some("json") {
+                        let _ = fs::remove_file(path);
+                    }
+                }
+                let _ = fs::remove_dir(dir);
+                fs::create_dir_all(dir).map_err(|e| TklessError::CacheError(e.to_string()))?;
             }
         }
 

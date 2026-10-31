@@ -3,8 +3,19 @@
 mod install;
 
 use anyhow::{bail, Context, Result};
+use minisign_verify::{PublicKey, Signature};
 use sha2::{Digest, Sha256};
 use tkless_core::TklessEngine;
+
+const MANIFEST_ASSET: &str = "SHA256SUMS";
+const MANIFEST_SIGNATURE_ASSET: &str = "SHA256SUMS.minisig";
+const MANIFEST_MAX_BYTES: usize = 64 * 1024;
+const SIGNATURE_MAX_BYTES: usize = 16 * 1024;
+
+/// Public keys embedded at build time. The file may contain several Minisign
+/// public key blocks; every base64 line is trusted. Keeping the current and next
+/// key here allows a rotation release to be verified by both old and new binaries.
+const EMBEDDED_UPGRADE_PUBLIC_KEYS: &str = include_str!("../assets/tkless-upgrade.pub");
 
 /// Automatically checks GitHub Releases and upgrades the current running executable (like bun upgrade).
 pub async fn run_upgrade(engine: &TklessEngine, args: &crate::cli::UpgradeArgs) -> Result<()> {
@@ -73,6 +84,33 @@ pub async fn run_upgrade(engine: &TklessEngine, args: &crate::cli::UpgradeArgs) 
         .as_array()
         .context("Release 中未发现可下载的产物列表 (assets)")?;
 
+    // The signature is the security boundary. Without a trusted manifest the
+    // release JSON, asset URLs and GitHub-provided digests are only transport
+    // hints and must not be used to authorize replacing the executable.
+    let public_keys = embedded_upgrade_public_keys();
+    if public_keys.is_empty() {
+        bail!(
+            "This build does not embed a TkLess upgrade public key; refusing to self-update. \
+             Use an official release build or rebuild with a Minisign public key in \
+             crates/tkless-cli/assets/tkless-upgrade.pub."
+        );
+    }
+    let manifest =
+        download_release_asset(engine, assets, MANIFEST_ASSET, MANIFEST_MAX_BYTES).await?;
+    let signature = download_release_asset(
+        engine,
+        assets,
+        MANIFEST_SIGNATURE_ASSET,
+        SIGNATURE_MAX_BYTES,
+    )
+    .await?;
+    let signature_text =
+        std::str::from_utf8(&signature).context("Upgrade signature is not valid UTF-8")?;
+    verify_manifest_signature(&manifest, signature_text, &public_keys)?;
+    let manifest_text =
+        std::str::from_utf8(&manifest).context("Upgrade manifest is not valid UTF-8")?;
+    let expected = parse_signed_manifest(manifest_text, latest_version, target_asset_name)?;
+
     let asset = assets
         .iter()
         .find(|a| a["name"].as_str() == Some(target_asset_name))
@@ -98,27 +136,7 @@ pub async fn run_upgrade(engine: &TklessEngine, args: &crate::cli::UpgradeArgs) 
         Some(expected_size),
     )
     .await?;
-    let expected = if let Some(digest) = asset
-        .get("digest")
-        .and_then(|v| v.as_str())
-        .and_then(|s| s.strip_prefix("sha256:"))
-    {
-        digest.to_string()
-    } else {
-        let checksum_name = format!("{target_asset_name}.sha256");
-        let checksum_asset = assets.iter().find(|a| a["name"].as_str() == Some(&checksum_name))
-            .context("Release has no SHA-256 digest or checksum asset; refusing to replace the executable")?;
-        let checksum_url = checksum_asset["browser_download_url"]
-            .as_str()
-            .context("Missing checksum download URL")?;
-        let checksum_bytes = download_release_bytes(engine, checksum_url, 16 * 1024, None).await?;
-        let checksum = std::str::from_utf8(&checksum_bytes).context("Invalid checksum encoding")?;
-        checksum
-            .split_whitespace()
-            .next()
-            .context("Empty checksum file")?
-            .to_string()
-    };
+    // The signed manifest, not the GitHub release metadata, supplies the hash.
     verify_sha256(&bytes, &expected)?;
 
     let current_exe = std::env::current_exe().context("无法确定当前执行程序的物理路径")?;
@@ -181,6 +199,103 @@ fn extract_dmg_binary(bytes: &[u8]) -> Result<Vec<u8>> {
         bail!("无法卸载 DMG，停止更新；挂载点：{}", mount.display());
     }
     extracted
+}
+
+fn embedded_upgrade_public_keys() -> Vec<&'static str> {
+    EMBEDDED_UPGRADE_PUBLIC_KEYS
+        .lines()
+        .map(str::trim)
+        .filter(|line| {
+            !line.is_empty() && !line.starts_with('#') && !line.starts_with("untrusted comment:")
+        })
+        .collect()
+}
+
+async fn download_release_asset(
+    engine: &TklessEngine,
+    assets: &[serde_json::Value],
+    name: &str,
+    limit: usize,
+) -> Result<Vec<u8>> {
+    let asset = assets
+        .iter()
+        .find(|asset| asset["name"].as_str() == Some(name))
+        .with_context(|| format!("Release is missing the signed asset '{name}'"))?;
+    let url = asset["browser_download_url"]
+        .as_str()
+        .with_context(|| format!("Missing download URL for '{name}'"))?;
+    download_release_bytes(engine, url, limit, None).await
+}
+
+fn verify_manifest_signature(
+    manifest: &[u8],
+    signature_text: &str,
+    public_keys: &[&str],
+) -> Result<()> {
+    if public_keys.is_empty() {
+        bail!("No upgrade public key is embedded in this build");
+    }
+    let normalized_signature = signature_text.replace("\r\n", "\n");
+    let signature = Signature::decode(normalized_signature.trim())
+        .context("Invalid Minisign signature file")?;
+    let mut last_error = None;
+    for key in public_keys {
+        let public_key =
+            PublicKey::from_base64(key).context("Invalid embedded Minisign public key")?;
+        match public_key.verify(manifest, &signature, false) {
+            Ok(()) => return Ok(()),
+            Err(error) => last_error = Some(error.to_string()),
+        }
+    }
+    bail!(
+        "Upgrade manifest signature verification failed: {}",
+        last_error.unwrap_or_else(|| "no matching embedded key".into())
+    )
+}
+
+fn parse_signed_manifest(
+    manifest: &str,
+    expected_version: &str,
+    asset_name: &str,
+) -> Result<String> {
+    let mut version = None;
+    let mut digests = Vec::new();
+    for line in manifest.lines() {
+        let line = line.trim();
+        if let Some(rest) = line.strip_prefix("# version:") {
+            version = Some(rest.trim());
+            continue;
+        }
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let mut fields = line.split_whitespace();
+        let Some(digest) = fields.next() else {
+            continue;
+        };
+        let Some(name) = fields.next() else {
+            continue;
+        };
+        let name = name.trim_start_matches('*').trim_start_matches("./");
+        if name != asset_name {
+            continue;
+        }
+        if digest.len() != 64 || !digest.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            bail!("Signed manifest contains an invalid SHA-256 for '{asset_name}'");
+        }
+        digests.push(digest.to_string());
+    }
+    let version = version.context("Signed manifest has no '# version:' header")?;
+    if version != expected_version {
+        bail!(
+            "Signed manifest version '{version}' does not match release version '{expected_version}'"
+        );
+    }
+    match digests.len() {
+        1 => Ok(digests.remove(0)),
+        0 => bail!("Signed manifest has no entry for '{asset_name}'"),
+        _ => bail!("Signed manifest has duplicate entries for '{asset_name}'"),
+    }
 }
 
 /// Public release assets may redirect; validate each hop and bound the download.
@@ -268,6 +383,43 @@ mod tests {
         assert!(verify_sha256(b"release", "bad").is_err());
         let empty_hash = format!("{:x}", Sha256::digest(b""));
         assert!(verify_sha256(b"", &empty_hash).is_err());
+    }
+
+    const TEST_PUBLIC_KEY: &str = "RWQf6LRCGA9i53mlYecO4IzT51TGPpvWucNSCh1CBM0QTaLn73Y7GFO3";
+    const TEST_SIGNATURE: &str = "untrusted comment: signature from minisign secret key\n\
+RUQf6LRCGA9i559r3g7V1qNyJDApGip8MfqcadIgT9CuhV3EMhHoN1mGTkUidF/z7SrlQgXdy8ofjb7bNJJylDOocrCo8KLzZwo=\n\
+trusted comment: timestamp:1633700835\tfile:test\tprehashed\n\
+wLMDjy9FLAuxZ3q4NlEvkgtyhrr0gtTu6KC4KBJdITbbOeAi1zBIYo0v4iTgt8jJpIidRJnp94ABQkJAgAooBQ==";
+
+    #[test]
+    fn verifies_a_minisign_manifest_signature() {
+        verify_manifest_signature(b"test", TEST_SIGNATURE, &[TEST_PUBLIC_KEY]).unwrap();
+        assert!(
+            verify_manifest_signature(b"tampered", TEST_SIGNATURE, &[TEST_PUBLIC_KEY]).is_err()
+        );
+        assert!(verify_manifest_signature(b"test", TEST_SIGNATURE, &[]).is_err());
+        let wrong_key = "RWQf6LRCGA9i53mlYecO4IzT51TGPpvWucNSCh1CBM0QTaLn73Y7GFO4";
+        assert!(verify_manifest_signature(b"test", TEST_SIGNATURE, &[wrong_key]).is_err());
+    }
+
+    #[test]
+    fn manifest_binds_version_asset_and_hash() {
+        let digest = "a".repeat(64);
+        let manifest = format!(
+            "# version: 0.5.0\n# generated: 2026-10-31T00:00:00Z\n{digest}  *tkless-linux-amd64\n"
+        );
+        assert_eq!(
+            parse_signed_manifest(&manifest, "0.5.0", "tkless-linux-amd64").unwrap(),
+            digest
+        );
+        assert!(parse_signed_manifest(&manifest, "0.5.1", "tkless-linux-amd64").is_err());
+        assert!(parse_signed_manifest(&manifest, "0.5.0", "tkless-windows-amd64.exe").is_err());
+        let duplicate = format!(
+            "# version: 0.5.0\n{digest}  tkless-linux-amd64\n{digest}  tkless-linux-amd64\n"
+        );
+        assert!(parse_signed_manifest(&duplicate, "0.5.0", "tkless-linux-amd64").is_err());
+        let missing_version = format!("{digest}  tkless-linux-amd64\n");
+        assert!(parse_signed_manifest(&missing_version, "0.5.0", "tkless-linux-amd64").is_err());
     }
 
     #[test]

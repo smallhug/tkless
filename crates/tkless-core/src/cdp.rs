@@ -127,6 +127,16 @@ pub fn locate_system_browser() -> Option<PathBuf> {
     None
 }
 
+fn endpoint_is_loopback(endpoint: &str) -> bool {
+    Url::parse(endpoint).ok().is_some_and(|url| {
+        url.host().is_some_and(|host| match host {
+            url::Host::Domain(domain) => domain.eq_ignore_ascii_case("localhost"),
+            url::Host::Ipv4(ip) => ip.is_loopback(),
+            url::Host::Ipv6(ip) => ip.is_loopback(),
+        })
+    })
+}
+
 /// Ensures the target CDP endpoint is reachable. If it points to local loopback (127.0.0.1/localhost)
 /// and is not currently listening, automatically launches a managed headless Chrome/Edge daemon.
 pub async fn ensure_cdp_daemon_ready(endpoint: &str) -> Result<String, TklessError> {
@@ -135,9 +145,9 @@ pub async fn ensure_cdp_daemon_ready(endpoint: &str) -> Result<String, TklessErr
         return Ok(base_endpoint);
     }
 
-    // Check if endpoint is local loopback
-    let is_local = base_endpoint.contains("127.0.0.1") || base_endpoint.contains("localhost");
-    if !is_local {
+    // Exact host parsing avoids treating `127.0.0.1.attacker.tld` as a local
+    // endpoint just because it contains a loopback-looking substring.
+    if !endpoint_is_loopback(&base_endpoint) {
         return Ok(base_endpoint);
     }
 
@@ -176,8 +186,34 @@ pub async fn ensure_cdp_daemon_ready(endpoint: &str) -> Result<String, TklessErr
         "正在自动启动系统内置无头浏览器 CDP 守护进程..."
     );
 
-    let profile_dir = std::env::temp_dir().join(format!("tkless_cdp_profile_{port}"));
-    let _ = std::fs::create_dir_all(&profile_dir);
+    // Use a per-process, unpredictable profile directory. A predictable name in a
+    // shared temp directory lets another local user pre-create it and influence the
+    // browser profile.
+    static PROFILE_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let unique = PROFILE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    let profile_dir = std::env::temp_dir().join(format!(
+        "tkless_cdp_profile_{port}_{}_{}_{unique}",
+        std::process::id(),
+        nanos
+    ));
+    std::fs::create_dir_all(&profile_dir).map_err(|error| {
+        TklessError::CdpError(format!("Failed to create CDP profile directory: {error}"))
+    })?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&profile_dir, std::fs::Permissions::from_mode(0o700)).map_err(
+            |error| {
+                TklessError::CdpError(format!(
+                    "Failed to restrict CDP profile directory permissions: {error}"
+                ))
+            },
+        )?;
+    }
 
     let mut cmd = Command::new(&browser_bin);
     cmd.arg("--headless=new")

@@ -127,6 +127,7 @@ async fn ignored_range_responses_fall_back_without_corrupting_output() {
             cookie: None,
             reporter: None,
             concurrency: Some(2),
+            allow_private_addresses: true,
         },
     )
     .await
@@ -224,6 +225,7 @@ async fn failed_download_preserves_existing_destination() {
             cookie: None,
             reporter: None,
             concurrency: None,
+            allow_private_addresses: true,
         }
     )
     .await

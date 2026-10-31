@@ -129,21 +129,21 @@ tkless/
 TkLess 作为兼具人类开发者直接交互与 AI Agent 自动探索（Command Line Discovery / Function Calling）双重场景的生产级工具，其命令行帮助信息的清晰度与规范性至关重要：
 
 ### 1. 结构化功能分组 (`help_heading`)
-- 顶层命令及拥有较多参数的子命令（如 `tkless` 根命令、`crawl`、`search`、`batch`），**严禁将所有参数平铺堆砌**。
-- 必须使用 `help_heading` 属性将选项清晰归类到明确的业务维度：
+- 顶层命令必须按业务维度分组，**严禁将所有参数平铺堆砌**：
   - `通用提取选项 (General Options)`：输出格式、正文模式、Token 上限、正负向 CSS 选择器、Schema 抽取、分块、表格过滤等；
   - `哔哩哔哩专属 (Bilibili Options)`：仅影响特定站点的专属功能参数；
   - `网络与身份认证 (Network & Auth)`：Cookie、请求头、代理、超时重试、CDP 无头端点、移动端模拟排版等；
   - `缓存与运行诊断 (Cache & Diagnostics)`：本地二级缓存开关、TTL、分词器选择、遥测统计、详细日志调试等。
+- 子命令参数较少或主题单一时可以保持平铺；新增参数超过约 15 个的子命令应补齐 `help_heading` 分组。根命令与子命令同名选项（如 `--format`）由根选项继承，不接受静默忽略。
 
 ### 2. 参数命名与短选项唯一性硬约束
-- **短选项 (`short`) 全局唯一**：在同一命令或同一子命令结构体（如 `CrawlArgs`）内部，短选项必须严格唯一，**严禁不同参数使用相同的字母**（例如严禁 `--max-pages` 与 `--proxy` 同时占用 `-p`，应分别采用 `-P` 与 `-p`），否则将触发 Clap 运行期冲突断言 Panic。
+- **短选项 (`short`) 在同一结构体内唯一**：严禁同一命令的不同参数共用同一字母（例如 `--max-pages` 与 `--proxy` 不能同时占用 `-p`，应分别采用 `-P` 与 `-p`）。跨子命令的短选项也应避免与根命令常用选项（`-c` cookie、`-f` format、`-o` output、`-m` mode）语义冲突；有冲突时优先使用长选项。
 - **长选项 (`long`) 风格**：统一使用小写连字符 `kebab-case`（如 `--max-tokens`, `--table-format`），禁止驼峰或下划线命名。
-- **参数值占位符 (`value_name`)**：必须提供大写且具备清晰业务含义的名词（如 `N`, `DIR`, `CSS_SELECTOR`, `PROXY_URL`, `FILE`），严禁使用无意义的 `<val>`。
+- **参数值占位符 (`value_name`)**：路径、文件、数量、URL、选择器等参数必须提供大写且具备清晰业务含义的名词（如 `N`, `DIR`, `CSS_SELECTOR`, `PROXY_URL`, `FILE`）；布尔开关可省略。
 
 ### 3. 信息密度与文案标准
 - **首行摘要简明扼要**：用于 `-h` 快速展示，首行不得超过 40 字；
-- **默认值与取值范围**：优先使用 Clap 的 default_value、value_parser 和 value_enum 自动展示默认值及允许值；不要在描述中重复手写默认值。依赖参数用 requires 或执行前校验明确限制，CLI 与 MCP 同步维护。
+- **默认值与取值范围**：优先使用 Clap 的 `default_value`、`value_parser` 和 `value_enum` 自动展示默认值及允许值；clap 无法自动展示的运行期默认值可在描述中以 `[默认: ...]` 标注。依赖参数使用 `requires` 或执行前校验明确限制，CLI 与 MCP 同步维护。
 - **版本号与品牌 Banner**：帮助信息 Banner 必须完整嵌入产品定位与口号：
   ```rust
   version = concat!(env!("CARGO_PKG_VERSION"), " (built ", env!("TKLESS_BUILD_DATE"), ")"),

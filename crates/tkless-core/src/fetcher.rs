@@ -67,7 +67,10 @@ impl Fetcher {
         );
 
         for (key, val) in &options.headers {
-            if is_sensitive_header(key) {
+            // Only non-credential headers are safe to attach to every request. All other
+            // custom headers are treated as request-scoped and injected by `request`
+            // only for the explicitly authorized initial origin.
+            if !is_default_header(key) {
                 continue;
             }
             if let (Ok(hname), Ok(hval)) = (HeaderName::from_str(key), HeaderValue::from_str(val)) {
@@ -185,7 +188,7 @@ impl Fetcher {
             == Some(url.origin().ascii_serialization().as_str())
         {
             for (key, value) in &self.options.headers {
-                if is_sensitive_header(key) {
+                if !is_default_header(key) {
                     if let (Ok(name), Ok(value)) =
                         (HeaderName::from_str(key), HeaderValue::from_str(value))
                     {
@@ -270,7 +273,7 @@ impl Fetcher {
         let resolved_cli_cookie = if let Some(ref cli_cookie) = self.options.cookie {
             if let Some((p, rest)) = cli_cookie.split_once(':') {
                 let p_clean = p.trim().to_lowercase();
-                if let Some(target_p) = detect_platform_from_url(url.as_str()) {
+                if let Some(target_p) = credential_platform_from_url(url.as_str()) {
                     if p_clean == target_p {
                         Some(rest.trim().to_string())
                     } else {
@@ -285,16 +288,20 @@ impl Fetcher {
                 // receive the credentials, while strictly stripping cookies on cross-origin redirects and third-party search hits.
                 if let Some(ref auth_host) = self.options.initial_target_host {
                     let req_host = url.host_str().unwrap_or("").to_lowercase();
-                    let current_platform = detect_platform_from_host(&req_host);
-                    let initial_platform = detect_platform_from_host(auth_host);
+                    let auth_host = auth_host.trim().to_lowercase();
+                    let current_platform = credential_platform_from_host(&req_host);
+                    let initial_platform = credential_platform_from_host(&auth_host);
 
-                    let is_authorized = match (current_platform, initial_platform) {
-                        (Some(cp), Some(ip)) if cp == ip => true,
-                        _ => {
-                            let apex_auth = extract_apex_domain(auth_host);
-                            is_subdomain_or_exact(&req_host, apex_auth)
-                        }
-                    };
+                    // Exact host, the same *credential* platform, or a subdomain of the
+                    // initial host. We intentionally do not fall back to the registrable
+                    // apex domain: doing so would leak cookies between tenants of
+                    // `*.vercel.app`, `*.github.io`, `*.pages.dev`, and similar services.
+                    let is_authorized = req_host == auth_host
+                        || matches!(
+                            (current_platform, initial_platform),
+                            (Some(current), Some(initial)) if current == initial
+                        )
+                        || is_subdomain_or_exact(&req_host, &auth_host);
 
                     if is_authorized {
                         Some(cli_cookie.clone())
@@ -313,8 +320,16 @@ impl Fetcher {
             (Some(fc), Some(cc)) => Some(merge_cookies(&fc, &cc)),
             (Some(fc), None) => Some(fc),
             (None, Some(cc)) => Some(cc),
-            (None, None) => detect_platform_from_url(url.as_str())
-                .and_then(|platform| self.credentials.get(platform).cloned()),
+            (None, None) => {
+                // The credential store is a fallback only when the caller did not
+                // supply any explicit cookie source.
+                if self.options.cookie.is_none() && self.options.cookie_file.is_none() {
+                    credential_platform_from_url(url.as_str())
+                        .and_then(|platform| self.credentials.get(platform).cloned())
+                } else {
+                    None
+                }
+            }
         };
         let jar_cookie = self.cookie_jar.as_ref().and_then(|jar| jar.header_for(url));
         match (jar_cookie, explicit) {
@@ -858,9 +873,41 @@ impl Fetcher {
     }
 }
 
+/// Non-credential headers that are safe to attach to every request.
+///
+/// Any header not listed here is treated as request-scoped: it is only sent to the
+/// explicitly authorized initial origin (`FetchOptions::initial_target_origin`).
+/// This is an allow-list so newly introduced credential headers fail closed.
+pub(crate) fn is_default_header(name: &str) -> bool {
+    let name = name.trim().to_ascii_lowercase();
+    matches!(
+        name.as_str(),
+        "accept"
+            | "accept-encoding"
+            | "accept-language"
+            | "cache-control"
+            | "content-language"
+            | "content-type"
+            | "dnt"
+            | "if-match"
+            | "if-modified-since"
+            | "if-none-match"
+            | "origin"
+            | "pragma"
+            | "range"
+            | "referer"
+            | "upgrade-insecure-requests"
+            | "user-agent"
+            | "x-requested-with"
+    ) || name.starts_with("sec-ch-ua")
+        || name.starts_with("sec-fetch-")
+}
+
+/// Credential-bearing headers. Used by request templates and CDP capture to
+/// refuse or drop authenticated traffic.
 pub(crate) fn is_sensitive_header(name: &str) -> bool {
     matches!(
-        name.to_ascii_lowercase().as_str(),
+        name.trim().to_ascii_lowercase().as_str(),
         "authorization"
             | "proxy-authorization"
             | "cookie"
@@ -868,6 +915,14 @@ pub(crate) fn is_sensitive_header(name: &str) -> bool {
             | "x-api-key"
             | "api-key"
             | "x-auth-token"
+            | "private-token"
+            | "x-goog-api-key"
+            | "x-subscription-key"
+            | "x-amz-security-token"
+            | "x-rapidapi-key"
+            | "x-vault-token"
+            | "x-csrf-token"
+            | "x-xsrf-token"
     )
 }
 
@@ -891,18 +946,18 @@ impl reqwest::dns::Resolve for PublicDnsResolver {
 fn retry_delay(attempt: u32, retry_after: Option<&str>) -> Duration {
     if let Some(value) = retry_after {
         if let Ok(seconds) = value.trim().parse::<u64>() {
-            return Duration::from_secs(seconds.min(300));
+            return Duration::from_secs(seconds.min(60));
         }
         if let Ok(date) = chrono::DateTime::parse_from_rfc2822(value) {
             let seconds = (date.timestamp() - chrono::Utc::now().timestamp()).max(0) as u64;
-            return Duration::from_secs(seconds.min(300));
+            return Duration::from_secs(seconds.min(60));
         }
     }
     Duration::from_millis(200 * (1u64 << attempt.saturating_sub(1).min(5)))
         .min(Duration::from_secs(5))
 }
 
-fn is_private_ip(ip: std::net::IpAddr) -> bool {
+pub(crate) fn is_private_ip(ip: std::net::IpAddr) -> bool {
     match ip {
         std::net::IpAddr::V4(ipv4) => {
             let oct = ipv4.octets();
@@ -916,22 +971,52 @@ fn is_private_ip(ip: std::net::IpAddr) -> bool {
                 || (oct[0] == 100 && (oct[1] & 0xc0) == 64) // 100.64.0.0/10 (CGNAT)
                 || (oct[0] == 192 && oct[1] == 0 && oct[2] == 0) // 192.0.0.0/24 (IETF Protocol Assignments)
                 || (oct[0] == 192 && oct[1] == 0 && oct[2] == 2) // 192.0.2.0/24 (TEST-NET-1)
+                || (oct[0] == 192 && oct[1] == 88 && oct[2] == 99) // 192.88.99.0/24 (6to4 relay anycast)
                 || (oct[0] == 198 && oct[1] == 51 && oct[2] == 100) // 198.51.100.0/24 (TEST-NET-2)
                 || (oct[0] == 203 && oct[1] == 0 && oct[2] == 113) // 203.0.113.0/24 (TEST-NET-3)
                 || (oct[0] & 0xf0) == 240 // 240.0.0.0/4 (Reserved)
         }
         std::net::IpAddr::V6(ipv6) => {
+            let segments = ipv6.segments();
             // Check IPv4-mapped IPv6 (e.g. ::ffff:127.0.0.1 or ::ffff:169.254.169.254)
             if let Some(ipv4) = ipv6.to_ipv4_mapped() {
                 return is_private_ip(std::net::IpAddr::V4(ipv4));
             }
+            // IPv4-compatible (::a.b.c.d) and IPv4-translated (::ffff:0:a.b.c.d)
+            if segments[..6] == [0, 0, 0, 0, 0, 0]
+                || (segments[..4] == [0, 0, 0, 0] && segments[4] == 0xffff && segments[5] == 0)
+            {
+                return is_private_ip(std::net::IpAddr::V4(embedded_ipv4(
+                    segments[6],
+                    segments[7],
+                )));
+            }
+            // NAT64 well-known prefix 64:ff9b::/96
+            if segments[0] == 0x0064 && segments[1] == 0xff9b && segments[2..6] == [0, 0, 0, 0] {
+                return is_private_ip(std::net::IpAddr::V4(embedded_ipv4(
+                    segments[6],
+                    segments[7],
+                )));
+            }
+            // 6to4 2002::/16 embeds an IPv4 address in the next 32 bits.
+            if segments[0] == 0x2002 {
+                return is_private_ip(std::net::IpAddr::V4(embedded_ipv4(
+                    segments[1],
+                    segments[2],
+                )));
+            }
             ipv6.is_loopback()
                 || ipv6.is_unspecified()
                 || ipv6.is_multicast()
-                || (ipv6.segments()[0] & 0xfe00) == 0xfc00 // Unique Local Address fc00::/7
-                || (ipv6.segments()[0] & 0xffc0) == 0xfe80 // Link-Local Address fe80::/10
+                || (segments[0] & 0xfe00) == 0xfc00 // Unique Local Address fc00::/7
+                || (segments[0] & 0xffc0) == 0xfe80 // Link-Local Address fe80::/10
+                || (segments[0] & 0xffc0) == 0xfec0 // Site-Local Address fec0::/10
         }
     }
+}
+
+fn embedded_ipv4(high: u16, low: u16) -> std::net::Ipv4Addr {
+    std::net::Ipv4Addr::new((high >> 8) as u8, high as u8, (low >> 8) as u8, low as u8)
 }
 
 /// Detect charset and decode raw bytes into UTF-8 string.
@@ -1135,6 +1220,58 @@ pub fn detect_platform_from_url(url_str: &str) -> Option<&'static str> {
     detect_platform_from_host(host)
 }
 
+/// Platform used for credential selection.
+///
+/// Deliberately narrower than adapter detection: a Bilibili CDN
+/// (`bilivideo.com`) or the whole `qq.com` parent domain must never receive a
+/// stored session just because the adapter can handle those hosts.
+pub(crate) fn credential_platform_from_host(host: &str) -> Option<&'static str> {
+    let host = host.trim().to_lowercase();
+    if is_subdomain_or_exact(&host, "bilibili.com") || is_subdomain_or_exact(&host, "b23.tv") {
+        return Some("bilibili");
+    }
+    if is_subdomain_or_exact(&host, "mp.weixin.qq.com")
+        || is_subdomain_or_exact(&host, "weixin.qq.com")
+    {
+        return Some("wechat");
+    }
+    detect_platform_from_host(&host).filter(|platform| !matches!(*platform, "bilibili" | "wechat"))
+}
+
+pub(crate) fn credential_platform_from_url(url_str: &str) -> Option<&'static str> {
+    let parsed = Url::parse(url_str).ok()?;
+    credential_platform_from_host(parsed.host_str()?)
+}
+
+/// Atomically writes a credential file with owner-only permissions on Unix.
+fn write_secret_text(path: &Path, contents: &str) -> Result<(), TklessError> {
+    use std::io::Write;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let temp = path.with_extension(format!(
+        "tmp-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(&temp)?;
+    let result = (|| -> std::io::Result<()> {
+        file.write_all(contents.as_bytes())?;
+        file.sync_all()?;
+        drop(file);
+        std::fs::rename(&temp, path)
+    })();
+    let _ = std::fs::remove_file(&temp);
+    result.map_err(TklessError::Io)
+}
+
 /// Loads cookie credentials from file tailored for the specified target URL or platform.
 /// Prevents cross-site cookie collisions by extracting credentials matching the platform prefix.
 pub fn load_cookie_from_file_for_url(
@@ -1145,7 +1282,7 @@ pub fn load_cookie_from_file_for_url(
         TklessError::InvalidArgument(format!("Cannot read cookie file '{}': {e}", path.display()))
     })?;
 
-    let platform = target_url.and_then(detect_platform_from_url);
+    let platform = target_url.and_then(credential_platform_from_url);
     Ok(parse_cookie_content_for_platform(&content, platform))
 }
 
@@ -1220,7 +1357,7 @@ pub fn save_platform_cookies_to_file(
         out.push_str(&format!("{p}: {c}\n"));
     }
 
-    std::fs::write(path, out.trim_end()).map_err(TklessError::Io)?;
+    write_secret_text(path, out.trim_end())?;
     Ok(())
 }
 
@@ -1399,6 +1536,44 @@ mod tests {
         assert!(merged.contains("DedeUserID=123"));
         assert!(merged.contains("buvid3=xyz"));
         assert!(!merged.contains("SESSDATA=old_val"));
+    }
+
+    #[test]
+    fn test_default_and_sensitive_header_classification() {
+        assert!(is_default_header("Accept"));
+        assert!(is_default_header("sec-ch-ua-platform"));
+        assert!(!is_default_header("Private-Token"));
+        assert!(!is_default_header("X-Goog-Api-Key"));
+        assert!(!is_default_header("X-Custom-Tenant"));
+        assert!(is_sensitive_header("Private-Token"));
+        assert!(is_sensitive_header("X-Amz-Security-Token"));
+        assert!(!is_sensitive_header("X-Custom-Tenant"));
+    }
+
+    #[test]
+    fn test_credential_platform_is_narrower_than_adapter_detection() {
+        assert_eq!(
+            credential_platform_from_host("www.bilibili.com"),
+            Some("bilibili")
+        );
+        assert_eq!(
+            credential_platform_from_host("api.bilibili.com"),
+            Some("bilibili")
+        );
+        assert_eq!(credential_platform_from_host("upos-.bilivideo.com"), None);
+        assert_eq!(
+            credential_platform_from_host("mp.weixin.qq.com"),
+            Some("wechat")
+        );
+        assert_eq!(
+            credential_platform_from_host("weixin.qq.com"),
+            Some("wechat")
+        );
+        assert_eq!(credential_platform_from_host("www.qq.com"), None);
+        assert_eq!(
+            credential_platform_from_host("zhuanlan.zhihu.com"),
+            Some("zhihu")
+        );
     }
 
     #[test]
@@ -1599,6 +1774,17 @@ mod tests {
         assert!(content3.contains("zhihu: d_c0=\"zhihu_dc0_val\"; z_c0=\"zhihu_zc0_val\""));
         assert!(!content3.contains("bili_token_123"));
 
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&cookie_file)
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777;
+            assert_eq!(mode, 0o600, "credential file must be owner-only");
+        }
+
         // Cleanup
         let _ = std::fs::remove_dir_all(&temp_dir);
     }
@@ -1680,6 +1866,19 @@ mod tests {
         assert!(!is_private_ip("8.8.8.8".parse::<IpAddr>().unwrap()));
         assert!(!is_private_ip("198.18.0.1".parse::<IpAddr>().unwrap()));
         assert!(!is_private_ip("104.16.132.229".parse::<IpAddr>().unwrap()));
+
+        // 6to4 relay anycast and special IPv6 transition prefixes
+        assert!(is_private_ip("192.88.99.1".parse::<IpAddr>().unwrap()));
+        assert!(is_private_ip("64:ff9b::7f00:1".parse::<IpAddr>().unwrap()));
+        assert!(is_private_ip("2002:7f00:1::".parse::<IpAddr>().unwrap()));
+        assert!(is_private_ip(
+            "::ffff:0:127.0.0.1".parse::<IpAddr>().unwrap()
+        ));
+        assert!(is_private_ip("fec0::1".parse::<IpAddr>().unwrap()));
+        assert!(!is_private_ip(
+            "64:ff9b::808:808".parse::<IpAddr>().unwrap()
+        ));
+        assert!(!is_private_ip("2002:808:808::".parse::<IpAddr>().unwrap()));
 
         // IPv6 loopback, unspecified, ULA & link-local
         assert!(is_private_ip("::1".parse::<IpAddr>().unwrap()));
@@ -1859,12 +2058,11 @@ mod tests {
             Some("SESSDATA=bili_val; bili_jct=csrf_val".to_string())
         );
 
-        // Platform video stream CDN (bilivideo.com) receives the cookie
+        // CDN hosts are intentionally not part of the credential scope. They do not
+        // need a session cookie and sharing it with a different registrable domain
+        // was a cross-site leak.
         let cdn_bili_url = Url::parse("https://upos-sz-mirror08c.bilivideo.com/video.mp4").unwrap();
-        assert_eq!(
-            fetcher.resolve_cookie_for_url(&cdn_bili_url),
-            Some("SESSDATA=bili_val; bili_jct=csrf_val".to_string())
-        );
+        assert_eq!(fetcher.resolve_cookie_for_url(&cdn_bili_url), None);
 
         // Third-party search result item or cross-origin redirect MUST STRIP the cookie!
         let third_party = Url::parse("https://rust-lang.org/").unwrap();

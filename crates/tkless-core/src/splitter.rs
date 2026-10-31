@@ -4,6 +4,7 @@
 //! (`#` or `##`), and optionally writes them into a structured directory with an `index.md` Table of Contents.
 
 use crate::error::TklessError;
+use crate::model::TokenizerKind;
 use crate::token::count_tokens;
 use serde::{Deserialize, Serialize};
 use std::fs::{self, File};
@@ -21,10 +22,23 @@ pub struct DocumentSection {
     pub token_count: usize,
 }
 
-/// Splits a Markdown document into sections based on top-level (`#`) and second-level (`##`) headings.
+/// Splits a Markdown document into sections using the default tokenizer.
+///
+/// Use [`split_markdown_by_headings_with_tokenizer`] to keep section token counts
+/// consistent with the caller's `--tokenizer` choice.
 pub fn split_markdown_by_headings(
     markdown: &str,
     max_heading_level: usize,
+) -> Vec<DocumentSection> {
+    split_markdown_by_headings_with_tokenizer(markdown, max_heading_level, TokenizerKind::default())
+}
+
+/// Splits a Markdown document into sections based on top-level (`#`) and
+/// second-level (`##`) headings, counting tokens with the supplied tokenizer.
+pub fn split_markdown_by_headings_with_tokenizer(
+    markdown: &str,
+    max_heading_level: usize,
+    tokenizer: TokenizerKind,
 ) -> Vec<DocumentSection> {
     let clean = markdown.trim();
     if clean.is_empty() {
@@ -36,18 +50,30 @@ pub fn split_markdown_by_headings(
     let mut current_title = String::new();
     let mut current_level = 1;
     let mut current_lines = Vec::new();
-    let mut in_code_block = false;
+    let mut code_fence: Option<&str> = None;
 
     for line in clean.lines() {
         let trimmed = line.trim_start();
 
-        if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
-            in_code_block = !in_code_block;
+        let fence = if trimmed.starts_with("```") {
+            Some("```")
+        } else if trimmed.starts_with("~~~") {
+            Some("~~~")
+        } else {
+            None
+        };
+        if let Some(marker) = fence {
+            match code_fence {
+                None => code_fence = Some(marker),
+                Some(open) if open == marker => code_fence = None,
+                // A different fence type inside a code block is just content.
+                Some(_) => {}
+            }
             current_lines.push(line);
             continue;
         }
 
-        if !in_code_block && trimmed.starts_with('#') {
+        if code_fence.is_none() && trimmed.starts_with('#') {
             let heading_level = trimmed.chars().take_while(|&c| c == '#').count();
             if heading_level <= level_limit && trimmed.chars().nth(heading_level) == Some(' ') {
                 // Flush previous section
@@ -59,8 +85,7 @@ pub fn split_markdown_by_headings(
                         current_title.clone()
                     };
                     let slug = slugify(&title);
-                    let token_count =
-                        count_tokens(&sec_content, crate::model::TokenizerKind::default());
+                    let token_count = count_tokens(&sec_content, tokenizer);
 
                     sections.push(DocumentSection {
                         index: sections.len() + 1,
@@ -92,7 +117,7 @@ pub fn split_markdown_by_headings(
             current_title
         };
         let slug = slugify(&title);
-        let token_count = count_tokens(&sec_content, crate::model::TokenizerKind::default());
+        let token_count = count_tokens(&sec_content, tokenizer);
 
         sections.push(DocumentSection {
             index: sections.len() + 1,
@@ -217,6 +242,18 @@ Zero-cost abstractions ensure high throughput.
         assert_eq!(sections[2].title, "Performance");
         assert_eq!(sections[2].level, 2);
         assert!(sections[2].content.contains("Zero-cost abstractions"));
+    }
+
+    #[test]
+    fn mixed_fence_types_do_not_split_headings_inside_code() {
+        let markdown = "~~~\n# not a heading\n```\nstill code\n~~~\n# Real Heading\nBody";
+        let sections = split_markdown_by_headings(markdown, 2);
+        assert!(!sections
+            .iter()
+            .any(|section| section.title == "not a heading"));
+        assert!(sections
+            .iter()
+            .any(|section| section.title == "Real Heading"));
     }
 
     #[test]

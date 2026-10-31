@@ -151,7 +151,8 @@ fn split_candidate_sentences(text: &str) -> Vec<String> {
 
         // Split by punctuation: period, exclamation, question mark, or Chinese equivalents
         let mut current = String::new();
-        for ch in trimmed.chars() {
+        let mut chars = trimmed.chars().peekable();
+        while let Some(ch) = chars.next() {
             current.push(ch);
             if ch == '。'
                 || ch == '！'
@@ -167,12 +168,17 @@ fn split_candidate_sentences(text: &str) -> Vec<String> {
                 }
                 current.clear();
             } else if ch == '.' {
-                // Avoid splitting decimal numbers (e.g. "3.14") or abbreviations
-                let s = current.trim().to_string();
-                if is_valid_sentence(&s) {
-                    candidates.push(s);
+                // A period is a sentence boundary only when it is followed by
+                // whitespace or the end of the line. This keeps decimals such as
+                // `3.14` and abbreviations such as `e.g.` intact.
+                let boundary = chars.peek().is_none_or(|next| next.is_whitespace());
+                if boundary {
+                    let s = current.trim().to_string();
+                    if is_valid_sentence(&s) {
+                        candidates.push(s);
+                    }
+                    current.clear();
                 }
-                current.clear();
             }
         }
 
@@ -227,6 +233,16 @@ fn tokenize_words(text: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn decimal_numbers_are_not_split_into_fragments() {
+        let sentences =
+            split_candidate_sentences("Rust 3.14 is released with several improvements and fixes.");
+        assert!(
+            sentences.iter().any(|sentence| sentence.contains("3.14")),
+            "decimal number was split: {sentences:?}"
+        );
+    }
 
     #[test]
     fn test_extract_key_takeaways_english() {

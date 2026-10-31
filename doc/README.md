@@ -1,6 +1,6 @@
 # TkLess 开发与设计文档中心
 
-本目录说明当前工作区的使用方式、协议、开发标准与验证记录。文档对齐日期：2026-10-30；版本与迁移另见 [工作区更新说明](../RELEASE_NOTES.md) 和 [变更日志](../CHANGELOG.md)。
+本目录说明当前工作区的使用方式、协议、开发标准与验证记录。文档对齐日期：2026-10-31；版本与迁移另见 [工作区更新说明](../RELEASE_NOTES.md) 和 [变更日志](../CHANGELOG.md)。
 > **Spend less tokens, perceive more web.**
 
 ---
@@ -21,6 +21,7 @@
 | **[10-collection-workflows.md](./10-collection-workflows.md)** | **采集工作流** | 通用分页、列表详情、快照增量、爬虫恢复与预算、受限浏览器步骤。 |
 | **[11-wechat-public.md](./11-wechat-public.md)** | **微信公众号** | 名称发现、文章身份、关联合集、自动翻页及公开内容边界。 |
 | **[12-optimization-plan.md](./12-optimization-plan.md)** | **优化方案** | 能力缺口清单、十个优化工作流、优先级、契约兼容策略、里程碑与验收标准。 |
+| **[13-code-audit.md](./13-code-audit.md)** | **质量审计：安全、逻辑与规范** | 2026-10-31 静态审查记录：安全漏洞、逻辑缺陷、CLI 命令格式与文档一致性问题的分级清单与修复优先级。 |
 
 ---
 

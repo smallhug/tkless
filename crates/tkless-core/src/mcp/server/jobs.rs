@@ -310,6 +310,22 @@ impl McpServer {
             max_tokens,
             selector,
             remove_selector,
+            extract_links: args
+                .get("extract_links")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            extract_tables: args
+                .get("extract_tables")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            strip_images: args
+                .get("no_images")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            strip_links: args
+                .get("no_links")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
             schema,
             schema_strict: args
                 .get("schema_strict")

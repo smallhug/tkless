@@ -24,35 +24,31 @@ use url::Url;
 #[tokio::main]
 async fn main() {
     let args = CliArgs::parse();
+    let log_format = args.log_format;
     if let Err(err) = run(args).await {
         let exit_code = if let Some(pe) = err.downcast_ref::<TklessError>() {
             pe.exit_code()
         } else {
             1
         };
-        eprintln!("Error: {err:#}");
+        match log_format {
+            CliLogFormat::Json => {
+                // Fatal errors must follow --log-format so JSON pipelines stay parseable.
+                let payload = serde_json::json!({
+                    "level": "error",
+                    "code": err.downcast_ref::<TklessError>().map(|e| e.details().code),
+                    "message": format!("{err:#}"),
+                    "exit_code": exit_code,
+                });
+                eprintln!("{payload}");
+            }
+            CliLogFormat::Plain => eprintln!("Error: {err:#}"),
+        }
         std::process::exit(exit_code);
     }
 }
 
 async fn run(args: CliArgs) -> Result<()> {
-    let structured_command_format = match &args.command {
-        Some(SubCommand::Search(a)) => Some(a.format),
-        Some(SubCommand::Batch(a)) => Some(a.format),
-        Some(SubCommand::Crawl(a)) => Some(a.format),
-        Some(SubCommand::Research(a)) => Some(a.format),
-        Some(SubCommand::Diff(a)) => Some(a.format),
-        Some(SubCommand::Adapters(a)) => Some(a.format),
-        _ => None,
-    };
-    if structured_command_format
-        .is_some_and(|f| !matches!(f, CliFormat::Markdown | CliFormat::Json | CliFormat::Jsonl))
-    {
-        return Err(TklessError::InvalidArgument(
-            "This subcommand supports markdown, json, or jsonl".into(),
-        )
-        .into());
-    }
     // Configure tracing logger to output strictly to stderr
     if !args.quiet {
         let filter_str = match args.verbose {
@@ -119,10 +115,9 @@ async fn run(args: CliArgs) -> Result<()> {
     if let Some(SubCommand::Auth(ref auth)) = args.command {
         match auth.action.as_str() {
             "set" => {
-                let platform = auth
-                    .platform
-                    .as_deref()
-                    .context("auth set requires a platform name")?;
+                let platform = auth.platform.as_deref().ok_or_else(|| {
+                    TklessError::InvalidArgument("auth set requires a platform name".into())
+                })?;
                 let mut cookie = String::new();
                 io::stdin()
                     .read_to_string(&mut cookie)
@@ -136,17 +131,21 @@ async fn run(args: CliArgs) -> Result<()> {
                 }
             }
             "remove" => {
-                let platform = auth
-                    .platform
-                    .as_deref()
-                    .context("auth remove requires a platform name")?;
+                let platform = auth.platform.as_deref().ok_or_else(|| {
+                    TklessError::InvalidArgument("auth remove requires a platform name".into())
+                })?;
                 if tkless_core::credentials::remove(platform)? {
                     println!("Removed credential for '{platform}'");
                 } else {
                     println!("No stored credential for '{platform}'");
                 }
             }
-            other => bail!("Unknown auth action '{other}'; use set, list or remove"),
+            other => {
+                return Err(TklessError::InvalidArgument(format!(
+                    "Unknown auth action '{other}'; use set, list or remove"
+                ))
+                .into())
+            }
         }
         return Ok(());
     }
@@ -178,13 +177,40 @@ async fn run(args: CliArgs) -> Result<()> {
                 return Ok(());
             }
             other => {
-                bail!("Unsupported login platform: '{other}'. Currently supported platforms: bilibili, zhihu");
+                return Err(TklessError::InvalidArgument(format!(
+                    "Unsupported login platform: '{other}'. Currently supported platforms: bilibili, zhihu"
+                ))
+                .into());
             }
         }
     }
 
     let default_cookie_path = std::path::Path::new("./cookies.txt");
     let target_url_ref = args.target.as_deref();
+
+    if args.stats && args.command.is_some() {
+        eprintln!(
+            "[TkLess warning] --stats is only implemented for single-page extraction; it is ignored for subcommands"
+        );
+    }
+
+    if args.format != CliFormat::Markdown && !subcommand_uses_root_format(args.command.as_ref()) {
+        eprintln!(
+            "[TkLess warning] root --format is not supported by this subcommand and is ignored"
+        );
+    }
+    if args.output_file.is_some() && !subcommand_uses_root_output(args.command.as_ref()) {
+        eprintln!(
+            "[TkLess warning] root --output is not supported by this subcommand and is ignored"
+        );
+    }
+
+    if args.mcp_dynamic && !args.mcp && !matches!(args.command, Some(SubCommand::Mcp(_))) {
+        return Err(TklessError::InvalidArgument(
+            "--mcp-dynamic requires --mcp or the `mcp` subcommand".into(),
+        )
+        .into());
+    }
 
     let cookie_file_path = if let Some(ref cf) = args.cookie_file {
         Some(cf.to_string_lossy().to_string())
@@ -335,7 +361,14 @@ async fn run(args: CliArgs) -> Result<()> {
     // -------------------------------------------------------------------------
     let is_mcp = args.mcp || matches!(args.command, Some(SubCommand::Mcp(_)));
     if let Some(command) = &args.command {
-        if commands::workflows::run(command, &fetch_options, &extraction_options).await? {
+        if commands::workflows::run(
+            command,
+            &fetch_options,
+            &extraction_options,
+            args.output_file.as_deref(),
+        )
+        .await?
+        {
             return Ok(());
         }
     }
@@ -429,18 +462,13 @@ async fn run(args: CliArgs) -> Result<()> {
     // -------------------------------------------------------------------------
     if let Some(SubCommand::Adapters(ref adapters_args)) = args.command {
         let list = tkless_core::adapters::AdapterRegistry::list_adapter_metadata();
-        let payload = if matches!(adapters_args.format, CliFormat::Json | CliFormat::Jsonl) {
-            output::serialize_rows(&list, adapters_args.format)?
+        let format = args.structured_format(adapters_args.format, true)?;
+        let payload = if matches!(format, CliFormat::Json | CliFormat::Jsonl) {
+            output::serialize_rows(&list, format)?
         } else {
             tkless_core::adapters::format_adapters_markdown(&list)
         };
-        output::write_payload(
-            &payload,
-            adapters_args
-                .output
-                .as_deref()
-                .or(args.output_file.as_deref()),
-        )?;
+        output::write_payload(&payload, args.output_path(adapters_args.output.as_deref()))?;
         return Ok(());
     }
 
@@ -464,13 +492,14 @@ async fn run(args: CliArgs) -> Result<()> {
     // -------------------------------------------------------------------------
     if let Some(SubCommand::Diff(ref diff_args)) = args.command {
         let engine = TklessEngine::with_options(fetch_options)
-            .context("Failed to initialize TkLess engine")?;
+            .context("Failed to initialize Tkless engine")?;
         let old_text = load_target_text(&diff_args.old_target, &engine).await?;
         let new_text = load_target_text(&diff_args.new_target, &engine).await?;
         let report = tkless_core::diff::compute_diff(&old_text, &new_text);
+        let format = args.structured_format(diff_args.format, true)?;
 
-        let payload = if matches!(diff_args.format, CliFormat::Json | CliFormat::Jsonl) {
-            output::serialize_json(&report, diff_args.format)?
+        let payload = if matches!(format, CliFormat::Json | CliFormat::Jsonl) {
+            output::serialize_json(&report, format)?
         } else {
             format!(
                 "# 文档版本差异与变更分析 (Content Diff Report)\n\n> 新增行数: `+{}` | 删除行数: `-{}` | 未变行数: `{}` | 变更比例: `{:.1}%`\n\n```diff\n{}\n```",
@@ -481,10 +510,7 @@ async fn run(args: CliArgs) -> Result<()> {
                 report.unified_diff
             )
         };
-        output::write_payload(
-            &payload,
-            diff_args.output.as_deref().or(args.output_file.as_deref()),
-        )?;
+        output::write_payload(&payload, args.output_path(diff_args.output.as_deref()))?;
         return Ok(());
     }
 
@@ -504,12 +530,13 @@ async fn run(args: CliArgs) -> Result<()> {
 
         if let Some(idx) = tables_args.table_index {
             if idx >= tables.len() {
-                bail!(
+                return Err(TklessError::InvalidArgument(format!(
                     "table_index {} 超出范围，页面仅包含 {} 个表格 (有效索引: 0-{})",
                     idx,
                     tables.len(),
                     tables.len().saturating_sub(1)
-                );
+                ))
+                .into());
             }
             tables = vec![tables.swap_remove(idx)];
         }
@@ -533,13 +560,7 @@ async fn run(args: CliArgs) -> Result<()> {
             tkless_core::model::ExtractedTable::format_tables(&tables, table_format)
         };
 
-        output::write_payload(
-            &payload,
-            tables_args
-                .output
-                .as_deref()
-                .or(args.output_file.as_deref()),
-        )?;
+        output::write_payload(&payload, args.output_path(tables_args.output.as_deref()))?;
         return Ok(());
     }
 
@@ -554,10 +575,8 @@ async fn run(args: CliArgs) -> Result<()> {
         let page = args.bili_page.unwrap_or(1);
         let encoded_kw: String = url::form_urlencoded::byte_serialize(kw.as_bytes()).collect();
         let mut s_url = format!("https://search.bilibili.com/all?keyword={encoded_kw}&page={page}");
-        if let Some(ref ord) = args.bili_order {
-            if !ord.is_empty() {
-                s_url.push_str(&format!("&order={ord}"));
-            }
+        if let Some(ord) = args.bili_order {
+            s_url.push_str(&format!("&order={}", ord.as_str()));
         }
         s_url
     } else if args.bili_feed && args.target.is_none() {
@@ -566,12 +585,18 @@ async fn run(args: CliArgs) -> Result<()> {
         match args.target {
             Some(ref t) => {
                 let mut t_str = t.clone();
-                if t_str.contains("search.bilibili.com") && (args.bili_page.is_some() || args.bili_order.is_some()) {
-                    t_str = apply_search_params(&t_str, args.bili_page, args.bili_order.as_deref());
+                if t_str.contains("search.bilibili.com")
+                    && (args.bili_page.is_some() || args.bili_order.is_some())
+                {
+                    t_str = apply_search_params(
+                        &t_str,
+                        args.bili_page,
+                        args.bili_order.map(|order| order.as_str()),
+                    );
                 }
                 t_str
             }
-            None => bail!("Missing target URL, '--bili-search <KEYWORD>', or '-'. See 'tkless --help' for available options."),
+            None => return Err(TklessError::InvalidArgument("Missing target URL, '--bili-search <KEYWORD>', or '-'. See 'tkless --help' for available options.".into()).into()),
         }
     };
 
@@ -587,7 +612,7 @@ async fn run(args: CliArgs) -> Result<()> {
     // -------------------------------------------------------------------------
     if let Some(ref dest_val) = args.bili_dl {
         let (bvid, default_page) = tkless_core::adapters::bilibili::extract_video_info(&target)
-            .context("The --bili-dl option requires a valid Bilibili video URL or BV ID")?;
+            .context("The --download-video option requires a valid Bilibili video URL or BV ID")?;
 
         let page_num = args.bili_page.map(|p| p as usize).unwrap_or(default_page);
 
@@ -620,7 +645,7 @@ async fn run(args: CliArgs) -> Result<()> {
     // -------------------------------------------------------------------------
     if let Some(ref dest_val) = args.bili_dl_cover {
         let (bvid, _) = tkless_core::adapters::bilibili::extract_video_info(&target)
-            .context("The --bili-dl-cover option requires a valid Bilibili video URL or BV ID")?;
+            .context("The --download-cover option requires a valid Bilibili video URL or BV ID")?;
 
         let user_dest = if dest_val.is_empty() {
             None
@@ -643,9 +668,15 @@ async fn run(args: CliArgs) -> Result<()> {
     // -------------------------------------------------------------------------
     // Dedicated Visual Action: Capture Screenshot via CDP Headless Browser
     // -------------------------------------------------------------------------
+    if args.cdp_wait_ms.is_some() && args.cdp.is_none() && !args.auto_cdp {
+        return Err(TklessError::InvalidArgument(
+            "--cdp-wait requires an explicit --cdp endpoint (or --auto-cdp)".into(),
+        )
+        .into());
+    }
     if let Some(ref produced_path) = args.screenshot.as_ref().or(args.pdf.as_ref()) {
         let as_pdf = args.pdf.is_some();
-        let parsed_url = url::Url::parse(&target)?;
+        let parsed_url = url::Url::parse(&target).map_err(TklessError::UrlParse)?;
         engine
             .fetcher()
             .validate_ssrf(&parsed_url)
@@ -703,7 +734,7 @@ async fn run(args: CliArgs) -> Result<()> {
                 .context("Failed to read HTML content from standard input")?;
             stdin_content
         } else if let Some(ref cdp_endpoint) = args.cdp {
-            let parsed_url = url::Url::parse(&target)?;
+            let parsed_url = url::Url::parse(&target).map_err(TklessError::UrlParse)?;
             engine
                 .fetcher()
                 .validate_ssrf(&parsed_url)
@@ -809,36 +840,40 @@ async fn run(args: CliArgs) -> Result<()> {
         );
     }
 
-    // --stats is decoupled from -q: when user explicitly asks for --stats, telemetry is rendered to stdout
+    // --stats is written to stderr so structured payloads on stdout stay machine-readable
     if args.stats {
         if let Some(ref m) = doc.metrics {
-            println!("\n[TkLess Telemetry & Token Economy]");
-            println!("----------------------------------------------------------");
-            println!("Target URL        : {}", doc.url);
-            println!(
+            eprintln!("\n[TkLess Telemetry & Token Economy]");
+            eprintln!("----------------------------------------------------------");
+            eprintln!("Target URL        : {}", doc.url);
+            eprintln!(
                 "Pipeline Latency  : {}ms (Fetch: {}ms, Clean: {}ms)",
                 m.total_time_ms, m.fetch_time_ms, m.clean_time_ms
             );
-            println!(
+            eprintln!(
                 "Payload Reduction : {} -> {} (降噪率: {:.1}%)",
                 tkless_core::downloader::format_bytes(m.raw_bytes as u64),
                 tkless_core::downloader::format_bytes(m.cleaned_bytes as u64),
                 m.noise_reduction_percent
             );
-            println!(
+            eprintln!(
                 "Token Economy     : ~{} (Raw) -> {} (Clean) [节省 {} Tokens, 节省率: {:.1}%]",
                 m.raw_token_estimate,
                 m.final_token_count,
                 m.raw_token_estimate.saturating_sub(m.final_token_count),
                 m.token_savings_percent
             );
-            println!("----------------------------------------------------------\n");
+            eprintln!("----------------------------------------------------------\n");
         }
     }
 
     // Multi-file directory export divided by headings if --out-dir is specified
     if let Some(ref out_dir) = args.out_dir {
-        let sections = tkless_core::split_markdown_by_headings(&doc.content, 2);
+        let sections = tkless_core::split_markdown_by_headings_with_tokenizer(
+            &doc.content,
+            2,
+            args.tokenizer.into(),
+        );
         let _written =
             tkless_core::export_sections_to_dir(&sections, out_dir, doc.title.as_deref())?;
         if !args.quiet {
@@ -862,6 +897,40 @@ async fn run(args: CliArgs) -> Result<()> {
     )?;
 
     Ok(())
+}
+
+/// Returns whether the structured subcommand resolves the root `--format` option.
+fn subcommand_uses_root_format(command: Option<&SubCommand>) -> bool {
+    match command {
+        None
+        | Some(SubCommand::Search(_))
+        | Some(SubCommand::Research(_))
+        | Some(SubCommand::Batch(_))
+        | Some(SubCommand::Crawl(_))
+        | Some(SubCommand::Diff(_))
+        | Some(SubCommand::Adapters(_)) => true,
+        Some(_) => false,
+    }
+}
+
+/// Returns whether the subcommand resolves the root `-o/--output` option.
+fn subcommand_uses_root_output(command: Option<&SubCommand>) -> bool {
+    matches!(
+        command,
+        None | Some(SubCommand::Search(_))
+            | Some(SubCommand::Research(_))
+            | Some(SubCommand::Batch(_))
+            | Some(SubCommand::Crawl(_))
+            | Some(SubCommand::Diff(_))
+            | Some(SubCommand::Adapters(_))
+            | Some(SubCommand::Tables(_))
+            | Some(SubCommand::Doctor(_))
+            | Some(SubCommand::Wechat(_))
+            | Some(SubCommand::Collect(_))
+            | Some(SubCommand::Sync(_))
+            | Some(SubCommand::Watch(_))
+            | Some(SubCommand::Browse(_))
+    )
 }
 
 /// Injects or overrides page and order query parameters on a search URL.
@@ -916,7 +985,7 @@ async fn load_target_html(target: &str, engine: &TklessEngine) -> Result<String>
             .context("Failed to read HTML from stdin")?;
         Ok(buffer)
     } else if target.starts_with("http://") || target.starts_with("https://") {
-        let parsed = Url::parse(target).context("Invalid target URL")?;
+        let parsed = Url::parse(target).map_err(TklessError::UrlParse)?;
         engine
             .fetcher()
             .validate_ssrf(&parsed)

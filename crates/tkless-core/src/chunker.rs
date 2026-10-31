@@ -28,7 +28,10 @@ pub fn chunk_markdown(
         return Vec::new();
     }
 
-    let target_tokens = target_chunk_tokens.max(50);
+    if target_chunk_tokens == 0 {
+        return Vec::new();
+    }
+    let target_tokens = target_chunk_tokens;
     let overlap = overlap_tokens.min(target_tokens / 2);
 
     let blocks = parse_markdown_blocks(trimmed);

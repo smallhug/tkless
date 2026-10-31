@@ -324,6 +324,21 @@ impl ExtractionOptions {
                 "skills_pages must be 1..=50 and skills_limit must be 1..=10000".into(),
             ));
         }
+        if let Some(size) = self.chunk_size {
+            if !(1..=100_000).contains(&size) {
+                return Err(crate::TklessError::InvalidArgument(
+                    "chunk_size must be 1..=100000".into(),
+                ));
+            }
+        }
+        if let Some(overlap) = self.chunk_overlap {
+            let size = self.chunk_size.unwrap_or(500);
+            if overlap > size / 2 {
+                return Err(crate::TklessError::InvalidArgument(
+                    "chunk_overlap must not exceed half of chunk_size".into(),
+                ));
+            }
+        }
         if self.schema_strict {
             let schema = self.schema.as_deref().ok_or_else(|| {
                 crate::TklessError::InvalidArgument("schema_strict requires schema".into())
@@ -535,11 +550,14 @@ impl ExtractedTable {
             return out;
         }
 
-        let headers: Vec<String> = if self.headers.is_empty() {
+        let mut headers: Vec<String> = if self.headers.is_empty() {
             (1..=col_count).map(|i| format!("Col {i}")).collect()
         } else {
             self.headers.iter().map(|h| sanitize_md_cell(h)).collect()
         };
+        while headers.len() < col_count {
+            headers.push(format!("Col {}", headers.len() + 1));
+        }
 
         out.push_str("| ");
         out.push_str(&headers.join(" | "));

@@ -15,12 +15,13 @@ impl McpServer {
         let url = &normalized_url;
 
         let format = match args.get("format").and_then(|v| v.as_str()) {
-            Some("json") => OutputFormat::Json,
+            Some("json") | Some("jsonl") => OutputFormat::Json,
             Some("text") => OutputFormat::Text,
             Some("html") => OutputFormat::Html,
             Some("raw") => OutputFormat::Raw,
             _ => OutputFormat::Markdown,
         };
+        let jsonl = args.get("format").and_then(|v| v.as_str()) == Some("jsonl");
 
         let mode = match args.get("mode").and_then(|v| v.as_str()) {
             Some("full") => ExtractionMode::Full,
@@ -55,7 +56,7 @@ impl McpServer {
         let use_cache = args
             .get("use_cache")
             .and_then(|v| v.as_bool())
-            .unwrap_or(true);
+            .unwrap_or(false);
         let tokenizer = match args.get("tokenizer").and_then(|v| v.as_str()) {
             Some("cl100k") => TokenizerKind::Cl100k,
             Some("heuristic") => TokenizerKind::Heuristic,
@@ -68,6 +69,11 @@ impl McpServer {
             .and_then(|v| v.as_u64())
             .unwrap_or(10);
         let retries = args.get("retries").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+        let max_size_mb = args
+            .get("max_size_mb")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(10)
+            .clamp(1, 2048);
         let on_too_large = match args.get("on_too_large").and_then(|v| v.as_str()) {
             Some("truncate") => OnTooLarge::Truncate,
             _ => OnTooLarge::Error,
@@ -263,7 +269,7 @@ impl McpServer {
             connect_timeout_secs: connect_timeout,
             retries,
             max_total_retries: None,
-            max_bytes: 10 * 1024 * 1024,
+            max_bytes: (max_size_mb as usize).saturating_mul(1024 * 1024),
             on_too_large,
             headers: Vec::new(),
             cookie,
@@ -303,6 +309,16 @@ impl McpServer {
                 Err(e) => return McpToolCallResult::from_error(&e),
             }
         };
+
+        if jsonl {
+            return match serde_json::to_string(&doc) {
+                Ok(text) => McpToolCallResult::success(&text)
+                    .with_structured(serde_json::json!({"document": doc})),
+                Err(e) => {
+                    McpToolCallResult::error(format!("Failed to serialize JSONL output: {e}"))
+                }
+            };
+        }
 
         format_doc_result(&doc, format)
     }

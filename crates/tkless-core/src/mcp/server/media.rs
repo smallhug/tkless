@@ -24,7 +24,7 @@ impl McpServer {
         let use_cache = args
             .get("use_cache")
             .and_then(|v| v.as_bool())
-            .unwrap_or(true);
+            .unwrap_or(false);
 
         let (target_url, feed) = match feed_type {
             "ranking" => {
@@ -97,7 +97,7 @@ impl McpServer {
         let use_cache = args
             .get("use_cache")
             .and_then(|v| v.as_bool())
-            .unwrap_or(true);
+            .unwrap_or(false);
 
         let encoded_kw: String = url::form_urlencoded::byte_serialize(keyword.as_bytes()).collect();
         let mut target_url =
