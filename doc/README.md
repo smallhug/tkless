@@ -22,6 +22,7 @@
 | **[11-wechat-public.md](./11-wechat-public.md)** | **微信公众号** | 名称发现、文章身份、关联合集、自动翻页及公开内容边界。 |
 | **[12-optimization-plan.md](./12-optimization-plan.md)** | **优化方案** | 能力缺口清单、十个优化工作流、优先级、契约兼容策略、里程碑与验收标准。 |
 | **[13-code-audit.md](./13-code-audit.md)** | **质量审计：安全、逻辑与规范** | 2026-10-31 静态审查记录：安全漏洞、逻辑缺陷、CLI 命令格式与文档一致性问题的分级清单与修复优先级。 |
+| **[14-dsh-plugin.md](./14-dsh-plugin.md)** | **DeepSeek Harness 插件** | DSH bundle 结构、preset 覆盖、二进制下载与 MCP bridge。 |
 
 ---
 

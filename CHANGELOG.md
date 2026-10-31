@@ -7,9 +7,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- 新增 DeepSeek Harness bundle：覆盖 `standard`/`ptc`/`cordis` 三个 agent preset，移除内置 `web_search` 并保留 `web_fetch`，以 `mcp__tkless__*` 暴露动态工具；首次启用自动下载并校验 Release 二进制，guard 兜底已打开会话。
+
 ### Changed
 
 - MCP 协议升级到 `2026-07-28`：无 `initialize` 握手、每请求 `_meta`、`server/discover`、`resultType`、列表缓存提示与 HTTP 头部校验；移除 `ping`、`logging/setLevel` 与 `list_changed` 推送。
+- DSH bundle 的 MCP 桥接同步到 `2026-07-28`：改用 `server/discover`，每个请求携带协议版本与客户端能力，`activate_tools` / `execute_tool` 激活后同步刷新工具列表，转发 `structuredContent`，并支持批量工具的 `stream_results`（收集 `notifications/progress` 中的流式项）。
 
 ## [0.6.0] - 2026-10-31
 

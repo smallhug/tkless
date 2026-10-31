@@ -53,6 +53,9 @@ jobs:
           cargo build -p tkless-cli --locked
           node scripts/check-docs.cjs
 
+      - name: Check DSH bundle
+        run: node scripts/check-dsh-bundle.cjs
+
   msrv:
     name: Minimum supported Rust
     runs-on: ubuntu-latest

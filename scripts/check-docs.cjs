@@ -54,12 +54,26 @@ for (const file of documents) {
 }
 
 const catalogs = [];
+const meta = {
+  'io.modelcontextprotocol/protocolVersion': '2026-07-28',
+  'io.modelcontextprotocol/clientCapabilities': {},
+};
 for (const args of [['mcp', '--no-cache'], ['mcp', '--dynamic', '--no-cache']]) {
-  const input = JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }) + '\n';
+  const requests = [
+    { jsonrpc: '2.0', id: 1, method: 'server/discover', params: { _meta: meta } },
+    { jsonrpc: '2.0', id: 2, method: 'tools/list', params: { _meta: meta } },
+  ];
+  const input = requests.map((request) => JSON.stringify(request)).join('\n') + '\n';
   const result = spawnSync(executable, args, { input, encoding: 'utf8', timeout: 10000 });
   try {
     if (result.status !== 0) throw new Error(result.error?.message || result.stderr);
-    catalogs.push(JSON.parse(result.stdout.trim().split(/\r?\n/)[0]).result.tools);
+    const responses = result.stdout.trim().split(/\r?\n/).map((line) => JSON.parse(line));
+    const discover = responses.find((response) => response.id === 1);
+    if (!discover?.result?.supportedVersions?.includes('2026-07-28')) {
+      throw new Error('server/discover does not advertise 2026-07-28');
+    }
+    const catalog = responses.find((response) => response.id === 2);
+    catalogs.push(catalog.result.tools);
   } catch (error) {
     errors.push(`MCP catalog check failed: ${error.message}`);
   }
