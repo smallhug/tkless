@@ -30,7 +30,7 @@ use std::collections::HashSet;
 use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing::{debug, info, warn};
+use tracing::{debug, warn};
 
 pub use http::HttpTransportOptions;
 
@@ -48,6 +48,11 @@ pub enum McpMode {
     Dynamic,
 }
 
+#[derive(Default)]
+struct RequestMeta {
+    progress_token: Option<Value>,
+}
+
 /// In-memory and stdio Model Context Protocol (MCP) server for TkLess.
 #[derive(Clone)]
 pub struct McpServer {
@@ -57,6 +62,7 @@ pub struct McpServer {
     active_dynamic_tools: Arc<RwLock<HashSet<String>>>,
     tool_timeout_secs: u64,
     jobs: Arc<JobRegistry>,
+    strict_request_meta: bool,
 }
 
 impl McpServer {
@@ -74,12 +80,23 @@ impl McpServer {
             active_dynamic_tools: Arc::new(RwLock::new(HashSet::new())),
             tool_timeout_secs: 300,
             jobs: Arc::new(JobRegistry::new()),
+            strict_request_meta: true,
         }
     }
 
     /// Builder method to change the per-call timeout used by both transports.
     pub fn with_tool_timeout(mut self, seconds: u64) -> Self {
         self.tool_timeout_secs = seconds.clamp(1, 3600);
+        self
+    }
+
+    /// Disables per-request `_meta` validation.
+    ///
+    /// This exists for fixture-based tests that exercise tool behavior without crafting
+    /// full MCP envelopes. Production servers must keep the default (strict) setting.
+    #[doc(hidden)]
+    pub fn with_strict_request_meta(mut self, strict: bool) -> Self {
+        self.strict_request_meta = strict;
         self
     }
 
@@ -141,77 +158,45 @@ impl McpServer {
                 "Expected JSON-RPC 2.0",
             ));
         }
-        if request.id.is_none() && request.method != "notifications/initialized" {
+        let Some(req_id) = request.id else {
+            // 2026-07-28 notifications never receive a response.
             return None;
+        };
+        if req_id.is_null() {
+            return Some(JsonRpcResponse::error(
+                Value::Null,
+                INVALID_REQUEST,
+                "JSON-RPC request id must not be null",
+            ));
         }
-        let req_id = request.id.unwrap_or(Value::Null);
 
         debug!(method = %request.method, id = ?req_id, "Handling MCP request");
 
-        match request.method.as_str() {
-            "initialize" => {
-                let version = "2025-11-25";
-                let init_result = serde_json::json!({
-                    "protocolVersion": version,
-                    "capabilities": {
-                        "tools": {"listChanged": self.mode == McpMode::Dynamic},
-                        "logging": {},
-                        "experimental": {"tkless/batchStreaming":{"notification":"notifications/progress","itemKey":"tkless/batch_item"},"tkless/asyncJobs":{"start":"jobs_start","status":"jobs_status","cancel":"jobs_cancel","list":"jobs_list","maxActive":4}}
-                    },
-                    "serverInfo": {
-                        "name": "tkless",
-                        "version": env!("CARGO_PKG_VERSION")
-                    }
-                });
-                Some(JsonRpcResponse::success(req_id, init_result))
-            }
-            "notifications/initialized" => {
-                info!("MCP client initialized notification received");
-                None // Notifications do not return a JSON-RPC response
-            }
-            "ping" => Some(JsonRpcResponse::success(req_id, serde_json::json!({}))),
+        let params = request.params.unwrap_or(Value::Null);
+        let meta = match self.request_meta(&params, &req_id) {
+            Ok(meta) => meta,
+            Err(response) => return Some(self.finalize_response(response)),
+        };
+
+        let response = match request.method.as_str() {
+            "server/discover" => JsonRpcResponse::success(req_id.clone(), self.discover_result()),
             "tools/list" => {
-                let tools = match self.mode {
-                    McpMode::Full => get_available_tools(),
-                    McpMode::Dynamic => {
-                        let mut dynamic_tools = get_initial_dynamic_tools();
-                        let active_set = self.active_dynamic_tools.read().await;
-                        if !active_set.is_empty() {
-                            let all_tools = get_available_tools();
-                            for tool in all_tools {
-                                if active_set.contains(&tool.name)
-                                    && !dynamic_tools.iter().any(|t| t.name == tool.name)
-                                {
-                                    dynamic_tools.push(tool);
-                                }
-                            }
-                        }
-                        dynamic_tools
-                    }
-                };
-                Some(JsonRpcResponse::success(
-                    req_id,
-                    serde_json::json!({ "tools": tools }),
-                ))
+                let tools = self.current_tools().await;
+                JsonRpcResponse::success(req_id.clone(), self.tools_list_result(tools))
             }
             "tools/call" => {
-                let params = request.params.unwrap_or(Value::Null);
                 let raw_tool_name = params.get("name").and_then(|v| v.as_str()).unwrap_or("");
                 let arguments = params
                     .get("arguments")
                     .cloned()
                     .unwrap_or(serde_json::json!({}));
-                let progress_token = params
-                    .get("_meta")
-                    .and_then(|m| m.get("progressToken"))
-                    .cloned();
 
                 let tool_result = self
                     .dispatch_tool_execution(
                         raw_tool_name,
                         &arguments,
                         notifier,
-                        progress_token.as_ref(),
+                        meta.progress_token.as_ref(),
                     )
                     .await;
 
@@ -221,17 +206,176 @@ impl McpServer {
                         "isError": true
                     })
                 });
-
-                Some(JsonRpcResponse::success(req_id, result_value))
+                JsonRpcResponse::success(req_id.clone(), result_value)
             }
-            _ => Some(JsonRpcResponse::error(
-                req_id,
+            "initialize" | "ping" | "logging/setLevel" => JsonRpcResponse::error_with_data(
+                req_id.clone(),
+                METHOD_NOT_FOUND,
+                format!(
+                    "'{}' is not part of MCP {}; use server/discover and per-request _meta",
+                    request.method, PROTOCOL_VERSION
+                ),
+                serde_json::json!({"supported": [PROTOCOL_VERSION]}),
+            ),
+            "subscriptions/listen" => JsonRpcResponse::error(
+                req_id.clone(),
+                METHOD_NOT_FOUND,
+                "This server does not emit server-initiated change notifications",
+            ),
+            _ => JsonRpcResponse::error(
+                req_id.clone(),
                 METHOD_NOT_FOUND,
                 format!(
                     "Method '{}' is not supported by TkLess MCP server",
                     request.method
                 ),
-            )),
+            ),
+        };
+        Some(self.finalize_response(response))
+    }
+
+    /// Validates the per-request `_meta` fields required by MCP 2026-07-28.
+    #[allow(clippy::result_large_err)]
+    fn request_meta(
+        &self,
+        params: &Value,
+        request_id: &Value,
+    ) -> Result<RequestMeta, JsonRpcResponse> {
+        let mut result = RequestMeta::default();
+        let meta = params.get("_meta").and_then(Value::as_object);
+        if let Some(meta) = meta {
+            result.progress_token = meta.get("progressToken").cloned();
+            if !self.strict_request_meta {
+                return Ok(result);
+            }
+            let version = meta
+                .get("io.modelcontextprotocol/protocolVersion")
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    JsonRpcResponse::error(
+                        request_id.clone(),
+                        INVALID_PARAMS,
+                        "Missing io.modelcontextprotocol/protocolVersion in params._meta",
+                    )
+                })?;
+            if version != PROTOCOL_VERSION {
+                return Err(JsonRpcResponse::unsupported_protocol_version(
+                    request_id.clone(),
+                    version,
+                ));
+            }
+            meta.get("io.modelcontextprotocol/clientCapabilities")
+                .and_then(Value::as_object)
+                .ok_or_else(|| {
+                    JsonRpcResponse::error(
+                        request_id.clone(),
+                        INVALID_PARAMS,
+                        "Missing io.modelcontextprotocol/clientCapabilities in params._meta",
+                    )
+                })?;
+            Ok(result)
+        } else if self.strict_request_meta {
+            Err(JsonRpcResponse::error(
+                request_id.clone(),
+                INVALID_PARAMS,
+                "Missing required params._meta with protocolVersion and clientCapabilities",
+            ))
+        } else {
+            Ok(result)
+        }
+    }
+
+    /// Adds `resultType` and server identity to every successful result.
+    fn finalize_response(&self, mut response: JsonRpcResponse) -> JsonRpcResponse {
+        if let Some(result) = response.result.as_mut() {
+            if let Some(object) = result.as_object_mut() {
+                object
+                    .entry("resultType")
+                    .or_insert_with(|| Value::String("complete".into()));
+                let meta = object
+                    .entry("_meta")
+                    .or_insert_with(|| serde_json::json!({}));
+                if let Some(meta) = meta.as_object_mut() {
+                    meta.entry("io.modelcontextprotocol/serverInfo")
+                        .or_insert_with(|| self.server_info());
+                }
+            }
+        }
+        response
+    }
+
+    fn server_info(&self) -> Value {
+        serde_json::json!({
+            "name": "tkless",
+            "version": env!("CARGO_PKG_VERSION")
+        })
+    }
+
+    fn capabilities(&self) -> Value {
+        serde_json::json!({
+            "tools": {},
+            "extensions": {
+                "tkless/batchStreaming": {
+                    "notification": "notifications/progress",
+                    "itemKey": "tkless/batch_item"
+                },
+                "tkless/asyncJobs": {
+                    "start": "jobs_start",
+                    "status": "jobs_status",
+                    "cancel": "jobs_cancel",
+                    "list": "jobs_list",
+                    "maxActive": 4
+                }
+            }
+        })
+    }
+
+    fn discover_result(&self) -> Value {
+        serde_json::json!({
+            "resultType": "complete",
+            "supportedVersions": [PROTOCOL_VERSION],
+            "capabilities": self.capabilities(),
+            "_meta": {
+                "io.modelcontextprotocol/serverInfo": self.server_info()
+            },
+            "instructions": "TkLess extracts, cleans, searches, and crawls web content for LLM agents. Tool results include clean Markdown plus structuredContent JSON.",
+            "ttlMs": 3_600_000,
+            "cacheScope": "public"
+        })
+    }
+
+    fn tools_list_result(&self, tools: Vec<McpTool>) -> Value {
+        let ttl_ms = if self.mode == McpMode::Dynamic {
+            // Activation changes the list; clients must re-list instead of caching.
+            0
+        } else {
+            300_000
+        };
+        serde_json::json!({
+            "resultType": "complete",
+            "tools": tools,
+            "ttlMs": ttl_ms,
+            "cacheScope": "public"
+        })
+    }
+
+    async fn current_tools(&self) -> Vec<McpTool> {
+        match self.mode {
+            McpMode::Full => get_available_tools(),
+            McpMode::Dynamic => {
+                let mut dynamic_tools = get_initial_dynamic_tools();
+                let active_set = self.active_dynamic_tools.read().await;
+                if !active_set.is_empty() {
+                    for tool in get_available_tools() {
+                        if active_set.contains(&tool.name)
+                            && !dynamic_tools.iter().any(|t| t.name == tool.name)
+                        {
+                            dynamic_tools.push(tool);
+                        }
+                    }
+                }
+                dynamic_tools
+            }
         }
     }
 
@@ -282,7 +426,7 @@ impl McpServer {
                 ))
                 .await
             }
-            "activate_tools" => self.call_activate_tools(arguments, notifier).await,
+            "activate_tools" => self.call_activate_tools(arguments).await,
 
             // Core & Specialized Tools
             "fetch_webpage" => self.call_fetch_webpage(arguments).await,

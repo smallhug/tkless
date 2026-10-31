@@ -117,7 +117,7 @@ async fn streamed_items_arrive_before_completion_and_final_response_is_summary_o
             .unwrap()
     });
     let mut output = BufReader::new(output);
-    let request = json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"batch_fetch_webpages","_meta":{"progressToken":"job"},"arguments":{"urls":site.urls(&["/held","/fast"]),"order":"completion","stream_results":true,"format":"json"}}});
+    let request = json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"batch_fetch_webpages","_meta":{"progressToken":"job","io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}},"arguments":{"urls":site.urls(&["/held","/fast"]),"order":"completion","stream_results":true,"format":"json"}}});
     input
         .write_all(format!("{request}\n").as_bytes())
         .await

@@ -339,7 +339,7 @@ tkless completions powershell
 
 ## MCP 接入
 
-当前服务默认通过 stdio 传输，也可用 `--http ADDR` 提供无状态 HTTP JSON-RPC（`POST /mcp`、`GET /healthz`，默认仅回环，非回环需 `--allow-public-bind` 与 Bearer Token），仅实现 `2025-11-25` 协议。工具调用并发执行，支持 `notifications/cancelled`，单次调用超时默认 300 秒（`--tool-timeout-secs` 可调），最多 64 个在途调用；动态模式声明 `tools.listChanged`。长任务可用 `jobs_start` 转为后台执行并以 `jobs_status` 轮询。业务工具和参数见 [tools.rs](crates/tkless-core/src/mcp/tools.rs)。
+当前服务默认通过 stdio 传输，也可用 `--http ADDR` 提供无状态 HTTP JSON-RPC（`POST /mcp`、`GET /healthz`，默认仅回环，非回环需 `--allow-public-bind` 与 Bearer Token），仅实现 `2026-07-28` 协议：没有 `initialize` 握手，每个请求在 `params._meta` 中携带 `io.modelcontextprotocol/protocolVersion` 与 `clientCapabilities`；服务端实现 `server/discover`，所有结果带 `resultType`。HTTP 请求还必须携带 `MCP-Protocol-Version`、`Mcp-Method`（`tools/call` 另需 `Mcp-Name`）。工具调用并发执行，支持 `notifications/cancelled`，单次调用超时默认 300 秒（`--tool-timeout-secs` 可调），最多 64 个在途调用。长任务可用 `jobs_start` 转为后台执行并以 `jobs_status` 轮询。业务工具和参数见 [tools.rs](crates/tkless-core/src/mcp/tools.rs)。
 
 支持 `mcpServers` 配置的客户端可使用以下配置；若客户端找不到 `PATH` 中的程序，将 `command` 改为可执行文件绝对路径：
 
@@ -371,7 +371,7 @@ tkless mcp --profile dynamic
 
 无需传入 `engine` 或地区参数；旧参数会被拒绝。`limit` 范围为 1–20，默认 10。`auto_cdp` 默认 `false`；`dedup=true`、`max_tokens_per_page` 和 `schema` 要求 `fetch_content=true`。MCP 搜索支持 Markdown/JSON，CLI 搜索另支持 JSONL。协议响应、取消和进度说明见 [MCP 接入文档](doc/02-mcp-tools-extension.md)。
 
-MCP 仅支持 `2025-11-25`；网页提取、HTML 清洗、搜索和批量抓取提供 `outputSchema` / `structuredContent`。旧协议降级、旧工具名和 `tkless_` 前缀已移除。工具错误提供稳定代码和重试信息；文档结构化结果位于 `structuredContent.document`，搜索和批量结果直接位于 `structuredContent`。
+MCP 仅支持 `2026-07-28`；网页提取、HTML 清洗、搜索和批量抓取提供 `outputSchema` / `structuredContent`。旧协议降级、旧工具名和 `tkless_` 前缀已移除。工具错误提供稳定代码和重试信息；文档结构化结果位于 `structuredContent.document`，搜索和批量结果直接位于 `structuredContent`。
 
 环境变量 `TKLESS_MCP_DYNAMIC=1` 也可启用动态模式。两个常驻业务工具是 `fetch_webpage` 和 `web_search`；四个发现元工具如下：
 
@@ -380,7 +380,7 @@ MCP 仅支持 `2025-11-25`；网页提取、HTML 清洗、搜索和批量抓取�
 | `discover_tools` | 按关键词或分类检索业务工具目录 |
 | `get_tool_schema` | 获取指定工具的完整参数 Schema |
 | `execute_tool` | 无需先激活，即时调用指定业务工具 |
-| `activate_tools` | 激活工具并发送 `notifications/tools/list_changed` |
+| `activate_tools` | 激活工具；随后重新调用 `tools/list` 刷新声明（本服务不推送 `list_changed`） |
 
 动态模式减少初始工具声明；具体 Token 开销取决于当前 Schema、序列化方式、分词器及宿主注入策略，此处不沿用旧版固定节省率。
 

@@ -644,7 +644,7 @@ async fn retries_rate_limits_and_revalidates_expired_cache() {
 }
 
 #[tokio::test]
-async fn mcp_ping_and_cancellation_remain_responsive() {
+async fn mcp_discovery_and_cancellation_remain_responsive() {
     let site = Site::start(|_, _| {
         let mut reply = Reply::html("<p>Slow</p>");
         reply.delay_ms = 500;
@@ -663,24 +663,46 @@ async fn mcp_ping_and_cancellation_remain_responsive() {
     });
     let (read, mut write) = tokio::io::split(client);
     let mut read = BufReader::new(read);
-    let init = serde_json::json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25"}});
+    let meta = serde_json::json!({
+        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+        "io.modelcontextprotocol/clientCapabilities": {}
+    });
+    let discover = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "server/discover",
+        "params": {"_meta": meta}
+    });
     write
-        .write_all(format!("{init}\n").as_bytes())
+        .write_all(format!("{discover}\n").as_bytes())
         .await
         .unwrap();
     let mut line = String::new();
     read.read_line(&mut line).await.unwrap();
     let response: serde_json::Value = serde_json::from_str(&line).unwrap();
-    assert_eq!(response["result"]["protocolVersion"], "2025-11-25");
-    assert_eq!(
-        response["result"]["capabilities"]["tools"]["listChanged"],
-        true
-    );
-    let request = serde_json::json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"fetch_webpage","arguments":{"url":site.url,"allow_private_addresses":true}}});
+    assert_eq!(response["result"]["resultType"], "complete");
+    assert_eq!(response["result"]["supportedVersions"][0], "2026-07-28");
+    assert!(response["result"]["capabilities"]["tools"]
+        .get("listChanged")
+        .is_none());
+    let request = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": {
+            "name": "fetch_webpage",
+            "arguments": {"url": site.url, "allow_private_addresses": true},
+            "_meta": meta
+        }
+    });
+    let probe = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "server/discover",
+        "params": {"_meta": meta}
+    });
     write
-        .write_all(
-            format!("{request}\n{{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"ping\"}}\n").as_bytes(),
-        )
+        .write_all(format!("{request}\n{probe}\n").as_bytes())
         .await
         .unwrap();
     line.clear();

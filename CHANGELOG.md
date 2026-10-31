@@ -5,6 +5,12 @@
 
 ---
 
+## [Unreleased]
+
+### Changed
+
+- MCP 协议升级到 `2026-07-28`：无 `initialize` 握手、每请求 `_meta`、`server/discover`、`resultType`、列表缓存提示与 HTTP 头部校验；移除 `ping`、`logging/setLevel` 与 `list_changed` 推送。
+
 ## [0.6.0] - 2026-10-31
 
 源码版本更新为 0.6.0；0.5.0 未发布到 GitHub Release，发布状态仍以远程标签和附件为准。

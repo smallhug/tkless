@@ -1,6 +1,6 @@
 use super::{
     get_available_tools, get_dynamic_discovery_tools, get_tool_catalog, McpServer,
-    McpToolCallResult, NotificationSender, Value,
+    McpToolCallResult, Value,
 };
 
 impl McpServer {
@@ -73,7 +73,7 @@ impl McpServer {
         md.push_str("\n> **两阶段调用建议 (Usage Guidelines)**:\n");
         md.push_str("> 1. **单次即时调用**: 直接调用 `execute_tool(tool_name: \"...\", arguments: {...})` 立即执行。\n");
         md.push_str("> 2. **查看完整参数**: 调用 `get_tool_schema(tool_name: \"...\")` 获取 inputSchema 与参数描述。\n");
-        md.push_str("> 3. **会话动态注册**: 调用 `activate_tools(tool_names: [\"...\"])` 加入 tools/list 并广播 list_changed。\n");
+        md.push_str("> 3. **会话动态注册**: 调用 `activate_tools(tool_names: [\"...\"])` 加入 tools/list；本服务不发送 `list_changed`，请随后重新调用 `tools/list`。\n");
 
         McpToolCallResult::success(md)
     }
@@ -108,11 +108,7 @@ impl McpServer {
         }
     }
 
-    pub(super) async fn call_activate_tools(
-        &self,
-        args: &Value,
-        notifier: Option<&NotificationSender>,
-    ) -> McpToolCallResult {
+    pub(super) async fn call_activate_tools(&self, args: &Value) -> McpToolCallResult {
         let tool_names = match args.get("tool_names").and_then(|v| v.as_array()) {
             Some(arr) if !arr.is_empty() => arr,
             _ => return McpToolCallResult::error("Missing or empty 'tool_names' array"),
@@ -139,16 +135,8 @@ impl McpServer {
 
         drop(active_set);
 
-        if let Some(tx) = notifier {
-            let notif = serde_json::json!({
-                "jsonrpc": "2.0",
-                "method": "notifications/tools/list_changed"
-            });
-            let _ = tx.send(notif).await;
-        }
-
         let resp = format!(
-            "成功激活工具: [{}]。已向 MCP 客户端广播 'notifications/tools/list_changed'。后续 tools/list 声明将包含这些工具，您也可以直接调用。",
+            "成功激活工具: [{}]。请重新调用 'tools/list' 刷新声明；本服务不发送 notifications/tools/list_changed，您也可以直接调用。",
             newly_activated.join(", ")
         );
         McpToolCallResult::success(resp)

@@ -30,7 +30,7 @@
 | 维度 | 当前实现 | 关键约束 |
 | :--- | :--- | :--- |
 | CLI | 18 个子命令 + 根命令单页模式 | 全部通过参数传入，无配置文件 |
-| MCP | 31 个业务工具 + 4 个发现元工具，协议 `2025-11-25` | 仅 stdio；单次调用 300 秒超时 |
+| MCP | 31 个业务工具 + 4 个发现元工具，协议 `2026-07-28` | 仅 stdio；单次调用 300 秒超时 |
 | 适配器 | 22 个内置平台适配器 | 编译期内置，无插件机制 |
 | 请求 | 仅 GET；重定向逐跳校验；编码自动识别 | 无 POST/GraphQL/表单 |
 | 渲染 | Chromium 系 CDP；步骤 `wait_for/fill/click/scroll` | 不展开 Shadow DOM / iframe |
@@ -204,7 +204,7 @@ tkless watch --config ./watch.json --state ./watch-state --interval 3600
    - 长任务通过显式 `jobs_start` 启动；不支持按超时阈值自动转后台，也不支持 `run_watch_once`（见 §9.1）；
    - 任务注册表进程内保存，带 TTL 与并发上限；
    - 超时阈值可由 `--tool-timeout-secs` 配置，默认保持 300 秒。
-3. **协议策略**：继续只实现 `2025-11-25`，不恢复旧协议降级；新增能力通过 `experimental` 声明，宿主不支持时返回明确错误。
+3. **协议策略**：继续只实现 `2026-07-28`（无 `initialize` 握手、每请求 `_meta`、`server/discover`），不恢复旧协议降级；新增能力通过 `capabilities.extensions` 声明，宿主不支持时返回明确错误。
 
 验收：
 
