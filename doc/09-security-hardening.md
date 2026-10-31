@@ -48,7 +48,7 @@
 
 ### 本轮未消除的边界
 
-- 升级已改为 Minisign 签名清单（`SHA256SUMS` + `SHA256SUMS.minisig`），发布签名在受保护 `release-signing` Environment 中执行。仓库仍需把真实公钥写入 `crates/tkless-cli/assets/tkless-upgrade.pub` 并配置 `MINISIGN_SECRET_KEY`/`MINISIGN_PASSWORD`；未配置时升级会 fail closed。
+- 升级已改为 Minisign 签名清单（`SHA256SUMS` + `SHA256SUMS.minisig`），发布签名在受保护 `release-signing` Environment 中执行。仓库仍需把真实公钥写入 `crates/tkless-cli/assets/tkless-upgrade.pub` 并配置 `MINISIGN_SECRET_KEY`/`MINISIGN_PASSWORD`；未配置时发布流水线仍会生成未签名 Release（`tkless upgrade` fail closed），配置后才会上传签名清单。
 - MCP HTTP 回环绑定仍允许本机进程无 Token 调用；本轮阻断的是浏览器跨源/DNS rebinding，本机恶意进程不在防护模型内。
 - PDF 解析器在 `panic = "abort"` 的 release 配置下仍可能因恶意输入终止进程；60 秒超时只能限制挂起，不能回收阻塞线程。
 - 代理与 CDP 浏览器的实际出口 IP 仍不受预检查约束；严格隔离需要出口代理或系统级网络隔离。
