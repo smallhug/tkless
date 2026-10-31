@@ -143,7 +143,7 @@
 
 ### WS3 调度与变更监控（P0，部分实施）
 
-> 实施状态（2026-10-30）：已落地 `watch` 子命令与 `tkless_core::watch::run_once`，支持多 job 单轮执行、轮次预算、文件/Webhook 通知（可选 HMAC-SHA256）、通知去重与失败隔离；调度采用外部 cron/计划任务，不内建守护进程。MCP 工具与长时任务注册表暂未实现（MCP 单次调用受 300 秒限制，适合交给 CLI 或后续 WS4）。
+> 实施状态（2026-10-30）：已落地 `watch` 子命令与 `tkless_core::watch::run_once`，支持多 job 单轮执行、轮次预算、文件/Webhook 通知（可选 HMAC-SHA256）、通知去重与失败隔离；调度采用外部 cron/计划任务，不内建守护进程。MCP 侧的 `watch`/`run_watch_once` 工具未实现；进程内长任务注册表已由 WS4 的 `jobs_*` 提供（目前不包含 watch）。
 
 **现状与证据**：无调度命令；`sync` 只对 `collect` 配置做快照，不提供通知；`doc/10` 说明其"不是跳过未变页面的网络抓取"。
 
@@ -295,7 +295,7 @@ tkless watch --config ./watch.json --state ./watch-state --interval 3600
 - 交付格式：Markdown 打包、JSONL 事件流、EPUB、PDF（CDP 打印）；
 - 与外部系统：webhook 事件（复用 WS3）、退出码契约保持不变。
 
-> 实施状态（2026-10-31）：已落地 `crawl --bundle FILE`，输出 `README.md` 索引与逐页 Markdown 的 ZIP（stored 实现，512 条目 / 64 MiB 上限）。已存在 JSONL 事件流、webhook 通知与 CDP PDF。对象存储/数据库 sink、S3 与 EPUB 导出未实现。
+> 实施状态（2026-10-31）：已落地 `crawl --bundle FILE`，输出 `README.md` 索引与逐页 Markdown 的 ZIP（stored 实现，512 条目 / 64 MiB 上限）。已存在 JSONL 事件流、webhook 通知与 CDP PDF；EPUB 由 WS7 的 `crawl --epub` 提供（正文保留 Markdown 原文，不做渲染）。通用 Sink 抽象、对象存储/数据库写入与 S3 未实现。
 
 ---
 
