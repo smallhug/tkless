@@ -76,12 +76,12 @@ tkless upgrade
 仓库根目录同时是一个 DSH bundle。安装后，新会话不再注册 DSH 自带的 `web_search`，网页能力改由 `mcp__tkless__*` 工具提供；`web_fetch` 保留。
 
 ```text
-Plugins → Add plugin → github:smallhug/tkless#v0.7.0
+Plugins → Add plugin → github:smallhug/tkless#v0.7.1
 ```
 
-> `v0.7.0` 的 Release 资产（二进制与 `SHA256SUMS`）由发布流水线生成；`v0.6.0` 不包含这个 bundle。
+> `v0.7.1` 的 Release 资产（二进制与 `SHA256SUMS`）由发布流水线生成；`v0.6.0` 不包含这个 bundle。
 
-- 支持 DSH `0.2.1-rc.5`；版本不匹配会被拒绝，升级 DSH 后需安装对应版本的插件。
+- 支持 DSH `0.2.2-rc.1`；版本不匹配会被拒绝，升级 DSH 后需安装对应版本的插件。
 - Windows x64、Linux x64/ARM64 首次启用时自动下载 Release 二进制并校验 SHA-256；macOS 请设置 `binaryPath`。
 - **安装后必须新开会话**；已打开的会话由 guard 拒绝 `web_search`。
 - 卸载会删除包内下载的二进制。

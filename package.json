@@ -1,6 +1,6 @@
 {
   "name": "tkless-dsh",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "private": true,
   "description": "TkLess web extraction, search and crawl tools for DeepSeek Harness, replacing the built-in web search.",
   "type": "module",
@@ -25,6 +25,6 @@
     }
   },
   "engines": {
-    "dsh": "0.2.1-rc.5"
+    "dsh": "0.2.2-rc.1"
   }
 }

@@ -1,5 +1,15 @@
 # TkLess 更新说明
 
+## v0.7.1 - 2026-11-11
+
+DeepSeek Harness 兼容性修复，无 CLI/MCP 协议行为变更。
+
+### DeepSeek Harness
+
+- 适配 DSH `0.2.2-rc.1`：按新版本重新生成 `standard`/`ptc`/`cordis` preset 覆盖，包含 `applyPatch`、`modelSelection`/`modelDiscovery`、`tool-executor-ptc` 等变化。
+- 修复 `tkless-dsh@0.7.0` 在 `0.2.2-rc.1` 上因 `engines.dsh` 不匹配无法安装的问题；安装请使用 `github:smallhug/tkless#v0.7.1`。
+- 二进制与 MCP 接口未变化，仍为 `2026-07-28`、31 个业务工具。
+
 ## v0.7.0 - 2026-10-31
 
 本次发布聚焦 MCP `2026-07-28` 协议与 DeepSeek Harness 插件。

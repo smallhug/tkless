@@ -5,6 +5,14 @@
 
 ---
 
+## [0.7.1] - 2026-11-11
+
+源码版本更新为 0.7.1；本次为 DeepSeek Harness 兼容性修复，无 CLI/MCP 协议行为变更。
+
+### Fixed
+
+- 适配 DeepSeek Harness `0.2.2-rc.1`：按新版本重新生成 `standard`/`ptc`/`cordis` preset 覆盖（`applyPatch`、`modelSelection`/`modelDiscovery`、`tool-executor-ptc` 等），并更新 `engines.dsh`；修复 `tkless-dsh@0.7.0` 在 `0.2.2-rc.1` 上因版本不兼容无法安装的问题。
+
 ## [0.7.0] - 2026-10-31
 
 源码版本更新为 0.7.0；主要变更为 MCP `2026-07-28` 协议与 DeepSeek Harness 插件。

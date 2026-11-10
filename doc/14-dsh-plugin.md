@@ -9,25 +9,25 @@
 
 bridge 使用 MCP `2026-07-28` 无握手协议：启动时调用 `server/discover`，每个请求在 `params._meta` 中携带协议版本、客户端信息与空能力对象；每次 `tools/call` 注入 `progressToken` 并收集批量流式项；`activate_tools`（含 `execute_tool` 间接调用）后重新调用 `tools/list` 刷新工具注册（服务端不推送 `list_changed`）。
 
-> 版本锁定：preset 覆盖重述了完整插件列表，因此只能匹配生成它时的 DSH 版本。当前锁定 `0.2.1-rc.5`；升级 DSH 后必须重新生成并发布新版本插件。
+> 版本锁定：preset 覆盖重述了完整插件列表，因此只能匹配生成它时的 DSH 版本。当前锁定 `0.2.2-rc.1`；升级 DSH 后必须重新生成并发布新版本插件。
 
 ## 安装
 
-要求：DSH `0.2.1-rc.5`，Node 已随 DSH 提供。
+要求：DSH `0.2.2-rc.1`，Node 已随 DSH 提供。
 
 在 DSH 侧边栏 **Plugins → Add plugin** 粘贴：
 
 ```text
-github:smallhug/tkless#v0.7.0
+github:smallhug/tkless#v0.7.1
 ```
 
 或使用 CLI（参数顺序以本机 `dsh plugin --help` 为准）：
 
 ```bash
-dsh plugin add github:smallhug/tkless#v0.7.0
+dsh plugin add github:smallhug/tkless#v0.7.1
 ```
 
-> `v0.7.0` 的 Release 资产（二进制与 `SHA256SUMS`）由发布流水线生成；`v0.6.0` 不包含这个 bundle。安装前请确认该 Release 已上传。
+> `v0.7.1` 的 Release 资产（二进制与 `SHA256SUMS`）由发布流水线生成；`v0.6.0` 不包含这个 bundle。安装前请确认该 Release 已上传。
 
 安装后插件默认启用。**必须新开一个会话**才能看到 `web_search` 被移除；当前已打开的会话仍持有旧 preset revision，只能由 guard 拒绝调用。
 
