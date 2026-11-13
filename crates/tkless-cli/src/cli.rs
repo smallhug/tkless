@@ -1847,6 +1847,10 @@ pub struct McpArgs {
     /// 显式允许绑定非回环地址（必须同时提供 Token）
     #[arg(long = "allow-public-bind")]
     pub allow_public_bind: bool,
+
+    /// 仅接受 MCP 2026-07-28 握手；默认同时兼容旧版 initialize（2024-11-05 至 2025-11-25）
+    #[arg(long = "strict-protocol")]
+    pub strict_protocol: bool,
 }
 
 #[derive(clap::Args, Debug, Clone)]

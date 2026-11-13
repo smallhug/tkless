@@ -194,9 +194,11 @@ async fn handle_connection(
         }
     };
     if body.get("id").is_some() {
-        if body.get("method").and_then(serde_json::Value::as_str) == Some("initialize") {
-            // Give legacy clients a deterministic diagnostic even when they omit
-            // the modern transport headers.
+        // In modern-only mode, give legacy clients a deterministic diagnostic
+        // even when they omit the modern transport headers.
+        if !server.legacy_protocol
+            && body.get("method").and_then(serde_json::Value::as_str) == Some("initialize")
+        {
             let response = JsonRpcResponse::error_with_data(
                 body.get("id").cloned().unwrap_or(serde_json::Value::Null),
                 METHOD_NOT_FOUND,
@@ -207,7 +209,7 @@ async fn handle_connection(
             );
             return write_json(&mut stream, 404, &response).await;
         }
-        if let Err((status, response)) = validate_headers(&body, &request) {
+        if let Err((status, response)) = validate_headers(&body, &request, server.legacy_protocol) {
             return write_json(&mut stream, status, &response).await;
         }
     }
@@ -239,10 +241,15 @@ async fn handle_connection(
 }
 
 /// Validates the MCP 2026-07-28 Streamable HTTP headers against the request body.
+///
+/// Requests without `params._meta.protocolVersion` are legacy traffic when the
+/// server has `legacy_protocol` enabled; their modern headers are optional, but
+/// any header that is present must still agree with the body.
 #[allow(clippy::result_large_err)]
 fn validate_headers(
     body: &serde_json::Value,
     request: &HttpRequest,
+    legacy_protocol: bool,
 ) -> Result<(), (u16, JsonRpcResponse)> {
     let id = body.get("id").cloned().unwrap_or(serde_json::Value::Null);
     let method = body
@@ -255,6 +262,43 @@ fn validate_headers(
         .and_then(|meta| meta.get("io.modelcontextprotocol/protocolVersion"))
         .and_then(serde_json::Value::as_str);
 
+    let Some(body_version) = body_version else {
+        if !legacy_protocol {
+            // Modern-only mode keeps requiring the 2026-07-28 header set.
+            require_modern_headers(body, id, method, request, None)?;
+            return Ok(());
+        }
+        if let Some(header_method) = request.mcp_method.as_deref() {
+            if header_method != method {
+                return Err((
+                    400,
+                    JsonRpcResponse::header_mismatch(
+                        id,
+                        "Mcp-Method header does not match the JSON-RPC method",
+                    ),
+                ));
+            }
+        }
+        if method == "tools/call" {
+            if let Some(header_name) = request.mcp_name.as_deref() {
+                validate_call_name(body, id, header_name)?;
+            }
+        }
+        return Ok(());
+    };
+
+    require_modern_headers(body, id, method, request, Some(body_version))
+}
+
+/// Applies the mandatory 2026-07-28 header checks.
+#[allow(clippy::result_large_err)]
+fn require_modern_headers(
+    body: &serde_json::Value,
+    id: serde_json::Value,
+    method: &str,
+    request: &HttpRequest,
+    body_version: Option<&str>,
+) -> Result<(), (u16, JsonRpcResponse)> {
     let header_version = request.mcp_protocol_version.as_deref().ok_or_else(|| {
         (
             400,
@@ -302,23 +346,34 @@ fn validate_headers(
                 JsonRpcResponse::header_mismatch(id.clone(), "Missing Mcp-Name header"),
             )
         })?;
-        let decoded = decode_header_value(header_name).ok_or_else(|| {
-            (
-                400,
-                JsonRpcResponse::header_mismatch(id.clone(), "Invalid Mcp-Name header encoding"),
-            )
-        })?;
-        let body_name = body
-            .get("params")
-            .and_then(|params| params.get("name"))
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or_default();
-        if decoded != body_name {
-            return Err((
-                400,
-                JsonRpcResponse::header_mismatch(id, "Mcp-Name header does not match params.name"),
-            ));
-        }
+        validate_call_name(body, id, header_name)?;
+    }
+    Ok(())
+}
+
+/// Validates `Mcp-Name` against `params.name` for `tools/call`.
+#[allow(clippy::result_large_err)]
+fn validate_call_name(
+    body: &serde_json::Value,
+    id: serde_json::Value,
+    header_name: &str,
+) -> Result<(), (u16, JsonRpcResponse)> {
+    let decoded = decode_header_value(header_name).ok_or_else(|| {
+        (
+            400,
+            JsonRpcResponse::header_mismatch(id.clone(), "Invalid Mcp-Name header encoding"),
+        )
+    })?;
+    let body_name = body
+        .get("params")
+        .and_then(|params| params.get("name"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    if decoded != body_name {
+        return Err((
+            400,
+            JsonRpcResponse::header_mismatch(id, "Mcp-Name header does not match params.name"),
+        ));
     }
     Ok(())
 }

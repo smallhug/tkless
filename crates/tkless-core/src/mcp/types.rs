@@ -96,6 +96,11 @@ pub const INTERNAL_ERROR: i32 = -32603;
 
 /// MCP protocol version implemented by this server.
 pub const PROTOCOL_VERSION: &str = "2026-07-28";
+/// Legacy protocol versions accepted through the `initialize` handshake.
+pub const LEGACY_PROTOCOL_VERSIONS: [&str; 4] =
+    ["2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"];
+/// Version used when a legacy client omits `initialize.protocolVersion`.
+pub const LATEST_LEGACY_PROTOCOL_VERSION: &str = "2025-11-25";
 /// MCP-defined error: HTTP headers do not match the request body.
 pub const HEADER_MISMATCH: i32 = -32020;
 /// MCP-defined error: the client lacks a required capability.

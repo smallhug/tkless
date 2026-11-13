@@ -128,7 +128,8 @@ async fn only_current_protocol_is_advertised_and_outputs_never_downgrade() {
     let server = McpServer::new(
         TklessEngine::new().unwrap(),
         DocumentCache::memory_only(300),
-    );
+    )
+    .with_legacy_protocol(false);
     for version in ["2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"] {
         let discover = serde_json::json!({
             "jsonrpc":"2.0","id":1,"method":"server/discover",
@@ -219,6 +220,114 @@ async fn only_current_protocol_is_advertised_and_outputs_never_downgrade() {
         legacy.error.unwrap().code,
         tkless_core::mcp::METHOD_NOT_FOUND
     );
+    let initialize = server
+        .handle_message(&modern(
+            6,
+            "initialize",
+            serde_json::json!({"protocolVersion":"2025-06-18"}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        initialize.error.unwrap().code,
+        tkless_core::mcp::METHOD_NOT_FOUND
+    );
+}
+
+#[tokio::test]
+async fn legacy_handshake_and_meta_less_requests_coexist_with_modern_protocol() {
+    let server = McpServer::new(
+        TklessEngine::new().unwrap(),
+        DocumentCache::memory_only(300),
+    );
+
+    for (requested, expected) in [
+        ("2024-11-05", "2024-11-05"),
+        ("2025-03-26", "2025-03-26"),
+        ("2025-06-18", "2025-06-18"),
+        ("2025-11-25", "2025-11-25"),
+        ("1999-01-01", "2025-11-25"),
+    ] {
+        let initialize = serde_json::json!({
+            "jsonrpc":"2.0",
+            "id":1,
+            "method":"initialize",
+            "params":{
+                "protocolVersion":requested,
+                "capabilities":{},
+                "clientInfo":{"name":"legacy-client","version":"1.0"}
+            }
+        });
+        let result = server
+            .handle_message(&initialize.to_string())
+            .await
+            .unwrap()
+            .result
+            .expect("initialize must succeed");
+        assert_eq!(result["protocolVersion"], expected);
+        assert_eq!(result["serverInfo"]["name"], "tkless");
+        assert!(result["capabilities"]["tools"].is_object());
+        assert!(result.get("resultType").is_none());
+    }
+
+    // The initialized notification is optional and never receives a response.
+    let initialized = r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#;
+    assert!(server.handle_message(initialized).await.is_none());
+
+    // tools/list without params._meta is legacy traffic.
+    let list = r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#;
+    let result = server
+        .handle_message(list)
+        .await
+        .unwrap()
+        .result
+        .expect("legacy tools/list must succeed");
+    assert_eq!(result["tools"].as_array().unwrap().len(), 31);
+    assert!(result.get("resultType").is_none());
+
+    // tools/call without params._meta works and omits the 2026-07-28 envelope.
+    let call = serde_json::json!({
+        "jsonrpc":"2.0",
+        "id":3,
+        "method":"tools/call",
+        "params":{"name":"clean_html","arguments":{"html":"<p>Legacy body</p>","mode":"full"}}
+    });
+    let result = server
+        .handle_message(&call.to_string())
+        .await
+        .unwrap()
+        .result
+        .expect("legacy tools/call must succeed");
+    assert_eq!(result["isError"], false);
+    assert!(result.get("structuredContent").is_some());
+    assert!(result.get("resultType").is_none());
+
+    // ping is part of the legacy lifecycle and is a no-op.
+    let ping = server
+        .handle_message(r#"{"jsonrpc":"2.0","id":4,"method":"ping"}"#)
+        .await
+        .unwrap()
+        .result
+        .expect("legacy ping must succeed");
+    assert_eq!(ping, serde_json::json!({}));
+
+    // Modern requests keep the 2026-07-28 envelope.
+    let discover = server
+        .handle_message(&modern(5, "server/discover", serde_json::json!({})))
+        .await
+        .unwrap()
+        .result
+        .expect("modern discovery must succeed");
+    assert_eq!(discover["resultType"], "complete");
+
+    // A request that claims modern metadata still gets version validation.
+    let mut old_version = modern(6, "tools/list", serde_json::json!({}));
+    old_version = old_version.replace("2026-07-28", "2025-11-25");
+    let response = server.handle_message(&old_version).await.unwrap();
+    assert_eq!(
+        response.error.unwrap().code,
+        tkless_core::mcp::UNSUPPORTED_PROTOCOL_VERSION
+    );
 }
 
 #[tokio::test]
@@ -275,7 +384,9 @@ async fn bing_search_schema_and_argument_validation_stay_in_sync() {
 async fn test_mcp_protocol_lifecycle() {
     let engine = TklessEngine::new().expect("Engine should initialize");
     let cache = DocumentCache::memory_only(300);
-    let server = McpServer::new(engine, cache).with_strict_request_meta(false);
+    let server = McpServer::new(engine, cache)
+        .with_strict_request_meta(false)
+        .with_legacy_protocol(false);
 
     // 1. Discovery (2026-07-28 is stateless; there is no initialize handshake)
     let discover = server

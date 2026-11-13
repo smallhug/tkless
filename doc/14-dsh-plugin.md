@@ -9,27 +9,35 @@
 
 bridge 使用 MCP `2026-07-28` 无握手协议：启动时调用 `server/discover`，每个请求在 `params._meta` 中携带协议版本、客户端信息与空能力对象；每次 `tools/call` 注入 `progressToken` 并收集批量流式项；`activate_tools`（含 `execute_tool` 间接调用）后重新调用 `tools/list` 刷新工具注册（服务端不推送 `list_changed`）。
 
-> 版本锁定：preset 覆盖重述了完整插件列表，因此只能匹配生成它时的 DSH 版本。当前锁定 `0.2.2-rc.1`；升级 DSH 后必须重新生成并发布新版本插件。
+> 版本锁定：preset 覆盖重述了完整插件列表，因此只能匹配生成它时的 DSH 版本。当前锁定 `0.2.2-rc.3`；升级 DSH 后必须重新生成并发布新版本插件。
 
 ## 安装
 
-要求：DSH `0.2.2-rc.1`，Node 已随 DSH 提供。
+要求：DSH `0.2.2-rc.3`，Node 已随 DSH 提供。
 
 在 DSH 侧边栏 **Plugins → Add plugin** 粘贴：
 
 ```text
-github:smallhug/tkless#v0.7.1
+github:smallhug/tkless#v0.7.2
 ```
 
 或使用 CLI（参数顺序以本机 `dsh plugin --help` 为准）：
 
 ```bash
-dsh plugin add github:smallhug/tkless#v0.7.1
+dsh plugin add github:smallhug/tkless#v0.7.2
 ```
 
-> `v0.7.1` 的 Release 资产（二进制与 `SHA256SUMS`）由发布流水线生成；`v0.6.0` 不包含这个 bundle。安装前请确认该 Release 已上传。
+> `v0.7.2` 的 Release 资产（二进制与 `SHA256SUMS`）由发布流水线生成；`v0.6.0` 不包含这个 bundle。安装前请确认该 Release 已上传。
+>
+> `v0.7.2` 锁定 DSH `0.2.2-rc.3`；升级 DSH 后需安装重新生成过 preset 覆盖的插件版本。
 
-安装后插件默认启用。**必须新开一个会话**才能看到 `web_search` 被移除；当前已打开的会话仍持有旧 preset revision，只能由 guard 拒绝调用。
+安装后插件默认启用。原生 `web_search` 是通过 preset 覆盖移除的，而 **preset 版本在会话创建时固定**：
+
+1. 安装后**新开会话**：`standard` / `ptc` / `cordis` 按新覆盖组合，不再注册 `web_search`；`minimal` 本身就没有 web 工具。
+2. 安装前已打开的会话保留旧 revision，`web_search` 仍在工具列表中，但每次调用都会被 guard 拒绝。
+3. 安装时 DSH 已在运行：若插件页提示需要重启，或新会话的 `tkless_dsh_status` 仍是 `webSearchVisible: true`，请重启 DSH 后再新开会话。
+
+`tkless_dsh_status` 中 `webSearchVisible` 为 `false` 表示原生工具已移除；为 `true` 且 `guardInstalled` 为 `true` 表示当前会话只有 guard 在拦截调用。
 
 ## 二进制来源
 
@@ -76,12 +84,12 @@ dsh plugin add github:smallhug/tkless#v0.7.1
 
 ## 状态与恢复
 
-- `tkless_dsh_status`：返回 bridge 状态、协议版本、工具数量、二进制路径、错误信息，以及**当前 agent** 是否还能看到 `web_search`。新会话应为 `false`，旧会话为 `true`。
+- `tkless_dsh_status`：返回 bridge 状态、协议版本、工具数量、二进制路径、错误信息，以及**当前 agent** 是否还能看到 `web_search`（`webSearchVisible`）和 guard 是否已安装（`guardInstalled`）。新会话应为 `false` / `true`；安装前打开的旧会话为 `true` / `true`。
 - `tkless_dsh_retry`：启动失败（网络、校验、二进制损坏）后重新下载并连接。
 
 启动失败时的边界：preset 覆盖在组合层独立生效，所以**新会话仍然没有 `web_search`**，即使 bridge 没起来；旧会话因为没有安装 guard，仍可使用原生搜索。修复下载或设置 `binaryPath` 后运行 `tkless_dsh_retry`，或重新启用插件。
 
-如果新会话里 `webSearchVisible` 仍为 `true`，说明 profile 中存在优先级更高的 preset 覆盖（例如用 Web 的 preset 编辑器保存过修改），它会压过 bundle 的覆盖；需要删除该 profile 覆盖或改用干净的 preset。
+如果新会话里 `webSearchVisible` 仍为 `true`，先确认安装后是否重启过 DSH；重启并新开会话后仍为 `true`，才说明 profile 中存在优先级更高的 preset 覆盖（例如用 Web 的 preset 编辑器保存过修改），它会压过 bundle 的覆盖；需要删除该 profile 覆盖或改用干净的 preset。
 
 bridge 为每次 `tools/call` 注入 `_meta.progressToken`，并收集 `notifications/progress` 中的 `tkless/batch_item`：
 
@@ -113,6 +121,8 @@ node scripts/sync-dsh-presets.cjs --check
 # 静态检查 bundle 结构
 node scripts/check-dsh-bundle.cjs
 ```
+
+在 DSH 启动的终端里可以省略 `--asar`：脚本会先用 `DSH_ASAR`，再从 `DSH_INSTALL_DIR` 推导安装目录中的 `app.asar`。ASAR 头部按 Pickle 存储，数据区偏移包含对齐填充；脚本按头部字段计算偏移，避免解包内容整体错位。
 
 `sync-dsh-presets.cjs` 直接读取 `app.asar` 里的 `@deepseek-ai/dsh-web-app/presets/*.patch.yml`，把 `- insert:` 声明转换成 patch 覆盖，并且只修改 `tool-web.config.search`。如果上游 preset 增加或删除插件，重新生成会自动同步。
 

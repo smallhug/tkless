@@ -5,6 +5,25 @@
 
 ---
 
+## [0.7.2] - 2026-11-14
+
+源码版本更新为 0.7.2；本次发布 MCP 双握手兼容与 DeepSeek Harness `0.2.2-rc.3` 适配。
+
+### Added
+
+- MCP 服务默认同时支持 `2026-07-28` 与旧版 `initialize` 握手（`2024-11-05`、`2025-03-26`、`2025-06-18`、`2025-11-25`）：不带 `params._meta` 的请求按旧版处理，`initialize`/`ping`/`logging/setLevel` 会被应答；显式携带 `_meta.protocolVersion` 的请求仍按新版严格校验。新增 `mcp --strict-protocol` 用于恢复仅接受 `2026-07-28` 的行为。
+- HTTP 传输允许旧版请求省略 `MCP-Protocol-Version`、`Mcp-Method`、`Mcp-Name`；携带这些头部时仍校验与请求体一致。
+
+### Changed
+
+- 旧版请求的 `tools/list` 不再返回 `resultType`、`ttlMs`、`cacheScope`，避免旧客户端按新版响应结构解析。
+
+### Fixed
+
+- 适配 DeepSeek Harness `0.2.2-rc.3`：重新生成 `standard`/`ptc`/`cordis` preset 覆盖，新增 `tool-office`、`skill-filesystem.customSkillDirs` 与 `tool-subagent-control.interrupt: false`。
+- 修复 `sync-dsh-presets.cjs` 的 ASAR 数据区偏移计算，避免解包内容整体错位；支持 `DSH_ASAR` 与 `DSH_INSTALL_DIR`。
+- `dsh/index.js` 在 HMR、插件开关或关闭期间不再把未激活上下文当作启动失败；工具注册失败时回滚已注册项；`tkless_dsh_status` 增加 `guardInstalled`。
+
 ## [0.7.1] - 2026-11-11
 
 源码版本更新为 0.7.1；本次为 DeepSeek Harness 兼容性修复，无 CLI/MCP 协议行为变更。

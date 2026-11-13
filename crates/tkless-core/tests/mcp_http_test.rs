@@ -3,8 +3,17 @@ use tkless_core::{mcp::HttpTransportOptions, DocumentCache, McpServer, TklessEng
 const VERSION: &str = "2026-07-28";
 
 async fn spawn_server(token: Option<&str>) -> (String, tokio::task::JoinHandle<()>) {
+    spawn_server_with(token, false).await
+}
+
+async fn spawn_server_with(
+    token: Option<&str>,
+    strict_protocol: bool,
+) -> (String, tokio::task::JoinHandle<()>) {
     let engine = TklessEngine::with_options(Default::default()).unwrap();
-    let server = McpServer::new(engine, DocumentCache::memory_only(60)).with_tool_timeout(10);
+    let server = McpServer::new(engine, DocumentCache::memory_only(60))
+        .with_tool_timeout(10)
+        .with_legacy_protocol(!strict_protocol);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let auth_token = token.map(str::to_owned);
@@ -109,7 +118,7 @@ async fn http_transport_serves_discovery_tools_and_health() {
 
 #[tokio::test]
 async fn http_transport_enforces_protocol_headers_and_request_meta() {
-    let (base, task) = spawn_server(None).await;
+    let (base, task) = spawn_server_with(None, true).await;
     let client = client();
 
     let list = request(1, "tools/list", serde_json::json!({}));
@@ -177,8 +186,8 @@ async fn http_transport_enforces_protocol_headers_and_request_meta() {
     assert_eq!(body["result"]["resultType"], "complete");
     assert_eq!(body["result"]["isError"], false);
 
-    // Legacy clients that omit modern headers still get a deterministic
-    // diagnostic naming the supported version.
+    // Legacy clients that omit modern headers receive a deterministic diagnostic
+    // when the server runs in strict mode.
     let legacy = serde_json::json!({"jsonrpc":"2.0","id":9,"method":"initialize","params":{}});
     let response = client
         .post(format!("{base}/mcp"))
@@ -190,6 +199,72 @@ async fn http_transport_enforces_protocol_headers_and_request_meta() {
     let body: serde_json::Value = response.json().await.unwrap();
     assert_eq!(body["error"]["code"], -32601);
     assert_eq!(body["error"]["data"]["supported"][0], VERSION);
+
+    task.abort();
+}
+
+#[tokio::test]
+async fn http_transport_accepts_legacy_handshake_without_modern_headers() {
+    let (base, task) = spawn_server(None).await;
+    let client = client();
+
+    let initialize = serde_json::json!({
+        "jsonrpc":"2.0",
+        "id":1,
+        "method":"initialize",
+        "params":{"protocolVersion":"2025-06-18","capabilities":{}}
+    });
+    let response = client
+        .post(format!("{base}/mcp"))
+        .json(&initialize)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let body: serde_json::Value = response.json().await.unwrap();
+    assert_eq!(body["result"]["protocolVersion"], "2025-06-18");
+    assert!(body["result"].get("resultType").is_none());
+
+    let list = serde_json::json!({"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}});
+    let response = client
+        .post(format!("{base}/mcp"))
+        .json(&list)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let body: serde_json::Value = response.json().await.unwrap();
+    assert_eq!(body["result"]["tools"].as_array().unwrap().len(), 31);
+    assert!(body["result"].get("resultType").is_none());
+
+    let call = serde_json::json!({
+        "jsonrpc":"2.0",
+        "id":3,
+        "method":"tools/call",
+        "params":{"name":"clean_html","arguments":{"html":"<p>hi</p>"}}
+    });
+    let response = client
+        .post(format!("{base}/mcp"))
+        .json(&call)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let body: serde_json::Value = response.json().await.unwrap();
+    assert_eq!(body["result"]["isError"], false);
+    assert!(body["result"].get("resultType").is_none());
+
+    // Headers that are present must still agree with the body.
+    let response = client
+        .post(format!("{base}/mcp"))
+        .header("Mcp-Method", "server/discover")
+        .json(&list)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 400);
+    let body: serde_json::Value = response.json().await.unwrap();
+    assert_eq!(body["error"]["code"], -32020);
 
     task.abort();
 }

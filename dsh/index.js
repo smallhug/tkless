@@ -41,6 +41,13 @@ function errorSummary(error) {
   return `${message}${code}${data}`
 }
 
+// Cordis refuses to create effects on a deactivated context. An asynchronous
+// start can outlive its activation (HMR reload, plugin toggle, app shutdown),
+// and that is not an activation failure worth reporting.
+function isInactiveContextError(error) {
+  return /inactive context/i.test(String(error?.message ?? error))
+}
+
 function binaryPathInPackage() {
   return path.join(PACKAGE_DIR, 'bin', BINARY_NAME)
 }
@@ -468,7 +475,9 @@ class TklessState {
       this.error = error
       this.state = 'error'
       await this.cleanupRuntime()
-      log('startup failed:', errorSummary(error))
+      if (!this.disposed && !isInactiveContextError(error)) {
+        log('startup failed:', errorSummary(error))
+      }
       throw error
     }
   }
@@ -539,7 +548,16 @@ class TklessState {
           return value
         },
       }
-      this.toolDisposers.push(this.ctx.tools.register(definition))
+      let dispose
+      try {
+        dispose = this.ctx.tools.register(definition)
+      } catch (error) {
+        // A deactivated context cannot create the registration effect; drop the
+        // tools registered so far instead of leaving a partial set behind.
+        this.disposeTools()
+        throw error
+      }
+      this.toolDisposers.push(dispose)
     }
     this.toolCount = this.toolDisposers.length
   }
@@ -652,6 +670,7 @@ class TklessState {
       tools: this.toolCount,
       binary: this.binary ?? binaryPathInPackage(),
       webSearchVisible: visible,
+      guardInstalled: this.guardLift !== undefined,
       error: this.error ? errorSummary(this.error) : null,
     }
   }
@@ -663,29 +682,42 @@ class TklessState {
   }
 }
 
+const STATUS_OUTPUT = {
+  schema: {
+    type: 'object',
+    properties: {
+      state: { type: 'string' },
+      protocolVersion: { type: 'string' },
+      tools: { type: 'number' },
+      binary: { type: 'string' },
+      // True when this Agent's session still carries the pre-install preset
+      // revision; such a session sees web_search, and only the guard blocks it.
+      webSearchVisible: { type: 'boolean' },
+      guardInstalled: { type: 'boolean' },
+      error: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+    },
+    required: [
+      'state',
+      'protocolVersion',
+      'tools',
+      'binary',
+      'webSearchVisible',
+      'guardInstalled',
+      'error',
+    ],
+    additionalProperties: false,
+  },
+  render: (_args, value) => [{ type: 'text', text: JSON.stringify(value, null, 2) }],
+}
+
 function registerControlTools(ctx, state) {
   ctx.effect(() =>
     ctx.tools.register({
       name: 'tkless_dsh_status',
       description:
-        'Report the TkLess bridge state, the installed binary path, the number of exposed tools, and whether the built-in web_search is still visible to this agent.',
+        'Report the TkLess bridge state, the installed binary path, the number of exposed tools, whether the built-in web_search is still visible to this agent, and whether the guard that denies it is installed.',
       parameters: { type: 'object', properties: {} },
-      output: {
-        schema: {
-          type: 'object',
-          properties: {
-            state: { type: 'string' },
-            protocolVersion: { type: 'string' },
-            tools: { type: 'number' },
-            binary: { type: 'string' },
-            webSearchVisible: { type: 'boolean' },
-            error: { oneOf: [{ type: 'string' }, { type: 'null' }] },
-          },
-          required: ['state', 'protocolVersion', 'tools', 'binary', 'error'],
-          additionalProperties: false,
-        },
-        render: (_args, value) => [{ type: 'text', text: JSON.stringify(value, null, 2) }],
-      },
+      output: STATUS_OUTPUT,
       execute: (args, exec) => state.status(exec.agent),
     }),
   )
@@ -695,22 +727,7 @@ function registerControlTools(ctx, state) {
       name: 'tkless_dsh_retry',
       description: 'Retry provisioning and starting the TkLess MCP bridge after a failed startup.',
       parameters: { type: 'object', properties: {} },
-      output: {
-        schema: {
-          type: 'object',
-          properties: {
-            state: { type: 'string' },
-            protocolVersion: { type: 'string' },
-            tools: { type: 'number' },
-            binary: { type: 'string' },
-            webSearchVisible: { type: 'boolean' },
-            error: { oneOf: [{ type: 'string' }, { type: 'null' }] },
-          },
-          required: ['state', 'protocolVersion', 'tools', 'binary', 'error'],
-          additionalProperties: false,
-        },
-        render: (_args, value) => [{ type: 'text', text: JSON.stringify(value, null, 2) }],
-      },
+      output: STATUS_OUTPUT,
       execute: async (args, exec) => {
         await state.restart()
         return state.status(exec.agent)
@@ -728,6 +745,9 @@ export async function apply(ctx, config = {}) {
   try {
     await state.start()
   } catch (error) {
+    // An activation torn down mid-start (HMR reload, plugin toggle, shutdown)
+    // cannot register effects; that is not a bridge failure the user can act on.
+    if (state.disposed || isInactiveContextError(error)) return
     log('tkless-dsh activated without a working bridge:', errorSummary(error))
   }
 }

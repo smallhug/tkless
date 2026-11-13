@@ -381,15 +381,17 @@ async fn run(args: CliArgs) -> Result<()> {
             ),
             _ => (args.no_cache, args.cache_ttl, args.cache_dir.clone()),
         };
-        let (http, tool_timeout_secs, auth_token_env, allow_public_bind) = match args.command {
-            Some(SubCommand::Mcp(ref mcp_args)) => (
-                mcp_args.http.clone(),
-                mcp_args.tool_timeout_secs,
-                mcp_args.auth_token_env.clone(),
-                mcp_args.allow_public_bind,
-            ),
-            _ => (None, 300, None, false),
-        };
+        let (http, tool_timeout_secs, auth_token_env, allow_public_bind, strict_protocol) =
+            match args.command {
+                Some(SubCommand::Mcp(ref mcp_args)) => (
+                    mcp_args.http.clone(),
+                    mcp_args.tool_timeout_secs,
+                    mcp_args.auth_token_env.clone(),
+                    mcp_args.allow_public_bind,
+                    mcp_args.strict_protocol,
+                ),
+                _ => (None, 300, None, false, false),
+            };
 
         let cache = if no_cache {
             DocumentCache::memory_only(cache_ttl)
@@ -417,8 +419,9 @@ async fn run(args: CliArgs) -> Result<()> {
             tkless_core::mcp::McpMode::Full
         };
 
-        let mcp_server =
-            McpServer::new_with_mode(engine, cache, mcp_mode).with_tool_timeout(tool_timeout_secs);
+        let mcp_server = McpServer::new_with_mode(engine, cache, mcp_mode)
+            .with_tool_timeout(tool_timeout_secs)
+            .with_legacy_protocol(!strict_protocol);
         if let Some(bind) = http {
             let auth_token = match auth_token_env {
                 Some(name) => Some(

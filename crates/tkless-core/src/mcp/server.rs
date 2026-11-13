@@ -37,6 +37,8 @@ pub use http::HttpTransportOptions;
 /// Bounded notification sender; consumers must drain it concurrently with streaming calls.
 pub type NotificationSender = tokio::sync::mpsc::Sender<Value>;
 
+const SERVER_INSTRUCTIONS: &str = "TkLess extracts, cleans, searches, and crawls web content for LLM agents. Tool results include clean Markdown plus structuredContent JSON.";
+
 /// Operational mode for the MCP server: Full exposure vs Two-Stage Dynamic Discovery.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum McpMode {
@@ -51,6 +53,8 @@ pub enum McpMode {
 #[derive(Default)]
 struct RequestMeta {
     progress_token: Option<Value>,
+    /// True when the request uses the legacy (pre-2026-07-28) wire format.
+    legacy: bool,
 }
 
 /// In-memory and stdio Model Context Protocol (MCP) server for TkLess.
@@ -63,6 +67,8 @@ pub struct McpServer {
     tool_timeout_secs: u64,
     jobs: Arc<JobRegistry>,
     strict_request_meta: bool,
+    /// Accepts the legacy `initialize` handshake alongside `2026-07-28`.
+    legacy_protocol: bool,
 }
 
 impl McpServer {
@@ -81,6 +87,7 @@ impl McpServer {
             tool_timeout_secs: 300,
             jobs: Arc::new(JobRegistry::new()),
             strict_request_meta: true,
+            legacy_protocol: true,
         }
     }
 
@@ -97,6 +104,16 @@ impl McpServer {
     #[doc(hidden)]
     pub fn with_strict_request_meta(mut self, strict: bool) -> Self {
         self.strict_request_meta = strict;
+        self
+    }
+
+    /// Enables or disables the legacy `initialize` handshake.
+    ///
+    /// Enabled by default: requests without `params._meta` are treated as legacy
+    /// traffic, and `initialize` / `ping` / `logging/setLevel` are answered.
+    /// Disable it with `--strict-protocol` to accept only MCP `2026-07-28`.
+    pub fn with_legacy_protocol(mut self, enabled: bool) -> Self {
+        self.legacy_protocol = enabled;
         self
     }
 
@@ -182,7 +199,13 @@ impl McpServer {
             "server/discover" => JsonRpcResponse::success(req_id.clone(), self.discover_result()),
             "tools/list" => {
                 let tools = self.current_tools().await;
-                JsonRpcResponse::success(req_id.clone(), self.tools_list_result(tools))
+                let result = if meta.legacy {
+                    // The legacy list result has no resultType/ttlMs/cacheScope.
+                    serde_json::json!({ "tools": tools })
+                } else {
+                    self.tools_list_result(tools)
+                };
+                JsonRpcResponse::success(req_id.clone(), result)
             }
             "tools/call" => {
                 let raw_tool_name = params.get("name").and_then(|v| v.as_str()).unwrap_or("");
@@ -208,6 +231,16 @@ impl McpServer {
                 });
                 JsonRpcResponse::success(req_id.clone(), result_value)
             }
+            "initialize" if self.legacy_protocol && meta.legacy => {
+                JsonRpcResponse::success(req_id.clone(), self.initialize_result(&params))
+            }
+            "ping" if self.legacy_protocol && meta.legacy => {
+                JsonRpcResponse::success(req_id.clone(), serde_json::json!({}))
+            }
+            "logging/setLevel" if self.legacy_protocol && meta.legacy => {
+                // Accepted for legacy clients; no log level state is retained.
+                JsonRpcResponse::success(req_id.clone(), serde_json::json!({}))
+            }
             "initialize" | "ping" | "logging/setLevel" => JsonRpcResponse::error_with_data(
                 req_id.clone(),
                 METHOD_NOT_FOUND,
@@ -231,10 +264,19 @@ impl McpServer {
                 ),
             ),
         };
-        Some(self.finalize_response(response))
+        // Legacy responses must not carry 2026-07-28 envelopes such as `resultType`.
+        if meta.legacy {
+            Some(response)
+        } else {
+            Some(self.finalize_response(response))
+        }
     }
 
     /// Validates the per-request `_meta` fields required by MCP 2026-07-28.
+    ///
+    /// When `legacy_protocol` is enabled, a request without `_meta` (or with a
+    /// `_meta` that has no protocol version) is treated as legacy traffic and
+    /// allowed through without the 2026-07-28 envelope.
     #[allow(clippy::result_large_err)]
     fn request_meta(
         &self,
@@ -242,47 +284,77 @@ impl McpServer {
         request_id: &Value,
     ) -> Result<RequestMeta, JsonRpcResponse> {
         let mut result = RequestMeta::default();
-        let meta = params.get("_meta").and_then(Value::as_object);
-        if let Some(meta) = meta {
-            result.progress_token = meta.get("progressToken").cloned();
-            if !self.strict_request_meta {
-                return Ok(result);
-            }
-            let version = meta
-                .get("io.modelcontextprotocol/protocolVersion")
-                .and_then(Value::as_str)
-                .ok_or_else(|| {
-                    JsonRpcResponse::error(
-                        request_id.clone(),
-                        INVALID_PARAMS,
-                        "Missing io.modelcontextprotocol/protocolVersion in params._meta",
-                    )
-                })?;
-            if version != PROTOCOL_VERSION {
-                return Err(JsonRpcResponse::unsupported_protocol_version(
+        let Some(meta) = params.get("_meta").and_then(Value::as_object) else {
+            if self.strict_request_meta && !self.legacy_protocol {
+                return Err(JsonRpcResponse::error(
                     request_id.clone(),
-                    version,
+                    INVALID_PARAMS,
+                    "Missing required params._meta with protocolVersion and clientCapabilities",
                 ));
             }
-            meta.get("io.modelcontextprotocol/clientCapabilities")
-                .and_then(Value::as_object)
-                .ok_or_else(|| {
-                    JsonRpcResponse::error(
-                        request_id.clone(),
-                        INVALID_PARAMS,
-                        "Missing io.modelcontextprotocol/clientCapabilities in params._meta",
-                    )
-                })?;
-            Ok(result)
-        } else if self.strict_request_meta {
-            Err(JsonRpcResponse::error(
+            result.legacy = true;
+            return Ok(result);
+        };
+
+        result.progress_token = meta.get("progressToken").cloned();
+        if !self.strict_request_meta {
+            return Ok(result);
+        }
+
+        let Some(version) = meta.get("io.modelcontextprotocol/protocolVersion") else {
+            if self.legacy_protocol {
+                result.legacy = true;
+                return Ok(result);
+            }
+            return Err(JsonRpcResponse::error(
                 request_id.clone(),
                 INVALID_PARAMS,
-                "Missing required params._meta with protocolVersion and clientCapabilities",
-            ))
-        } else {
-            Ok(result)
+                "Missing io.modelcontextprotocol/protocolVersion in params._meta",
+            ));
+        };
+        let version = version.as_str().ok_or_else(|| {
+            JsonRpcResponse::error(
+                request_id.clone(),
+                INVALID_PARAMS,
+                "Missing io.modelcontextprotocol/protocolVersion in params._meta",
+            )
+        })?;
+        if version != PROTOCOL_VERSION {
+            return Err(JsonRpcResponse::unsupported_protocol_version(
+                request_id.clone(),
+                version,
+            ));
         }
+        meta.get("io.modelcontextprotocol/clientCapabilities")
+            .and_then(Value::as_object)
+            .ok_or_else(|| {
+                JsonRpcResponse::error(
+                    request_id.clone(),
+                    INVALID_PARAMS,
+                    "Missing io.modelcontextprotocol/clientCapabilities in params._meta",
+                )
+            })?;
+        Ok(result)
+    }
+
+    /// Builds the legacy `initialize` result, negotiating among the versions the
+    /// pre-2026-07-28 handshake understands.
+    fn initialize_result(&self, params: &Value) -> Value {
+        let requested = params
+            .get("protocolVersion")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let version = LEGACY_PROTOCOL_VERSIONS
+            .iter()
+            .find(|candidate| **candidate == requested)
+            .copied()
+            .unwrap_or(LATEST_LEGACY_PROTOCOL_VERSION);
+        serde_json::json!({
+            "protocolVersion": version,
+            "capabilities": {"tools": {}},
+            "serverInfo": self.server_info(),
+            "instructions": SERVER_INSTRUCTIONS,
+        })
     }
 
     /// Adds `resultType` and server identity to every successful result.
@@ -338,7 +410,7 @@ impl McpServer {
             "_meta": {
                 "io.modelcontextprotocol/serverInfo": self.server_info()
             },
-            "instructions": "TkLess extracts, cleans, searches, and crawls web content for LLM agents. Tool results include clean Markdown plus structuredContent JSON.",
+            "instructions": SERVER_INSTRUCTIONS,
             "ttlMs": 3_600_000,
             "cacheScope": "public"
         })

@@ -28,7 +28,12 @@ TKLESS_MCP_TOKEN=... tkless mcp --http 0.0.0.0:8787 --allow-public-bind --auth-t
 
 ## 传输与协议
 
-服务通过 stdio 读取和输出单行 JSON-RPC 2.0，诊断日志写入 stderr。仅实现 `2026-07-28`：没有 `initialize` 握手，每个请求在 `params._meta` 中携带 `io.modelcontextprotocol/protocolVersion`（必须为 `2026-07-28`）与 `io.modelcontextprotocol/clientCapabilities`（可为空对象）。服务端实现 `server/discover`，所有结果带 `resultType: "complete"` 与 `_meta["io.modelcontextprotocol/serverInfo"]`。不支持的版本返回 `-32022` 并在 `data.supported` 列出 `2026-07-28`；缺少 `_meta` 返回 `-32602`。规范见 [MCP 2026-07-28](https://modelcontextprotocol.io/specification/2026-07-28)。
+服务通过 stdio 读取和输出单行 JSON-RPC 2.0，诊断日志写入 stderr。默认同时支持两套握手：
+
+- **2026-07-28**：没有 `initialize` 握手，每个请求在 `params._meta` 中携带 `io.modelcontextprotocol/protocolVersion`（必须为 `2026-07-28`）与 `io.modelcontextprotocol/clientCapabilities`（可为空对象）。服务端实现 `server/discover`，所有结果带 `resultType: "complete"` 与 `_meta["io.modelcontextprotocol/serverInfo"]`。
+- **旧版 `initialize`（`2024-11-05` / `2025-03-26` / `2025-06-18` / `2025-11-25`）**：不带 `_meta` 的请求按旧版处理，`initialize`、`ping`、`logging/setLevel` 会被应答，响应不带 `resultType` 等新版字段。`initialize` 优先回显客户端请求的受支持版本，未知或缺失时返回 `2025-11-25`。
+
+请求显式携带 `_meta.protocolVersion` 时仍按 2026-07-28 严格校验：不支持的版本返回 `-32022` 并在 `data.supported` 列出 `2026-07-28`，缺少版本或 capabilities 返回 `-32602`。使用 `--strict-protocol` 可关闭旧版兼容，只接受 `2026-07-28`。规范见 [MCP 2026-07-28](https://modelcontextprotocol.io/specification/2026-07-28)。
 
 ## HTTP 传输
 
@@ -36,8 +41,8 @@ TKLESS_MCP_TOKEN=... tkless mcp --http 0.0.0.0:8787 --allow-public-bind --auth-t
 
 - 默认只允许绑定回环地址；非回环地址必须同时指定 `--allow-public-bind` 与 `--auth-token-env`，否则启动失败。
 - 设置 Token 后，每个请求都必须携带 `Authorization: Bearer <token>`，否则返回 401。
-- 每个请求必须携带 `MCP-Protocol-Version`、`Mcp-Method`；`tools/call` 还必须携带 `Mcp-Name`，且头部值必须与请求体一致（`Mcp-Name` 支持 `=?base64?...?=` 编码），否则返回 400 与 `-32020`。
-- 不支持的协议版本返回 400 与 `-32022`；缺少或非法 `_meta` 返回 400 与 `-32602`；未知方法返回 404 与 `-32601`；GET/DELETE/PUT `/mcp` 返回 405。
+- 现代请求（`params._meta.protocolVersion` 存在）必须携带 `MCP-Protocol-Version`、`Mcp-Method`；`tools/call` 还必须携带 `Mcp-Name`，且头部值必须与请求体一致（`Mcp-Name` 支持 `=?base64?...?=` 编码），否则返回 400 与 `-32020`。旧版请求可省略这些头部；若提供，`Mcp-Method` / `Mcp-Name` 仍必须与请求体一致。
+- 不支持的协议版本返回 400 与 `-32022`；现代请求缺少或非法 `_meta` 返回 400 与 `-32602`；未知方法返回 404 与 `-32601`；GET/DELETE/PUT `/mcp` 返回 405。
 - 请求头上限 16 KiB、请求体上限 1 MiB，拒绝分块传输；单个 IP 未限制，但全局最多 32 个并发请求（超出排队）。
 - 单次请求超时由 `--tool-timeout-secs`（默认 300，1–3600）控制；超时返回 JSON-RPC 错误 `-32603`。
 - 不实现会话、鉴权刷新或多租户隔离；暴露到公网前应置于反向代理与 TLS 之后。

@@ -48,8 +48,19 @@ function parseArgs(argv) {
   return options
 }
 
+function asarFromInstallDir() {
+  // A DSH-launched shell exports DSH_INSTALL_DIR as
+  // <resources>/app.asar/dsh/node_modules/@deepseek-ai/dsh on Desktop.
+  const directory = process.env.DSH_INSTALL_DIR
+  if (!directory) return undefined
+  const match = /^(.*?[\\/]app\.asar)[\\/]/.exec(directory)
+  return match ? match[1] : undefined
+}
+
 function defaultAsar() {
   const candidates = [
+    process.env.DSH_ASAR,
+    asarFromInstallDir(),
     process.env.LOCALAPPDATA &&
       path.join(process.env.LOCALAPPDATA, 'Programs', 'DeepSeek Harness', 'resources', 'app.asar'),
     '/Applications/DeepSeek Harness.app/Contents/Resources/app.asar',
@@ -69,7 +80,11 @@ class Asar {
       const header = Buffer.alloc(jsonSize)
       fs.readSync(descriptor, header, 0, jsonSize, 16)
       this.tree = JSON.parse(header.toString('utf8'))
-      this.dataStart = 16 + jsonSize
+      // ASAR stores its header as a Chromium Pickle: the payload size at byte 4
+      // already covers the JSON length prefix and its alignment padding. Derive
+      // the data offset from the JSON length alone and every entry shifts by
+      // the padding, truncating the end of each extracted file.
+      this.dataStart = 8 + head.readUInt32LE(4)
     } finally {
       fs.closeSync(descriptor)
     }

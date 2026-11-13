@@ -1,9 +1,9 @@
 {
   "source": "@deepseek-ai/dsh-web-app",
-  "dshVersion": "0.2.2-rc.1",
+  "dshVersion": "0.2.2-rc.3",
   "presets": {
-    "standard": "3006cc3780cddaa7fb0089e5854e6bbef4409cf1d425930fd835226b95660afd",
-    "ptc": "ce02148b1fd575cc93071744180468cd305bdcd50dbfdd3b9b0605c5281d283d",
-    "cordis": "0e8f611644b3c36249808c4d7eb7a40d78006d04da6b55eef1a42797a5a34355"
+    "standard": "e40bb192ed3b835312c2acd2ccd64d3bc4b85f80a7bc95b132cb18fbee190b5d",
+    "ptc": "838665e063dc8bcab4caf24e41ec848373c434df4262feb981306944e1cec7fd",
+    "cordis": "6be896c3d4885f395bf1856753f454cf725709ffdddcc57f1e6b8d8c07181f34"
   }
 }

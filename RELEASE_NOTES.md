@@ -1,5 +1,23 @@
 # TkLess 更新说明
 
+## v0.7.2 - 2026-11-14
+
+MCP 双握手兼容与 DeepSeek Harness `0.2.2-rc.3` 适配。
+
+### MCP
+
+- 默认同时支持 `2026-07-28` 与旧版 `initialize` 握手（`2024-11-05`、`2025-03-26`、`2025-06-18`、`2025-11-25`）：不带 `params._meta` 的请求按旧版处理，`initialize`/`ping`/`logging/setLevel` 会被应答，响应不带 `resultType` 等新版字段。
+- 显式携带 `_meta.protocolVersion` 的请求仍按 `2026-07-28` 严格校验；新增 `mcp --strict-protocol` 用于恢复仅接受新版握手的行为。
+- HTTP 传输允许旧版请求省略 `MCP-Protocol-Version`、`Mcp-Method`、`Mcp-Name`；携带时仍校验与请求体一致。
+- 旧版 `tools/list` 不再返回 `resultType`、`ttlMs`、`cacheScope`。
+
+### DeepSeek Harness
+
+- 适配 DSH `0.2.2-rc.3`：按新版本重新生成 `standard`/`ptc`/`cordis` preset 覆盖（`tool-office`、`skill-filesystem.customSkillDirs`、`tool-subagent-control.interrupt` 等），并更新 `engines.dsh`。
+- 修复 `sync-dsh-presets.cjs` 的 ASAR 头部偏移计算，避免解包内容整体错位；新增 `DSH_ASAR` 与 `DSH_INSTALL_DIR` 定位。
+- 修复 `dsh/index.js` 在 HMR、插件开关或关闭期间的启动报错；工具注册失败时回滚已注册项，`tkless_dsh_status` 增加 `guardInstalled`。
+- 安装地址更新为 `github:smallhug/tkless#v0.7.2`；Windows x64 与 Linux x64/ARM64 继续自动下载 Release 二进制并校验 SHA-256，macOS 需设置 `binaryPath`。
+
 ## v0.7.1 - 2026-11-11
 
 DeepSeek Harness 兼容性修复，无 CLI/MCP 协议行为变更。
