@@ -664,13 +664,8 @@ pub fn is_bing_ad_or_promotion(
     }
 
     // 5. Local store / offline storefront cards heuristic (e.g. "XX餐厅 (蓝色港湾店)", "XX酒店 (国贸店)")
-    if (trimmed_title.contains("店）") || trimmed_title.contains("店)"))
+    (trimmed_title.contains("店）") || trimmed_title.contains("店)"))
         && !query_tokens.all_tokens.iter().any(|t| t.contains("店"))
-    {
-        return true;
-    }
-
-    false
 }
 
 /// Checks if token matches inside haystack, enforcing word boundaries for short ASCII tokens (<= 3 chars).
